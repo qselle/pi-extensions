@@ -293,6 +293,11 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify(statusText(), "info");
   };
 
+  pi.registerShortcut("ctrl+shift+c", {
+    description: "Show or hide the input-bar cat",
+    handler: (ctx) => applyAction({ type: "visibility", visible: !visible }, ctx),
+  });
+
   pi.registerCommand("cat", {
     description: "Open cat controls or set show, hide, smart, always, working, or static",
     getArgumentCompletions: (prefix) => {

@@ -1,6 +1,19 @@
 import { expect, mock, test } from "bun:test";
 
 mock.module("@earendil-works/pi-tui", () => ({
+  Input: class Input {
+    private value = "";
+    focused = false;
+    getValue() { return this.value; }
+    setValue(value: string) { this.value = value; }
+    handleInput(data: string) {
+      if (data === "backspace") this.value = this.value.slice(0, -1);
+      else if (data === "ctrl+u") this.value = "";
+      else if (data.length === 1 && data >= " ") this.value += data;
+    }
+    render(width: number) { return [this.value.slice(0, width)]; }
+    invalidate() {}
+  },
   Text: class Text {
     constructor(public text: string) {}
     render() { return [this.text]; }
@@ -10,9 +23,11 @@ mock.module("@earendil-works/pi-tui", () => ({
   truncateToWidth: (value: string, width: number) => value.length <= width ? value : `${value.slice(0, Math.max(0, width - 1))}…`,
   visibleWidth: (value: string) => value.length,
   wrapTextWithAnsi: (value: string) => [value],
+  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
 const { CatPanel, parseCatCommand } = await import("./panel.ts");
+const { default: catExtension } = await import("./index.ts");
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -77,4 +92,29 @@ test("wraps navigation and closes without changing state", () => {
   escapePanel.handleInput("escape");
   expect(closed).toBe(2);
   expect(actions).toHaveLength(1);
+});
+
+test("registers Ctrl+Shift+C to toggle cat visibility", () => {
+  const shortcuts = new Map<string, any>();
+  const widgets: unknown[] = [];
+  const notifications: string[] = [];
+  const pi = {
+    on() {},
+    registerCommand() {},
+    registerShortcut(key: string, shortcut: any) { shortcuts.set(key, shortcut); },
+  };
+  catExtension(pi as any);
+  const ctx = {
+    mode: "rpc",
+    ui: {
+      setWidget: (...args: unknown[]) => widgets.push(args),
+      notify: (message: string) => notifications.push(message),
+    },
+  };
+
+  shortcuts.get("ctrl+shift+c").handler(ctx);
+  expect((widgets.at(-1) as unknown[])[1]).toBeUndefined();
+  expect(notifications.at(-1)).toContain("hidden");
+  shortcuts.get("ctrl+shift+c").handler(ctx);
+  expect(notifications.at(-1)).toContain("visible");
 });
