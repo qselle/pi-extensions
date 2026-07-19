@@ -16,6 +16,10 @@ Use `pi config` to enable or disable individual extensions.
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
 
+## Themes
+
+- `gruvbox-dark`
+
 ## Development
 
 ```bash
