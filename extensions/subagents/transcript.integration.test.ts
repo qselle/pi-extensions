@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const transcriptModule = resolve(import.meta.dir, "transcript.ts");
+const piCli = join(dirname(Bun.resolveSync("@earendil-works/pi-coding-agent", import.meta.dir)), "cli.js");
 
 test("renders and navigates a live transcript with Pi's real TUI utilities", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-subagents-transcript-integration-"));
@@ -74,7 +75,7 @@ export default function () {
 
   try {
     const result = Bun.spawnSync({
-      cmd: ["pi", "--no-extensions", "-e", script, "--list-models"],
+      cmd: [process.execPath, piCli, "--no-extensions", "-e", script, "--list-models"],
       cwd: resolve(import.meta.dir, "../.."),
       stdout: "pipe",
       stderr: "pipe",

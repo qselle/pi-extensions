@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const contextModule = resolve(import.meta.dir, "context.ts");
+const piCli = join(dirname(Bun.resolveSync("@earendil-works/pi-coding-agent", import.meta.dir)), "cli.js");
 
 test("creates fresh, summary, and fork child sessions through Pi's real session API", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-subagents-context-integration-"));
@@ -60,7 +61,7 @@ export default async function () {
 
   try {
     const result = Bun.spawnSync({
-      cmd: ["pi", "--no-extensions", "-e", script, "--list-models"],
+      cmd: [process.execPath, piCli, "--no-extensions", "-e", script, "--list-models"],
       cwd: resolve(import.meta.dir, "../.."),
       stdout: "pipe",
       stderr: "pipe",
