@@ -37,7 +37,10 @@ Use `pi config` to enable or disable individual extensions.
 
 ## Development
 
+Requires Bun 1.3.14 and Node.js 24 (Pi requires Node.js 22.19 or newer).
+
 ```bash
+bun install --frozen-lockfile
 bun test
 ```
 
