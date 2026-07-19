@@ -41,6 +41,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 }));
 
 const { default: goalExtension } = await import("./index.ts");
+const { GOAL_COMPLETED_EVENT } = await import("./events.ts");
 const { GoalPanel, GoalWidget, goalOverlayTitle, renderGoalOverlayBody } = await import("./ui.ts");
 const { createGoal, recordGoalBlocker, reportGoalProgress } = await import("./goal.ts");
 
@@ -279,6 +280,68 @@ test("tracks progress checks and refuses premature completion", async () => {
   expect(pi.entries.at(-1).data.goal.status).toBe("complete");
   expect(pi.entries.at(-1).data.goal.progressSummary).toBe("Release verified");
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+});
+
+test("emits one versioned completion event after final accounting", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  ctx.mode = "rpc";
+  const completions: any[] = [];
+  pi.events.on(GOAL_COMPLETED_EVENT, (event) => completions.push(event));
+  goalExtension(pi as any);
+
+  await pi.emit("session_start", { reason: "startup" }, ctx);
+  await pi.commands.get("goal").handler("Verify completion events", ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("report_goal_progress").execute("progress", {
+    checks: [{ content: "Verify final accounting", status: "complete" }],
+    summary: "All completion behavior verified",
+  }, undefined, undefined, ctx);
+  await pi.tools.get("update_goal").execute("complete", { status: "complete" }, undefined, undefined, ctx);
+
+  expect(completions).toHaveLength(0);
+  await expect(pi.tools.get("update_goal").execute("duplicate", { status: "complete" }, undefined, undefined, ctx))
+    .rejects.toThrow("already complete");
+  await pi.emit("message_end", { message: assistantMessage(321) }, ctx);
+  await Bun.sleep(2);
+  await pi.emit("agent_settled", {}, ctx);
+
+  expect(completions).toHaveLength(1);
+  expect(completions[0]).toMatchObject({
+    version: 1,
+    completedAt: expect.any(Number),
+    completionId: expect.any(String),
+    goal: {
+      objective: "Verify completion events",
+      status: "complete",
+      tokensUsed: 321,
+      progressSummary: "All completion behavior verified",
+    },
+  });
+  expect(completions[0].goal.timeUsedMs).toBeGreaterThanOrEqual(1);
+
+  await pi.emit("agent_settled", {}, ctx);
+  await pi.emit("session_tree", {}, ctx);
+  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+  expect(completions).toHaveLength(1);
+});
+
+test("emits a pending completion during shutdown fallback", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  ctx.mode = "rpc";
+  const completions: any[] = [];
+  pi.events.on(GOAL_COMPLETED_EVENT, (event) => completions.push(event));
+  goalExtension(pi as any);
+
+  await pi.emit("session_start", { reason: "startup" }, ctx);
+  await pi.commands.get("goal").handler("Complete before shutdown", ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("update_goal").execute("complete", { status: "complete" }, undefined, undefined, ctx);
+  expect(completions).toHaveLength(0);
+  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+  expect(completions).toHaveLength(1);
+  expect(completions[0].goal.status).toBe("complete");
 });
 
 test("requires the same blocker in three separate runs", async () => {

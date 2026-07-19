@@ -32,6 +32,10 @@ import {
   type GoalState,
 } from "./goal.ts";
 import {
+  GOAL_COMPLETED_EVENT,
+  createGoalCompletedEvent,
+} from "./events.ts";
+import {
   CONTINUATION_MARKER_TEXT,
   CONTINUATION_MARKER_TYPE,
   GOAL_CONTEXT_MARKER_TEXT,
@@ -104,6 +108,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   let agentRunning = false;
   let runGoalId: string | undefined;
   let runStartedAt: number | undefined;
+  let pendingCompletion: { goalId: string; completionId: string; completedAt: number } | undefined;
   const accountedMessages = new WeakSet<object>();
 
   const overlayCard = registerOverlayCard({
@@ -127,6 +132,17 @@ export default function goalExtension(pi: ExtensionAPI) {
   const save = (_ctx?: ExtensionContext) => {
     persist();
     overlayCard.invalidate();
+  };
+
+  const emitPendingCompletion = () => {
+    const pending = pendingCompletion;
+    if (!pending) return;
+    pendingCompletion = undefined;
+    if (!goal || goal.id !== pending.goalId || goal.status !== "complete") return;
+    pi.events.emit(
+      GOAL_COMPLETED_EVENT,
+      createGoalCompletedEvent(goal, pending.completionId, pending.completedAt),
+    );
   };
 
   const stopContinuationTimer = () => {
@@ -364,6 +380,9 @@ export default function goalExtension(pi: ExtensionAPI) {
     description: "Create a persistent self-continuing goal only when the user explicitly asks for one. Never infer a goal from an ordinary task. A token budget may be set only when the user explicitly requests it. Fails while an unfinished goal exists.",
     parameters: CreateGoalParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (pendingCompletion) {
+        throw new Error("Cannot replace a completed goal until its current agent run settles.");
+      }
       if (goal && goal.status !== "complete") {
         throw new Error("Cannot create a goal while an unfinished goal exists.");
       }
@@ -420,11 +439,18 @@ export default function goalExtension(pi: ExtensionAPI) {
       if (!goal) throw new Error("No goal is currently set.");
 
       if (params.status === "complete") {
+        if (goal.status === "complete") throw new Error("The goal is already complete.");
         if (!goalChecksComplete(goal)) {
           const progress = goalCheckProgress(goal);
           throw new Error(`Cannot complete the goal: ${progress.total - progress.complete} progress check(s) remain unfinished.`);
         }
-        goal = setGoalStatus(goal, "complete");
+        const completedAt = Date.now();
+        goal = setGoalStatus(goal, "complete", completedAt);
+        pendingCompletion = {
+          goalId: goal.id,
+          completionId: crypto.randomUUID(),
+          completedAt,
+        };
         save(ctx);
         return {
           content: [{ type: "text", text: `Goal achieved. ${goalResponse(goal)}` }],
@@ -624,6 +650,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       }
       save(ctx);
     }
+    emitPendingCompletion();
 
     agentRunning = false;
     runGoalId = undefined;
@@ -651,6 +678,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     agentRunning = false;
     runGoalId = undefined;
     runStartedAt = undefined;
+    pendingCompletion = undefined;
     nextRunIsContinuation = false;
     currentRunIsContinuation = false;
     currentRunHadToolCall = false;
@@ -669,6 +697,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
       persist();
     }
+    emitPendingCompletion();
     overlayCard.unregister();
   });
 }

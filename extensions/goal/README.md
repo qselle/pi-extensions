@@ -26,6 +26,12 @@ Completion is rejected while a non-cancelled progress check remains unfinished. 
 
 Goal checks are durable acceptance and verification criteria. They intentionally do **not** mirror `update_plan`: the plan is a mutable route through the work and may change without redefining what proves the goal complete.
 
+## Completion events
+
+A genuine transition to `complete` emits the versioned `goal:completed` extension event. Normal emission is deferred until `message_end` and `agent_settled` finish the run's token and elapsed-time accounting; session shutdown provides a guarded fallback. The immutable payload contains a unique completion ID, completion timestamp, and final goal snapshot. Duplicate completion calls and restoration of completed state do not emit another event.
+
+[`telegram-notify`](../telegram-notify/) consumes this event without coupling external network behavior to the goal loop.
+
 ## Safety
 
 - Continuations start only after Pi is fully idle and no user input is queued.
