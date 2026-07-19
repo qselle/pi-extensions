@@ -15,6 +15,7 @@ Use `pi config` to enable or disable individual extensions.
 | Extension | Description |
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
+| [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 
 ## Themes
 
