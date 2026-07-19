@@ -15,10 +15,13 @@ Use `pi config` to enable or disable individual extensions.
 | Extension | Description |
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
+| [`file-changes`](extensions/file-changes/) | Live and last-run summaries of files changed by agent tools |
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |
 | [`plan`](extensions/plan/) | Tactical execution plans with an independent progress card |
+| [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
+| [`telegram-notify`](extensions/telegram-notify/) | Opt-in Telegram summaries when persistent goals complete |
 
 ## Custom keybindings
 
