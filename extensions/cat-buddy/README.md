@@ -13,10 +13,13 @@ Smart mode is enabled by default: the cat moves occasionally and reacts while Pi
 ## Commands
 
 ```text
-/buddy             Show status
-/buddy smart       Adaptive animation (default)
-/buddy always      Animate continuously
-/buddy working     Animate only while Pi works
-/buddy static      Stay still
-/buddy show|hide   Show or hide the cat
+/cat                Open the interactive control panel
+/cat status         Show the current settings
+/cat smart          Adaptive animation (default)
+/cat always         Animate continuously
+/cat working        Animate only while Pi works
+/cat static         Stay still
+/cat show|hide      Show or hide the cat
 ```
+
+The panel supports arrow keys or `j`/`k`, Enter to select, and Escape to close.

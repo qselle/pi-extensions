@@ -25,8 +25,14 @@ import {
   findEditorTopBorder,
   rightEdgeRange,
 } from "./layout.js";
+import {
+  CatPanel,
+  parseCatCommand,
+  type AnimationMode,
+  type CatAction,
+} from "./panel.js";
+
 const WIDGET_KEY = "cat-buddy-overlay-host";
-type AnimationMode = "smart" | "working" | "always" | "static";
 
 class CatSprite implements Component {
   private borderLine: string;
@@ -269,37 +275,65 @@ export default function (pi: ExtensionAPI) {
     syncAnimation();
   });
 
-  pi.registerCommand("buddy", {
-    description: "Control the cat buddy: show, hide, smart, always, working, or static",
-    handler: async (args, ctx) => {
-      const command = args.trim().toLowerCase();
+  const statusText = () => `Cat: ${visible ? "visible" : "hidden"}; animation: ${mode}`;
 
-      if (!command) {
-        ctx.ui.notify(`Cat buddy: ${visible ? "visible" : "hidden"}; animation: ${mode}`, "info");
-        return;
-      }
-
-      if (command === "show" || command === "on") {
-        visible = true;
+  const applyAction = (action: CatAction, ctx: ExtensionContext) => {
+    if (action.type === "visibility") {
+      visible = action.visible;
+      if (visible) {
         mount(ctx);
-      } else if (command === "hide" || command === "off") {
-        visible = false;
+      } else {
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         host = undefined;
-      } else if (
-        command === "smart"
-        || command === "working"
-        || command === "always"
-        || command === "static"
-      ) {
-        mode = command;
-        syncAnimation();
-      } else {
-        ctx.ui.notify("Usage: /buddy [show|hide|smart|always|working|static]", "error");
+      }
+    } else {
+      mode = action.mode;
+      syncAnimation();
+    }
+    ctx.ui.notify(statusText(), "info");
+  };
+
+  pi.registerCommand("cat", {
+    description: "Open cat controls or set show, hide, smart, always, working, or static",
+    getArgumentCompletions: (prefix) => {
+      const commands = ["status", "show", "hide", "smart", "always", "working", "static"];
+      const items = commands
+        .filter((command) => command.startsWith(prefix.toLowerCase()))
+        .map((command) => ({ value: command, label: command }));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const command = parseCatCommand(args);
+      if (command.type === "invalid") {
+        ctx.ui.notify("Usage: /cat [status|show|hide|smart|always|working|static]", "error");
         return;
       }
-
-      ctx.ui.notify(`Cat buddy: ${visible ? "visible" : "hidden"}; animation: ${mode}`, "info");
+      if (command.type === "status" || (command.type === "panel" && ctx.mode !== "tui")) {
+        ctx.ui.notify(statusText(), "info");
+        return;
+      }
+      if (command.type === "panel") {
+        await ctx.ui.custom<void>(
+          (_tui, theme, _keybindings, done) => new CatPanel(
+            visible,
+            mode,
+            theme,
+            () => done(undefined),
+            (action) => applyAction(action, ctx),
+          ),
+          {
+            overlay: true,
+            overlayOptions: {
+              anchor: "center",
+              width: "60%",
+              minWidth: 40,
+              maxHeight: "80%",
+            },
+          },
+        );
+        return;
+      }
+      applyAction(command, ctx);
     },
   });
 
