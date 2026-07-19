@@ -113,12 +113,14 @@ A genuine goal transition to `complete` emits a versioned event after final acco
 
 When `questions` finds the registered service, each question appears simultaneously in the terminal and Telegram. The first valid reply wins.
 
+- Listed choices use a one-button-per-row inline keyboard; free-text prompts use `ForceReply`.
 - Telegram wins: the terminal picker closes and its answer appears in the terminal tool result.
-- Terminal wins: Telegram polling closes and the terminal answer is mirrored under the Telegram question.
+- Terminal wins: Telegram polling closes, the keyboard is removed, and the terminal answer is mirrored under the Telegram question.
+- Direct text replies remain available for freeform answers, numbered/exact choices, and `/cancel`.
 - Cancellation is mirrored to the other channel.
-- Secret answers are represented only as `[secret provided]`; the raw value is never mirrored or stored in Pi.
+- Secret answers and callback notices are represented only as `[secret provided]`; the raw value is never mirrored or stored in Pi.
 
-The service accepts only text that comes from the configured chat/topic and directly replies to the exact force-reply question message. Stale and unrelated updates cannot answer a question.
+The service accepts only callbacks or text replies from the configured chat/topic and routes them by the exact Telegram question message. Callback indexes are mapped to the current typed choices rather than trusting answer text from Telegram. Callback queries are acknowledged, and stale or resolved keyboards are cleared. Stale and unrelated updates cannot answer a question.
 
 ### Long-polling constraints
 
@@ -126,7 +128,7 @@ Telegram interactive replies use `getUpdates`:
 
 - Webhooks and `getUpdates` cannot be active for the same bot.
 - Telegram exposes one update cursor per bot. Use a dedicated bot if another application consumes updates.
-- One central poller serves every Pi extension and concurrent pending prompt.
+- One central poller serves every Pi extension and concurrent pending prompt, including both `message` and `callback_query` updates.
 - Polling starts only while at least one prompt is pending and stops when none remain.
 
 ## Command

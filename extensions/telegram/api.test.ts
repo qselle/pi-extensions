@@ -42,6 +42,57 @@ test("posts messages through the shared API client", async () => {
   });
 });
 
+test("renders inline choices and exposes callback/control helpers", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  const api = new TelegramApiClient(config, {
+    fetch: (async (url, init) => {
+      const method = String(url).slice(String(url).lastIndexOf("/") + 1);
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      return jsonResponse({ ok: true, result: method === "sendMessage" ? { message_id: 21 } : true });
+    }) as typeof fetch,
+  });
+
+  const longLabel = "x".repeat(80);
+  await api.sendMessage("Choose", {
+    forceReply: true,
+    inlineChoices: [
+      { text: "  Staging  ", callbackData: "choice:0" },
+      { text: longLabel, callbackData: "choice:1" },
+    ],
+  });
+  await api.answerCallbackQuery("callback-1", "Selected: Staging");
+  await api.clearInlineKeyboard(21);
+
+  expect(requests[0]).toEqual({
+    method: "sendMessage",
+    body: {
+      chat_id: "-1001234567890",
+      text: "Choose",
+      disable_web_page_preview: true,
+      message_thread_id: 42,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Staging", callback_data: "choice:0" }],
+          [{ text: `${"x".repeat(63)}…`, callback_data: "choice:1" }],
+        ],
+      },
+    },
+  });
+  expect(requests[1]).toEqual({
+    method: "answerCallbackQuery",
+    body: { callback_query_id: "callback-1", text: "Selected: Staging" },
+  });
+  expect(requests[2]).toEqual({
+    method: "editMessageReplyMarkup",
+    body: {
+      chat_id: "-1001234567890",
+      message_id: 21,
+      reply_markup: { inline_keyboard: [] },
+    },
+  });
+});
+
 test("retries only bounded explicit sendMessage rate limits", async () => {
   let calls = 0;
   const delays: number[] = [];

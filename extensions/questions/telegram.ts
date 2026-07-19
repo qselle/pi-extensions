@@ -21,9 +21,14 @@ export function createTelegramQuestionReply(
   const source: ReplySource = {
     name: "telegram",
     run: async (signal): Promise<SourceReply> => {
-      handle = await service.openPrompt({
+      const opened = await service.openPrompt<string>({
         text: formatTelegramQuestion(question, index, total),
         inputPlaceholder: question.secret ? "Reply with the secret answer" : "Reply with a number or your answer",
+        choices: question.options.map((option) => ({
+          label: option,
+          value: option,
+          displayText: question.secret ? "[secret provided]" : option,
+        })),
         parse: (text) => {
           const parsed = parseReplyText(question, text);
           if (parsed === "cancel") return { status: "cancelled" };
@@ -40,7 +45,8 @@ export function createTelegramQuestionReply(
           };
         },
       }, signal);
-      const result = await handle.result;
+      handle = opened;
+      const result = await opened.result;
       if (result.status === "answered") return { status: "answered", answer: result.value };
       return result.status === "cancelled" ? { status: "cancelled" } : { status: "unavailable" };
     },
@@ -49,7 +55,7 @@ export function createTelegramQuestionReply(
   return {
     source,
     async mirror(outcome) {
-      if (!handle || outcome.source !== "terminal") return;
+      if (!handle || outcome.status === "unavailable" || outcome.source !== "terminal") return;
       if (outcome.status === "answered") {
         await handle.close({
           status: "answered",
@@ -81,9 +87,11 @@ export function formatTelegramQuestion(question: Question, index: number, total:
   }
   lines.push(
     "",
-    question.allowOther
-      ? "Reply to this message with an option number, exact option, or your own answer."
-      : "Reply to this message with an option number or exact option.",
+    question.options.length === 0
+      ? "Reply to this message with your own answer."
+      : question.allowOther
+        ? "Choose a button below, or reply to this message with your own answer."
+        : "Choose a button below. Direct replies with an option number or exact option also work.",
     "Send /cancel to cancel. The first reply between Telegram and the terminal wins.",
   );
   if (question.secret) lines.push("⚠️ Secret replies are not stored in Pi, but Telegram still retains them.");

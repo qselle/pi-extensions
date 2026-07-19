@@ -17,6 +17,10 @@ function fakeService<T>(
 test("adapts option and freeform parsing to the central Telegram prompt service", async () => {
   const parsed: unknown[] = [];
   const service = fakeService<string>(async (request) => {
+    expect(request.choices).toEqual([
+      { label: "Red", value: "Red", displayText: "Red" },
+      { label: "Blue", value: "Blue", displayText: "Blue" },
+    ]);
     parsed.push(request.parse("2"));
     parsed.push(request.parse("custom answer"));
     const accepted = request.parse("2");
@@ -61,6 +65,34 @@ test("rejects unlisted replies when freeform is disabled", async () => {
   expect(await reply.source.run(new AbortController().signal)).toEqual({ status: "cancelled" });
 });
 
+test("uses redacted callback display text for secret choices", async () => {
+  const service = fakeService<string>(async (request) => {
+    expect(request.choices).toEqual([{
+      label: "Use production token",
+      value: "Use production token",
+      displayText: "[secret provided]",
+    }]);
+    return {
+      messageId: 1,
+      result: Promise.resolve({ status: "answered", value: request.choices![0]!.value }),
+      close: async () => undefined,
+    };
+  });
+  const [question] = normalizeQuestions([{
+    id: "token",
+    question: "Which token?",
+    options: ["Use production token"],
+    allow_other: false,
+    secret: true,
+  }]);
+
+  const reply = createTelegramQuestionReply(service, question, 0, 1);
+  expect(await reply.source.run(new AbortController().signal)).toEqual({
+    status: "answered",
+    answer: "Use production token",
+  });
+});
+
 test("mirrors terminal answers through the prompt handle and masks secrets", async () => {
   const mirrors: unknown[] = [];
   const service = fakeService<string>(async () => ({
@@ -103,5 +135,6 @@ test("formats bounded freeform and secret Telegram guidance", () => {
   }]);
   const bounded = formatTelegramQuestion(longQuestion, 0, 1);
   expect(bounded.length).toBeLessThanOrEqual(3_900);
+  expect(bounded).toContain("Choose a button below");
   expect(bounded).toContain("Send /cancel");
 });

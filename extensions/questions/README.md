@@ -55,20 +55,21 @@ export PI_TELEGRAM_CHAT_ID="<numeric chat ID or @username>"
 export PI_TELEGRAM_THREAD_ID="<optional forum topic ID>"
 ```
 
-Each Telegram question uses `force_reply`. Reply directly to that bot message with:
+Telegram mirrors the terminal interaction style:
 
-- an option number such as `2`
-- the exact option text
-- any other text when freeform answers are allowed
-- `/cancel` to interrupt the questionnaire
+- Questions with listed options show an inline keyboard with one choice per row.
+- Questions without options use Telegram `ForceReply` for free text.
+- When freeform answers are allowed, you can ignore the buttons and reply directly with your own text.
+- Direct replies can still use an option number such as `2`, the exact option text, or `/cancel`.
 
-For safety, the poller accepts only a text message that:
+For safety, the central poller accepts only:
 
-1. comes from the configured chat
-2. comes from the configured topic when `threadId` is set
-3. directly replies to the exact Telegram question message
+1. a callback or text reply from the configured chat
+2. the configured topic when `threadId` is set
+3. a callback on, or direct reply to, the exact Telegram question message
+4. a callback index that maps to a current listed choice
 
-Old updates are drained before the first question is sent. Unrelated messages, stale replies, other chats, and other topics cannot win the race. The winning non-secret answer is displayed in both channels; secret answers are mirrored only as `[secret provided]`.
+Old updates are drained before the first question is sent. Unrelated messages, stale buttons, stale replies, other chats, and other topics cannot win the race. Callback queries are acknowledged, and inline controls are removed as soon as Telegram, the terminal, cancellation, or shutdown closes the question. The winning non-secret answer is displayed in both channels; secret answers and callback acknowledgements use only `[secret provided]`.
 
 ### Telegram Bot API limitations
 

@@ -3,6 +3,8 @@ import type { TelegramConfig } from "./config.ts";
 const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_RETRY_AFTER_SECONDS = 5;
+const MAX_INLINE_BUTTON_CHARS = 64;
+const MAX_CALLBACK_NOTICE_CHARS = 200;
 
 export interface TelegramApiOptions {
   fetch?: typeof fetch;
@@ -15,10 +17,16 @@ export interface TelegramRequestOptions {
   timeoutMs?: number;
 }
 
+export interface TelegramInlineChoice {
+  text: string;
+  callbackData: string;
+}
+
 export interface TelegramSendOptions extends TelegramRequestOptions {
   forceReply?: boolean;
   inputPlaceholder?: string;
   replyToMessageId?: number;
+  inlineChoices?: readonly TelegramInlineChoice[];
 }
 
 export interface TelegramSendResult {
@@ -57,7 +65,14 @@ export class TelegramApiClient {
       disable_web_page_preview: true,
     };
     if (this.config.threadId !== undefined) body.message_thread_id = this.config.threadId;
-    if (options.forceReply) {
+    if (options.inlineChoices && options.inlineChoices.length > 0) {
+      body.reply_markup = {
+        inline_keyboard: options.inlineChoices.map((choice) => [{
+          text: clipCharacters(choice.text.replace(/\s+/gu, " ").trim(), MAX_INLINE_BUTTON_CHARS),
+          callback_data: choice.callbackData,
+        }]),
+      };
+    } else if (options.forceReply) {
       body.reply_markup = {
         force_reply: true,
         ...(options.inputPlaceholder ? { input_field_placeholder: options.inputPlaceholder } : {}),
@@ -80,6 +95,25 @@ export class TelegramApiClient {
       }
     }
     throw new TelegramApiError("Telegram rate-limited the request.", "rate_limited", 429);
+  }
+
+  async answerCallbackQuery(
+    callbackQueryId: string,
+    text: string,
+    options: TelegramRequestOptions = {},
+  ): Promise<void> {
+    await this.call("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      text: clipCharacters(text, MAX_CALLBACK_NOTICE_CHARS),
+    }, options);
+  }
+
+  async clearInlineKeyboard(messageId: number, options: TelegramRequestOptions = {}): Promise<void> {
+    await this.call("editMessageReplyMarkup", {
+      chat_id: this.config.chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    }, options);
   }
 
   async call(method: string, body: Record<string, unknown>, options: TelegramRequestOptions = {}): Promise<any> {
@@ -127,6 +161,11 @@ export class TelegramApiClient {
       options.signal?.removeEventListener("abort", abort);
     }
   }
+}
+
+function clipCharacters(value: string, limit: number): string {
+  const characters = [...value];
+  return characters.length <= limit ? value : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
 export function safeTelegramError(error: unknown): string {

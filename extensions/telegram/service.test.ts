@@ -74,7 +74,7 @@ test("routes only exact prompt replies through one central polling cursor", asyn
 
   expect(requests[0]).toEqual({
     method: "getUpdates",
-    body: { offset: -1, timeout: 0, allowed_updates: ["message"] },
+    body: { offset: -1, timeout: 0, allowed_updates: ["message", "callback_query"] },
   });
   expect(requests[1].body).toMatchObject({
     text: "Question",
@@ -83,7 +83,7 @@ test("routes only exact prompt replies through one central polling cursor", asyn
   });
   expect(requests[2]).toEqual({
     method: "getUpdates",
-    body: { offset: 10, timeout: 20, allowed_updates: ["message"] },
+    body: { offset: 10, timeout: 20, allowed_updates: ["message", "callback_query"] },
   });
   expect(requests.some((request) => request.body.text === "Try again")).toBe(true);
   expect(requests.some((request) => String(request.body.text).includes("Reply received first on Telegram"))).toBe(true);
@@ -122,8 +122,206 @@ test("shares one long poll across concurrent prompts", async () => {
   await service.shutdown();
 });
 
+test("routes exact callback choices, acknowledges stale buttons, and removes controls", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let updatesCalls = 0;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 50 });
+      if (method === "answerCallbackQuery" || method === "editMessageReplyMarkup") return response(true);
+      updatesCalls++;
+      if (updatesCalls === 1) return response([{ update_id: 9 }]);
+      return response([
+        {
+          update_id: 10,
+          callback_query: {
+            id: "wrong-chat",
+            data: "choice:0",
+            message: { message_id: 50, message_thread_id: 42, chat: { id: -999 } },
+          },
+        },
+        {
+          update_id: 11,
+          callback_query: {
+            id: "wrong-topic",
+            data: "choice:0",
+            message: { message_id: 50, message_thread_id: 7, chat: { id: -1001234567890 } },
+          },
+        },
+        {
+          update_id: 12,
+          callback_query: {
+            id: "invalid-choice",
+            data: "choice:9",
+            message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
+          },
+        },
+        {
+          update_id: 13,
+          callback_query: {
+            id: "valid-choice",
+            data: "choice:1",
+            message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
+          },
+        },
+        {
+          update_id: 14,
+          callback_query: {
+            id: "stale-choice",
+            data: "choice:0",
+            message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
+          },
+        },
+      ]);
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt<string>({
+    text: "Deploy where?",
+    choices: [
+      { label: "Staging", value: "staging", displayText: "Staging" },
+      { label: "Production", value: "production", displayText: "Production" },
+    ],
+    parse: parser,
+  });
+  expect(await prompt.result).toEqual({ status: "answered", value: "production" });
+  await service.drain();
+
+  const promptSend = requests.find((request) => request.method === "sendMessage" && request.body.text === "Deploy where?");
+  expect(promptSend?.body.reply_markup).toEqual({
+    inline_keyboard: [
+      [{ text: "Staging", callback_data: "choice:0" }],
+      [{ text: "Production", callback_data: "choice:1" }],
+    ],
+  });
+  const acknowledgements = requests
+    .filter((request) => request.method === "answerCallbackQuery")
+    .map((request) => request.body);
+  expect(acknowledgements).toEqual([
+    { callback_query_id: "invalid-choice", text: "This option is no longer available." },
+    { callback_query_id: "valid-choice", text: "Selected: Production" },
+    { callback_query_id: "stale-choice", text: "This option is no longer available." },
+  ]);
+  expect(requests.some((request) => request.method === "editMessageReplyMarkup" && request.body.message_id === 50)).toBe(true);
+  expect(requests.some((request) => request.method === "sendMessage" && String(request.body.text).includes("Production"))).toBe(true);
+  await service.shutdown();
+});
+
+test("keeps direct freeform replies available for choice prompts", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let updatesCalls = 0;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 85 });
+      if (method === "editMessageReplyMarkup") return response(true);
+      updatesCalls++;
+      if (updatesCalls === 1) return response([]);
+      return response([{
+        update_id: 1,
+        message: {
+          message_id: 86,
+          text: "custom destination",
+          chat: { id: -1001234567890 },
+          message_thread_id: 42,
+          reply_to_message: { message_id: 85 },
+        },
+      }]);
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt<string>({
+    text: "Choose or type",
+    choices: [{ label: "Staging", value: "staging", displayText: "Staging" }],
+    parse: (text) => ({ status: "accepted", value: text, displayText: text }),
+  });
+  expect(await prompt.result).toEqual({ status: "answered", value: "custom destination" });
+  await service.drain();
+  expect(requests.some((request) => request.method === "editMessageReplyMarkup")).toBe(true);
+  expect(requests.some((request) => request.method === "sendMessage" && String(request.body.text).includes("custom destination"))).toBe(true);
+  await service.shutdown();
+});
+
+test("keeps direct reply cancellation available for choice prompts", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let updatesCalls = 0;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 90 });
+      if (method === "editMessageReplyMarkup") return response(true);
+      updatesCalls++;
+      if (updatesCalls === 1) return response([]);
+      return response([{
+        update_id: 1,
+        message: {
+          message_id: 91,
+          text: "/cancel",
+          chat: { id: -1001234567890 },
+          message_thread_id: 42,
+          reply_to_message: { message_id: 90 },
+        },
+      }]);
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt<string>({
+    text: "Choose",
+    choices: [{ label: "A", value: "A", displayText: "A" }],
+    parse: parser,
+  });
+  expect(await prompt.result).toEqual({ status: "cancelled" });
+  await service.drain();
+  expect(requests.some((request) => request.method === "editMessageReplyMarkup")).toBe(true);
+  expect(requests.some((request) => request.method === "sendMessage" && String(request.body.text).includes("cancelled from Telegram"))).toBe(true);
+  await service.shutdown();
+});
+
+test("clears choice controls when a pending prompt is aborted", async () => {
+  const cleared: any[] = [];
+  const controller = new AbortController();
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      if (method === "sendMessage") return response({ message_id: 95 });
+      if (method === "editMessageReplyMarkup") {
+        cleared.push(body);
+        return response(true);
+      }
+      if (body.offset === -1) return response([]);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt<string>({
+    text: "Choose",
+    choices: [{ label: "A", value: "A", displayText: "A" }],
+    parse: parser,
+  }, controller.signal);
+  controller.abort();
+  expect(await prompt.result).toEqual({ status: "unavailable" });
+  await service.drain();
+  expect(cleared).toHaveLength(1);
+  await service.shutdown();
+});
+
 test("mirrors a terminal winner back to Telegram and closes remote waiting", async () => {
   const sent: any[] = [];
+  const cleared: any[] = [];
   const service = new DefaultTelegramService(config, {
     emptyPollDelayMs: 0,
     fetch: (async (url, init) => {
@@ -133,6 +331,10 @@ test("mirrors a terminal winner back to Telegram and closes remote waiting", asy
         sent.push(body);
         return response({ message_id: sent.length === 1 ? 80 : 81 });
       }
+      if (method === "editMessageReplyMarkup") {
+        cleared.push(body);
+        return response(true);
+      }
       if (body.offset === -1) return response([]);
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
@@ -140,12 +342,21 @@ test("mirrors a terminal winner back to Telegram and closes remote waiting", asy
     }) as typeof fetch,
   });
 
-  const prompt = await service.openPrompt({ text: "Question", parse: parser });
+  const prompt = await service.openPrompt({
+    text: "Question",
+    choices: [{ label: "Choice", value: "accepted", displayText: "Choice" }],
+    parse: parser,
+  });
   await prompt.close({ status: "answered", source: "terminal", displayText: "Terminal answer" });
   expect(await prompt.result).toEqual({ status: "unavailable" });
   expect(sent.at(-1)).toMatchObject({
     text: expect.stringContaining("Terminal answer"),
     reply_parameters: { message_id: prompt.messageId },
   });
+  expect(cleared).toEqual([{
+    chat_id: "-1001234567890",
+    message_id: prompt.messageId,
+    reply_markup: { inline_keyboard: [] },
+  }]);
   await service.shutdown();
 });
