@@ -29,6 +29,15 @@ class MockCustomEditor {
 
 mock.module("@earendil-works/pi-coding-agent", () => ({
   CustomEditor: MockCustomEditor,
+  generateUnifiedPatch: (_path: string, before: string, after: string) => [
+    "--- before",
+    "+++ after",
+    ...before.split("\n").filter(Boolean).map((line) => `-${line}`),
+    ...after.split("\n").filter(Boolean).map((line) => `+${line}`),
+  ].join("\n"),
+  isToolCallEventType: (name: string, event: { toolName?: string }) => event.toolName === name,
+  isEditToolResult: (event: { toolName?: string }) => event.toolName === "edit",
+  isWriteToolResult: (event: { toolName?: string }) => event.toolName === "write",
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
