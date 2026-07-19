@@ -7,6 +7,7 @@ export const NO_TOOL_TURN_LIMIT = 3;
 export type GoalStatus =
   | "active"
   | "paused"
+  | "stalled"
   | "blocked"
   | "usage_limited"
   | "budget_limited"
@@ -34,6 +35,7 @@ export interface GoalState {
   status: GoalStatus;
   checks: GoalCheck[];
   progressSummary?: string;
+  stallReason?: string;
   blockerAudit?: GoalBlockerAudit;
   tokenBudget: number | null;
   tokensUsed: number;
@@ -122,8 +124,11 @@ export function validateGoalChecks(checks: readonly GoalCheck[]): GoalCheck[] {
     if (!isGoalCheckStatus(check.status)) throw new Error(`Unknown goal check status: ${check.status}`);
     return { content, status: check.status };
   });
-  if (normalized.filter((check) => check.status === "in_progress").length > 1) {
-    throw new Error("Only one goal check may be in progress at a time.");
+  const inProgress = normalized.filter((check) => check.status === "in_progress").length;
+  const unfinished = normalized.filter((check) => check.status === "pending" || check.status === "in_progress").length;
+  if (inProgress > 1) throw new Error("Only one goal check may be in progress at a time.");
+  if (unfinished > 0 && inProgress !== 1) {
+    throw new Error("Unfinished goal progress must have exactly one in-progress check.");
   }
   return normalized;
 }
@@ -175,11 +180,19 @@ export function reportGoalProgress(
   now = Date.now(),
 ): GoalState {
   if (goal.status !== "active") throw new Error("Progress can be updated only while the goal is active.");
-  const progressSummary = summary?.trim() || undefined;
+  return synchronizeGoalProgress(goal, checks, summary, now);
+}
+
+export function synchronizeGoalProgress(
+  goal: GoalState,
+  checks: readonly GoalCheck[],
+  summary?: string,
+  now = Date.now(),
+): GoalState {
   return {
     ...goal,
     checks: validateGoalChecks(checks),
-    progressSummary,
+    progressSummary: summary?.trim() || undefined,
     updatedAt: now,
   };
 }
@@ -255,6 +268,7 @@ export function editGoalObjective(goal: GoalState, objective: string, now = Date
     status: status === "active" && budgetExhausted ? "budget_limited" : status,
     runTurns: 0,
     noToolTurns: 0,
+    stallReason: undefined,
     blockerAudit: undefined,
     updatedAt: now,
   };
@@ -269,7 +283,21 @@ export function setGoalStatus(goal: GoalState, status: GoalStatus, now = Date.no
     status: nextStatus,
     runTurns: resuming ? 0 : goal.runTurns,
     noToolTurns: resuming ? 0 : goal.noToolTurns,
+    stallReason: resuming || nextStatus === "complete" ? undefined : goal.stallReason,
     blockerAudit: resuming || nextStatus === "complete" ? undefined : goal.blockerAudit,
+    updatedAt: now,
+  };
+}
+
+export function stallGoal(goal: GoalState, reason: string, now = Date.now()): GoalState {
+  if (goal.status !== "active") return goal;
+  const stallReason = reason.trim();
+  if (!stallReason) throw new Error("A stalled goal requires a reason.");
+  return {
+    ...goal,
+    status: "stalled",
+    stallReason,
+    blockerAudit: undefined,
     updatedAt: now,
   };
 }
@@ -347,13 +375,18 @@ function decodeGoal(value: unknown): GoalState | undefined {
             lastReportedTurn: validCounter(goal.turns),
           }
         : undefined);
+    const legacyNoToolStall = goal.status === "blocked"
+      && blockerAudit?.description === `${NO_TOOL_TURN_LIMIT} consecutive continuation runs made no tool calls.`;
     return {
       id: goal.id,
       objective: validateObjective(goal.objective),
-      status: goal.status,
+      status: legacyNoToolStall ? "stalled" : goal.status,
       checks,
       progressSummary: typeof goal.progressSummary === "string" ? goal.progressSummary : undefined,
-      blockerAudit,
+      stallReason: legacyNoToolStall
+        ? `Automatic continuation paused after ${NO_TOOL_TURN_LIMIT} runs made no tool call or terminal goal update.`
+        : typeof goal.stallReason === "string" ? goal.stallReason : undefined,
+      blockerAudit: legacyNoToolStall ? undefined : blockerAudit,
       tokenBudget: validateTokenBudget(goal.tokenBudget),
       tokensUsed: validCounter(goal.tokensUsed),
       timeUsedMs: validCounter(goal.timeUsedMs),
@@ -391,6 +424,7 @@ function decodeBlockerAudit(value: unknown): GoalBlockerAudit | undefined {
 function isGoalStatus(value: unknown): value is GoalStatus {
   return value === "active"
     || value === "paused"
+    || value === "stalled"
     || value === "blocked"
     || value === "usage_limited"
     || value === "budget_limited"

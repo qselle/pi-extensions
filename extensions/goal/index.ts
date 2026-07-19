@@ -26,10 +26,10 @@ import {
   reportGoalProgress,
   setGoalStatus,
   shouldConfirmReplacement,
+  stallGoal,
   type GoalCheck,
   type GoalEntry,
   type GoalState,
-  type GoalStatus,
 } from "./goal.ts";
 import {
   CONTINUATION_MARKER_TEXT,
@@ -40,10 +40,15 @@ import {
   buildGoalContext,
   goalResponse,
 } from "./prompts.ts";
-import { GoalPanel, GoalWidget, type GoalPanelAction } from "./ui.ts";
+import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
+import {
+  GoalPanel,
+  goalOverlayTitle,
+  renderGoalOverlayBody,
+  type GoalPanelAction,
+} from "./ui.ts";
 
 const ENTRY_TYPE = "goal-state";
-const WIDGET_KEY = "goal";
 const BUDGET_MESSAGE_TYPE = "goal-budget-limit";
 
 interface GoalContextMessage {
@@ -89,68 +94,44 @@ const UpdateGoalParameters = Type.Object({
 
 export default function goalExtension(pi: ExtensionAPI) {
   let goal: GoalState | undefined;
-  let activeContext: ExtensionContext | undefined;
-  let widget: GoalWidget | undefined;
-  let widgetTui: { requestRender(force?: boolean): void } | undefined;
   let continuationTimer: ReturnType<typeof setTimeout> | undefined;
-  let tickTimer: ReturnType<typeof setInterval> | undefined;
   let nextRunIsContinuation = false;
   let currentRunIsContinuation = false;
   let currentRunHadToolCall = false;
   let currentRunReportedBlocker = false;
+  let currentRunRepeatedAssistant = false;
+  let lastAssistantText: string | undefined;
   let agentRunning = false;
   let runGoalId: string | undefined;
   let runStartedAt: number | undefined;
   const accountedMessages = new WeakSet<object>();
 
+  const overlayCard = registerOverlayCard({
+    id: "goal",
+    order: 5,
+    width: 58,
+    minBodyHeight: 3,
+    minTerminalWidth: 72,
+    minTerminalHeight: 12,
+    visible: () => Boolean(goal && goal.status !== "complete"),
+    title: (theme) => goal ? goalOverlayTitle(goal, theme) : " Goal ",
+    renderBody: (width, maxHeight, theme) => goal
+      ? renderGoalOverlayBody(goal, width, maxHeight, theme, runStartedAt)
+      : [],
+  });
+
   const persist = () => {
     pi.appendEntry<GoalEntry>(ENTRY_TYPE, { version: 2, goal: goal ?? null });
   };
 
-  const syncWidget = (ctx = activeContext) => {
-    if (!ctx?.hasUI) return;
-    activeContext = ctx;
-
-    if (!goal) {
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-      widget = undefined;
-      widgetTui = undefined;
-      return;
-    }
-
-    if (!widget) {
-      ctx.ui.setWidget(
-        WIDGET_KEY,
-        (tui, theme) => {
-          widgetTui = tui;
-          widget = new GoalWidget(theme, () => goal, () => runStartedAt);
-          return widget;
-        },
-        { placement: "belowEditor" },
-      );
-    }
-    widget?.invalidate();
-    widgetTui?.requestRender();
-  };
-
-  const save = (ctx = activeContext) => {
+  const save = (_ctx?: ExtensionContext) => {
     persist();
-    syncWidget(ctx);
+    overlayCard.invalidate();
   };
 
   const stopContinuationTimer = () => {
     if (continuationTimer) clearTimeout(continuationTimer);
     continuationTimer = undefined;
-  };
-
-  const stopTicking = () => {
-    if (tickTimer) clearInterval(tickTimer);
-    tickTimer = undefined;
-  };
-
-  const startTicking = () => {
-    stopTicking();
-    tickTimer = setInterval(() => widgetTui?.requestRender(), 1_000);
   };
 
   const scheduleContinuation = (ctx: ExtensionContext) => {
@@ -170,26 +151,23 @@ export default function goalExtension(pi: ExtensionAPI) {
 
       nextRunIsContinuation = true;
       try {
+        // Persist only a hidden wake marker. The context hook must replace this
+        // marker with the full prompt; dropping it would leave Codex with no input.
         pi.sendMessage(
           {
             customType: CONTINUATION_MARKER_TYPE,
             content: CONTINUATION_MARKER_TEXT,
             display: false,
-            details: { goalId: expectedGoalId },
+            details: { goalId: expectedGoalId, transient: true },
           },
-          { triggerTurn: true, deliverAs: "followUp" },
+          { triggerTurn: true },
         );
       } catch (error) {
         nextRunIsContinuation = false;
-        goal = stopGoal(
-          goal,
-          "blocked",
-          "Automatic continuation could not start.",
-          error instanceof Error ? error.message : String(error),
-          "Resolve the extension error, then resume the goal.",
-        );
+        const reason = error instanceof Error ? error.message : String(error);
+        goal = stallGoal(goal, `Automatic continuation could not start: ${reason}`);
         save(ctx);
-        ctx.ui.notify("Goal stopped because its continuation could not start.", "error");
+        ctx.ui.notify("Goal stalled because its continuation could not start.", "error");
       }
     }, 25);
   };
@@ -253,7 +231,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       ctx.ui.notify("No goal is currently set.", "info");
       return;
     }
-    const confirmed = await ctx.ui.confirm("Clear goal?", "The goal widget and automatic continuation will stop.");
+    const confirmed = await ctx.ui.confirm("Clear goal?", "The goal card and automatic continuation will stop.");
     if (!confirmed) return;
     stopContinuationTimer();
     goal = undefined;
@@ -311,18 +289,24 @@ export default function goalExtension(pi: ExtensionAPI) {
     }
 
     const snapshot = goal;
-    const action = await ctx.ui.custom<GoalPanelAction>(
-      (_tui, theme, _keybindings, done) => new GoalPanel(snapshot, theme, runStartedAt, done),
-      {
-        overlay: true,
-        overlayOptions: {
-          anchor: "center",
-          width: "60%",
-          minWidth: 44,
-          maxHeight: "80%",
+    pi.events.emit(OVERLAY_MODAL_EVENT, { id: "goal-panel", open: true });
+    let action: GoalPanelAction;
+    try {
+      action = await ctx.ui.custom<GoalPanelAction>(
+        (_tui, theme, _keybindings, done) => new GoalPanel(snapshot, theme, runStartedAt, done),
+        {
+          overlay: true,
+          overlayOptions: {
+            anchor: "center",
+            width: "60%",
+            minWidth: 44,
+            maxHeight: "80%",
+          },
         },
-      },
-    );
+      );
+    } finally {
+      pi.events.emit(OVERLAY_MODAL_EVENT, { id: "goal-panel", open: false });
+    }
 
     if (action === "edit") await editGoal(ctx);
     else if (action === "pause") pauseGoal(ctx);
@@ -340,7 +324,6 @@ export default function goalExtension(pi: ExtensionAPI) {
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
-      activeContext = ctx;
       stopContinuationTimer();
       try {
         const input = args.trim();
@@ -403,14 +386,22 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "report_goal_progress",
     label: "Report Goal Progress",
-    description: "Replace the active goal's concise progress-check list and summary. Keep checks concrete and evidence-based, with at most one in progress. Use this only for an explicit active goal, not ordinary tasks.",
+    description: "Replace an active or stalled goal's concise progress-check list and summary. A progress report automatically revives a stalled goal because it proves implementation is continuing. Keep checks concrete and evidence-based, with at most one in progress. Use this only for an explicit goal, not ordinary tasks.",
     parameters: ReportGoalProgressParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!goal) throw new Error("No goal is currently set.");
-      goal = reportGoalProgress(goal, params.checks as GoalCheck[], params.summary);
+      const resumed = goal.status === "stalled";
+      const reportableGoal = resumed ? setGoalStatus(goal, "active") : goal;
+      let nextGoal = reportGoalProgress(reportableGoal, params.checks as GoalCheck[], params.summary);
+      if (resumed && agentRunning && runGoalId !== nextGoal.id) {
+        nextGoal = beginGoalRun(nextGoal, false);
+        runGoalId = nextGoal.id;
+        runStartedAt = Date.now();
+      }
+      goal = nextGoal;
       save(ctx);
       const progress = goalCheckProgress(goal);
-      const message = `Goal progress ${progress.complete}/${progress.total}`;
+      const message = `${resumed ? "Goal resumed; " : ""}goal progress ${progress.complete}/${progress.total}`;
       return {
         content: [{ type: "text", text: `${message}. ${goalResponse(goal)}` }],
         details: { action: "progress", goal, message } satisfies GoalToolDetails,
@@ -476,7 +467,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", () => {
-    if (!goal || goal.status !== "active") return;
+    if (!goal || (goal.status !== "active" && goal.status !== "stalled")) return;
     return {
       message: {
         customType: GOAL_CONTEXT_MARKER_TYPE,
@@ -489,30 +480,46 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.on("context", (event) => {
     const messages = event.messages as Array<{ customType?: string }>;
-    let lastGoalContext = -1;
+    let latestGoalMarker = -1;
+    let latestContinuationWake = -1;
     for (let index = 0; index < messages.length; index++) {
-      if (messages[index]?.customType === GOAL_CONTEXT_MARKER_TYPE) lastGoalContext = index;
+      const message = messages[index];
+      const customType = message?.customType;
+      if (customType === CONTINUATION_MARKER_TYPE || customType === GOAL_CONTEXT_MARKER_TYPE) {
+        latestGoalMarker = index;
+      }
+      if (currentRunIsContinuation && isContinuationWakeMessage(message)) {
+        latestContinuationWake = index;
+      }
     }
-    const hasGoalMarkers = messages.some((message) =>
-      message.customType === CONTINUATION_MARKER_TYPE || message.customType === GOAL_CONTEXT_MARKER_TYPE
-    );
-    if (!hasGoalMarkers) return;
-    const activeGoal = goal?.status === "active" ? goal : undefined;
+    if (latestGoalMarker === -1 && latestContinuationWake === -1) return;
+
+    const contextGoal = goal && (goal.status === "active" || goal.status === "stalled") ? goal : undefined;
     const transformed: typeof event.messages = [];
     for (let index = 0; index < event.messages.length; index++) {
       const message = event.messages[index]!;
+      if (index === latestContinuationWake && contextGoal) {
+        const wake = message as unknown as { content: unknown };
+        const content = buildGoalContext(contextGoal, true);
+        transformed.push({
+          ...message,
+          content: typeof wake.content === "string" ? content : [{ type: "text", text: content }],
+        } as typeof message);
+        continue;
+      }
+
       const customType = (message as { customType?: string }).customType;
-      if (customType === CONTINUATION_MARKER_TYPE) continue;
-      if (customType !== GOAL_CONTEXT_MARKER_TYPE) {
+      if (customType !== CONTINUATION_MARKER_TYPE && customType !== GOAL_CONTEXT_MARKER_TYPE) {
         transformed.push(message);
         continue;
       }
-      if (!activeGoal || index !== lastGoalContext) continue;
+      if (latestContinuationWake !== -1 || !contextGoal || index !== latestGoalMarker) continue;
       const marker = message as unknown as GoalContextMessage;
       transformed.push({
         ...marker,
-        content: buildGoalContext(activeGoal, currentRunIsContinuation),
-        details: { goalId: activeGoal.id, transient: true },
+        customType: GOAL_CONTEXT_MARKER_TYPE,
+        content: buildGoalContext(contextGoal, currentRunIsContinuation),
+        details: { goalId: contextGoal.id, transient: true },
       } as unknown as typeof message);
     }
     return { messages: transformed };
@@ -529,13 +536,13 @@ export default function goalExtension(pi: ExtensionAPI) {
     nextRunIsContinuation = false;
     currentRunHadToolCall = false;
     currentRunReportedBlocker = false;
+    currentRunRepeatedAssistant = false;
     runGoalId = goal?.status === "active" ? goal.id : undefined;
     runStartedAt = runGoalId ? Date.now() : undefined;
 
     if (goal && runGoalId === goal.id) {
       goal = beginGoalRun(goal, currentRunIsContinuation);
       save(ctx);
-      startTicking();
     }
   });
 
@@ -545,9 +552,18 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.on("message_end", (event, ctx) => {
     const message = event.message;
-    if (message.role !== "assistant" || !runGoalId || !goal || goal.id !== runGoalId) return;
-    if (accountedMessages.has(message)) return;
+    if (message.role !== "assistant" || accountedMessages.has(message)) return;
     accountedMessages.add(message);
+
+    const text = assistantMessageText(message);
+    if (text) {
+      if (currentRunIsContinuation && text === lastAssistantText) {
+        currentRunRepeatedAssistant = true;
+      }
+      lastAssistantText = text;
+    }
+
+    if (!runGoalId || !goal || goal.id !== runGoalId) return;
 
     const previousStatus = goal.status;
     goal = accountGoalUsage(goal, { tokens: message.usage.totalTokens });
@@ -572,36 +588,34 @@ export default function goalExtension(pi: ExtensionAPI) {
       const usageLimited = isUsageLimitError(message.errorMessage);
       const canStop = goal.status === "active" || (goal.status === "budget_limited" && usageLimited);
       if (canStop) {
-        const status: GoalStatus = usageLimited ? "usage_limited" : "blocked";
-        goal = stopGoal(
-          goal,
-          status,
-          usageLimited ? "Provider usage is currently unavailable." : "The agent run ended with an error.",
-          message.errorMessage?.trim(),
-          usageLimited ? "Resume after capacity is available or switch providers." : "Resolve the reported error, then resume the goal.",
-        );
+        const detail = message.errorMessage?.trim() || "Unknown provider error";
+        goal = usageLimited
+          ? { ...setGoalStatus(goal, "usage_limited"), stallReason: `Provider unavailable: ${detail}` }
+          : stallGoal(goal, `Agent run failed: ${detail}`);
         save(ctx);
-        ctx.ui.notify(`Goal stopped: ${goal.blockerAudit?.description}`, "warning");
+        ctx.ui.notify(`Goal ${usageLimited ? "waiting for provider capacity" : "stalled after an agent error"}.`, "warning");
       }
     }
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    stopTicking();
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
       if (goal.status === "active") {
         if (currentRunIsContinuation) {
           goal = recordRunTools(goal, currentRunHadToolCall);
-          if (goal.noToolTurns >= NO_TOOL_TURN_LIMIT) {
-            goal = stopGoal(
+          if (!currentRunHadToolCall && currentRunRepeatedAssistant) {
+            goal = stallGoal(
               goal,
-              "blocked",
-              `${NO_TOOL_TURN_LIMIT} consecutive continuation runs made no tool calls.`,
-              "The automatic loop produced no tool activity or terminal goal update.",
-              "Refine the objective or resume with a concrete next step.",
+              "Automatic continuation repeated the previous assistant response without any tool activity.",
             );
-            ctx.ui.notify("Goal blocked to prevent an unproductive continuation loop.", "warning");
+            ctx.ui.notify("Goal stalled after the continuation replayed the previous response.", "warning");
+          } else if (goal.noToolTurns >= NO_TOOL_TURN_LIMIT) {
+            goal = stallGoal(
+              goal,
+              `Automatic continuation paused after ${NO_TOOL_TURN_LIMIT} runs made no tool call or terminal goal update.`,
+            );
+            ctx.ui.notify("Goal stalled after repeated empty continuations. Resume to retry.", "warning");
           }
         }
         if (goal.status === "active" && goal.blockerAudit && !currentRunReportedBlocker) {
@@ -617,17 +631,23 @@ export default function goalExtension(pi: ExtensionAPI) {
     currentRunIsContinuation = false;
     currentRunHadToolCall = false;
     currentRunReportedBlocker = false;
+    currentRunRepeatedAssistant = false;
+    overlayCard.invalidate();
     scheduleContinuation(ctx);
   });
 
   const restore = (ctx: ExtensionContext) => {
     goal = undefined;
+    lastAssistantText = undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "message" && entry.message.role === "assistant") {
+        lastAssistantText = assistantMessageText(entry.message) ?? lastAssistantText;
+        continue;
+      }
       if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
       const restored = decodeGoalEntry(entry.data);
       if (restored) goal = restored.goal ?? undefined;
     }
-    activeContext = ctx;
     agentRunning = false;
     runGoalId = undefined;
     runStartedAt = undefined;
@@ -635,24 +655,21 @@ export default function goalExtension(pi: ExtensionAPI) {
     currentRunIsContinuation = false;
     currentRunHadToolCall = false;
     currentRunReportedBlocker = false;
-    syncWidget(ctx);
+    currentRunRepeatedAssistant = false;
+    overlayCard.invalidate();
     scheduleContinuation(ctx);
   };
 
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
-  pi.on("session_compact", (_event, ctx) => syncWidget(ctx));
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_compact", () => overlayCard.invalidate());
+  pi.on("session_shutdown", () => {
     stopContinuationTimer();
-    stopTicking();
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
       persist();
     }
-    ctx.ui.setWidget(WIDGET_KEY, undefined);
-    widget = undefined;
-    widgetTui = undefined;
-    activeContext = undefined;
+    overlayCard.unregister();
   });
 }
 
@@ -676,7 +693,7 @@ function renderGoalToolResult(details: GoalToolDetails | undefined, theme: Theme
   const progressText = progress.total > 0 ? `${progress.complete}/${progress.total} · ` : "";
   const symbol = state.status === "blocked" || state.status === "usage_limited"
     ? theme.fg("error", "!")
-    : state.status === "budget_limited"
+    : state.status === "budget_limited" || state.status === "stalled"
       ? theme.fg("warning", "■")
       : theme.fg("success", "✓");
   return new Text(
@@ -687,28 +704,37 @@ function renderGoalToolResult(details: GoalToolDetails | undefined, theme: Theme
   );
 }
 
-function stopGoal(
-  goal: GoalState,
-  status: "blocked" | "usage_limited",
-  description: string,
-  evidence?: string,
-  nextInput?: string,
-): GoalState {
-  return {
-    ...setGoalStatus(goal, status),
-    blockerAudit: {
-      fingerprint: description.trim().toLowerCase(),
-      description,
-      evidence,
-      nextInput,
-      count: BLOCKED_AUDIT_TURNS,
-      lastReportedTurn: goal.turns,
-    },
-  };
+function assistantMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((part): part is { type: "text"; text: string } =>
+      Boolean(part && typeof part === "object" && part.type === "text" && typeof part.text === "string")
+    )
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+function isContinuationWakeMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  const candidate = message as { role?: unknown; content?: unknown };
+  if (candidate.role !== "user") return false;
+  if (candidate.content === CONTINUATION_MARKER_TEXT) return true;
+  if (!Array.isArray(candidate.content) || candidate.content.length !== 1) return false;
+  const part = candidate.content[0];
+  return Boolean(
+    part
+    && typeof part === "object"
+    && (part as { type?: unknown }).type === "text"
+    && (part as { text?: unknown }).text === CONTINUATION_MARKER_TEXT
+  );
 }
 
 function isUsageLimitError(message: string | undefined): boolean {
-  return Boolean(message && /\b(usage limit|rate limit|quota|too many requests|billing|credit|429)\b/i.test(message));
+  return Boolean(message && /\b(usage limit|rate limit|quota|too many requests|billing|credit|service unavailable|temporarily unavailable|429|503)\b/i.test(message));
 }
 
 function errorMessage(error: unknown): string {

@@ -15,6 +15,7 @@ import {
   recordGoalBlocker,
   reportGoalProgress,
   setGoalStatus,
+  stallGoal,
   validateGoalChecks,
   validateObjective,
   type GoalCheck,
@@ -117,6 +118,16 @@ test("a different blocker or a productive run resets the blocker audit", () => {
   expect(clearGoalBlockerAudit(changed).blockerAudit).toBeUndefined();
 });
 
+test("stalls without fabricating a blocker and clears the reason on resume", () => {
+  const stalled = stallGoal(goal(), "Automatic runs returned no work", 200);
+  expect(stalled.status).toBe("stalled");
+  expect(stalled.stallReason).toBe("Automatic runs returned no work");
+  expect(stalled.blockerAudit).toBeUndefined();
+  const resumed = setGoalStatus(stalled, "active", 300);
+  expect(resumed.status).toBe("active");
+  expect(resumed.stallReason).toBeUndefined();
+});
+
 test("editing a completed goal reactivates it but respects an exhausted budget", () => {
   const exhausted = setGoalStatus(accountGoalUsage(goal(), { tokens: 1_000 }), "complete");
   const edited = editGoalObjective(exhausted, "Ship the polished feature");
@@ -128,9 +139,25 @@ test("restores current and legacy versioned goal entries", () => {
   const current = { version: 2 as const, goal: goal() };
   expect(decodeGoalEntry(current)).toEqual({
     version: 2,
-    goal: { ...goal(), progressSummary: undefined, blockerAudit: undefined },
+    goal: { ...goal(), progressSummary: undefined, stallReason: undefined, blockerAudit: undefined },
   });
   expect(decodeGoalEntry({ version: 1, goal: goal() })?.version).toBe(2);
+  const legacyNoToolBlock = decodeGoalEntry({
+    version: 2,
+    goal: {
+      ...goal(),
+      status: "blocked",
+      blockerAudit: {
+        fingerprint: "legacy",
+        description: "3 consecutive continuation runs made no tool calls.",
+        count: 3,
+        lastReportedTurn: 3,
+      },
+    },
+  });
+  expect(legacyNoToolBlock?.goal?.status).toBe("stalled");
+  expect(legacyNoToolBlock?.goal?.stallReason).toContain("no tool call");
+  expect(legacyNoToolBlock?.goal?.blockerAudit).toBeUndefined();
   expect(decodeGoalEntry({ version: 3, goal: goal() })).toBeUndefined();
   expect(decodeGoalEntry({ version: 2, goal: { objective: "broken" } })).toBeUndefined();
   expect(decodeGoalEntry({ version: 2, goal: null })).toEqual({ version: 2, goal: null });

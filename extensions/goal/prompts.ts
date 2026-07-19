@@ -24,6 +24,12 @@ export function buildGoalContext(goal: GoalState, continuation = false): string 
   const blocker = goal.blockerAudit
     ? `\nRepeated blocker audit: ${goal.blockerAudit.count}/${BLOCKED_AUDIT_TURNS}\n- Condition: ${escapeXml(goal.blockerAudit.description)}${goal.blockerAudit.nextInput ? `\n- Needed: ${escapeXml(goal.blockerAudit.nextInput)}` : ""}`
     : "";
+  const recovery = continuation && goal.noToolTurns > 0
+    ? `\n\nRecovery requirement: The previous continuation ended without a tool call or terminal goal update. Do not return an empty or status-only response. Make concrete progress with tools, call update_goal when fully complete, or report a genuine blocker with evidence.`
+    : "";
+  const stalledRecovery = goal.status === "stalled"
+    ? `\n\nStalled-goal recovery: Automatic continuation stopped because ${escapeXml(goal.stallReason ?? "the previous run could not continue")}. If this user-driven run is continuing the same objective, keep implementing and call report_goal_progress with concrete current evidence; that call safely reactivates the goal and attaches this run. If the run is unrelated, do not revive the goal.`
+    : "";
 
   return `## Persistent goal ${continuation ? "continuation" : "context"}
 
@@ -37,11 +43,13 @@ Progress checks (${progress.complete}/${progress.total} finished):
 ${checks}
 ${goal.progressSummary ? `\nLatest progress: ${escapeXml(goal.progressSummary)}` : ""}${current ? `\nCurrent check: ${escapeXml(current.content)}` : ""}${blocker}
 
-Usage: ${formatDuration(goal.timeUsedMs)} elapsed · ${budget} · run ${goal.turns}
+State: ${goal.status}
+Usage: ${formatDuration(goal.timeUsedMs)} elapsed · ${budget} · run ${goal.turns}${recovery}${stalledRecovery}
 
 Operating contract:
 - Preserve the full objective across runs; do not redefine success around a smaller deliverable.
 - Work from current files, commands, tests, rendered output, and external state rather than assumptions about earlier progress.
+- If update_plan is available and the next work is meaningfully multi-step, maintain a tactical execution plan. The plan describes the current route; goal checks remain the durable verification contract.
 - Keep progress checks specific and current. Only one check may be in progress. Mark a check complete only after its required evidence exists.
 - Before completing the goal, audit every explicit requirement and every progress check against authoritative evidence. If anything remains unverified, continue working.
 - Call update_goal with status \"complete\" only when the entire objective is achieved and all non-cancelled checks are complete.
@@ -63,6 +71,7 @@ export function goalResponse(goal: GoalState | undefined): string {
       checks: goal.checks,
       progress,
       progressSummary: goal.progressSummary ?? null,
+      stallReason: goal.stallReason ?? null,
       blocker: goal.blockerAudit
         ? {
             description: goal.blockerAudit.description,

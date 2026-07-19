@@ -45,8 +45,14 @@ export class GoalWidget implements Component {
     const check = currentGoalCheck(goal);
     const preview = goal.status === "blocked" && goal.blockerAudit
       ? `Blocked: ${goal.blockerAudit.description}`
-      : check?.content ?? goal.objective;
-    const marker = check ? checkIcon(check.status, this.theme) : this.theme.fg("borderMuted", "└");
+      : goal.status === "stalled" && goal.stallReason
+        ? `Stalled: ${goal.stallReason}`
+        : check?.content ?? goal.objective;
+    const marker = goal.status === "stalled"
+      ? this.theme.fg("warning", "!")
+      : check
+        ? checkIcon(check.status, this.theme)
+        : this.theme.fg("borderMuted", "└");
     const prefix = `  ${marker} `;
     const budgetBar = goal.tokenBudget === null ? "" : ` ${progressBar(goal.tokensUsed, goal.tokenBudget, this.theme)}`;
     const previewWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(budgetBar));
@@ -57,6 +63,50 @@ export class GoalWidget implements Component {
   }
 
   invalidate(): void {}
+}
+
+export function goalOverlayTitle(goal: GoalState, theme: Theme): string {
+  return theme.bold(` Goal ${styledStatus(goal.status, theme)} `);
+}
+
+export function renderGoalOverlayBody(
+  goal: GoalState,
+  width: number,
+  maxHeight: number,
+  theme: Theme,
+  activeRunStartedAt?: number,
+): string[] {
+  if (width <= 0 || maxHeight <= 0) return [];
+  const objective = wrapTextWithAnsi(theme.fg("text", goal.objective.replace(/\s+/g, " ")), width);
+  const body = objective.slice(0, 2);
+  if (objective.length > 2) body.push(theme.fg("dim", `… ${objective.length - 2} more ${objective.length - 2 === 1 ? "row" : "rows"} · /goal for full details`));
+
+  const progress = goalCheckProgress(goal);
+  const current = currentGoalCheck(goal);
+  if (current && progress.total > 0) {
+    body.push(`${checkIcon(current.status, theme)} ${truncateToWidth(current.content, Math.max(1, width - 2), "…")}`);
+  }
+
+  const reason = goal.blockerAudit?.description ?? goal.stallReason;
+  if (reason) {
+    body.push(theme.fg(goal.status === "blocked" ? "error" : "warning", truncateToWidth(reason, width, "…")));
+  }
+
+  const elapsed = currentElapsed(goal, activeRunStartedAt);
+  body.push(theme.fg("dim", [
+    progress.total > 0 ? `${progress.complete}/${progress.total} validation` : undefined,
+    `${formatDuration(elapsed)} active`,
+    `${goal.turns} ${goal.turns === 1 ? "run" : "runs"}`,
+    goal.continuations > 0 ? `${goal.continuations} cont.` : undefined,
+  ].filter(Boolean).join(" · ")));
+  body.push(theme.fg("dim", goal.tokenBudget === null
+    ? `${formatTokens(goal.tokensUsed)} goal tokens`
+    : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)} goal tokens`));
+
+  if (body.length <= maxHeight) return body.map((line) => truncateToWidth(line, width, ""));
+  const visible = body.slice(0, maxHeight);
+  if (maxHeight > 0) visible[maxHeight - 1] = theme.fg("dim", `… /goal for full details`);
+  return visible.map((line) => truncateToWidth(line, width, ""));
 }
 
 export class GoalPanel implements Component {
@@ -74,7 +124,7 @@ export class GoalPanel implements Component {
     else if (matchesKey(data, "p") && this.goal.status === "active") this.done("pause");
     else if (
       matchesKey(data, "r")
-      && (this.goal.status === "paused" || this.goal.status === "blocked" || this.goal.status === "usage_limited")
+      && (this.goal.status === "paused" || this.goal.status === "stalled" || this.goal.status === "blocked" || this.goal.status === "usage_limited")
     ) this.done("resume");
   }
 
@@ -121,6 +171,11 @@ export class GoalPanel implements Component {
       lines.push(panelLine(this.theme.fg("dim", this.goal.progressSummary), innerWidth, border));
     }
 
+    if (this.goal.stallReason) {
+      lines.push(panelLine("", innerWidth, border));
+      lines.push(panelLine(this.theme.fg("warning", `Stalled: ${this.goal.stallReason}`), innerWidth, border));
+    }
+
     if (this.goal.tokenBudget !== null) {
       lines.push(panelLine("", innerWidth, border));
       const usage = `${formatTokens(this.goal.tokensUsed)} / ${formatTokens(this.goal.tokenBudget)} tokens`;
@@ -148,7 +203,7 @@ export class GoalPanel implements Component {
   invalidate(): void {}
 }
 
-function currentElapsed(goal: GoalState, activeRunStartedAt: number | undefined): number {
+export function currentElapsed(goal: GoalState, activeRunStartedAt: number | undefined): number {
   if (goal.status !== "active" || activeRunStartedAt === undefined) return goal.timeUsedMs;
   return goal.timeUsedMs + Math.max(0, Date.now() - activeRunStartedAt);
 }
@@ -158,6 +213,7 @@ function styledStatus(status: GoalStatus, theme: Theme): string {
   if (status === "active") return theme.fg("success", `● ${label}`);
   if (status === "complete") return theme.fg("success", `✓ ${label}`);
   if (status === "paused") return theme.fg("warning", `Ⅱ ${label}`);
+  if (status === "stalled") return theme.fg("warning", `! ${label}`);
   if (status === "budget_limited") return theme.fg("warning", `■ ${label}`);
   return theme.fg("error", `! ${label}`);
 }
@@ -183,7 +239,7 @@ function panelLine(content: string, width: number, border: (value: string) => st
 function actionHint(status: GoalStatus): string {
   const toggle = status === "active"
     ? "p pause"
-    : status === "paused" || status === "blocked" || status === "usage_limited"
+    : status === "paused" || status === "stalled" || status === "blocked" || status === "usage_limited"
       ? "r resume"
       : undefined;
   return ["e edit", toggle, "c clear", "esc close"].filter(Boolean).join("  ·  ");
