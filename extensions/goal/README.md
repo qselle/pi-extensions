@@ -30,7 +30,7 @@ Goal checks are durable acceptance and verification criteria. They intentionally
 
 A genuine transition to `complete` emits the versioned `goal:completed` extension event. Normal emission is deferred until `message_end` and `agent_settled` finish the run's token and elapsed-time accounting; session shutdown provides a guarded fallback. The immutable payload contains a unique completion ID, completion timestamp, and final goal snapshot. Duplicate completion calls and restoration of completed state do not emit another event.
 
-[`telegram-notify`](../telegram-notify/) consumes this event without coupling external network behavior to the goal loop.
+The optional [`telegram`](../telegram/) hub consumes this event without coupling external network behavior to the goal loop.
 
 ## Safety
 

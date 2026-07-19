@@ -20,8 +20,9 @@ Use `pi config` to enable or disable individual extensions.
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |
 | [`plan`](extensions/plan/) | Tactical execution plans with an independent progress card |
+| [`questions`](extensions/questions/) | Claude-style questions with first-reply-wins terminal and optional Telegram input |
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
-| [`telegram-notify`](extensions/telegram-notify/) | Opt-in Telegram summaries when persistent goals complete |
+| [`telegram`](extensions/telegram/) | Optional shared Telegram hub for goals, questions, and future extensions |
 
 ## Custom keybindings
 

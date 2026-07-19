@@ -76,9 +76,9 @@ test("loads optional thread and detail settings", () => {
 });
 
 test("resolves the default Pi config path and explicit overrides", () => {
-  expect(defaultTelegramConfigPath({}, "/home/test", "/work")).toBe("/home/test/.pi/agent/telegram-notify.json");
+  expect(defaultTelegramConfigPath({}, "/home/test", "/work")).toBe("/home/test/.pi/agent/telegram.json");
   expect(defaultTelegramConfigPath({ PI_CODING_AGENT_DIR: "~/custom-pi" }, "/home/test", "/work"))
-    .toBe("/home/test/custom-pi/telegram-notify.json");
+    .toBe("/home/test/custom-pi/telegram.json");
   expect(defaultTelegramConfigPath({ PI_TELEGRAM_CONFIG_FILE: "config/telegram.json" }, "/home/test", "/work"))
     .toBe("/work/config/telegram.json");
 });
@@ -107,6 +107,24 @@ test("loads a secure file and applies per-field environment overrides", () => {
         threadId: 42,
         details: "minimal",
       },
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("loads the legacy telegram-notify config when the new default is absent", () => {
+  const directory = temporaryDirectory();
+  try {
+    writeSecure(join(directory, "telegram-notify.json"), {
+      botToken: TOKEN,
+      chatId: "444444444",
+    });
+    expect(loadTelegramConfig({
+      env: { PI_CODING_AGENT_DIR: directory },
+    })).toEqual({
+      status: "enabled",
+      config: { botToken: TOKEN, chatId: "444444444", threadId: undefined, details: "summary" },
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });

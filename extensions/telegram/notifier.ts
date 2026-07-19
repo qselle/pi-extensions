@@ -1,7 +1,8 @@
 import { isGoalCompletedEvent, type GoalCompletedEvent } from "../goal/events.ts";
-import type { TelegramConfig } from "./config.ts";
+import type { TelegramGoalDetails } from "./config.ts";
 import { formatGoalCompletionMessage } from "./message.ts";
-import { TelegramDeliveryError, sendTelegramMessage, type TelegramSendResult, type TelegramTransportOptions } from "./telegram.ts";
+import { safeTelegramError, type TelegramSendResult } from "./api.ts";
+import type { TelegramService } from "./service.ts";
 
 const MAX_SEEN_COMPLETIONS = 1_000;
 
@@ -14,8 +15,8 @@ export class TelegramNotifier {
   private readonly pending = new Set<Promise<unknown>>();
 
   constructor(
-    private readonly config: TelegramConfig,
-    private readonly transportOptions: TelegramTransportOptions = {},
+    private readonly service: TelegramService,
+    private readonly details: TelegramGoalDetails,
     private readonly hooks: TelegramNotifierHooks = {},
   ) {}
 
@@ -24,25 +25,21 @@ export class TelegramNotifier {
     const event = value as GoalCompletedEvent;
     if (this.seen.has(event.completionId)) return false;
     this.remember(event.completionId);
-    const text = formatGoalCompletionMessage(event, this.config.details);
-    void this.track(sendTelegramMessage(this.config, text, this.transportOptions)).catch((error) => {
-      this.hooks.onFailure?.(safeDeliveryError(error));
+    const text = formatGoalCompletionMessage(event, this.details);
+    void this.track(this.service.send(text)).catch((error) => {
+      this.hooks.onFailure?.(safeTelegramError(error));
     });
     return true;
   }
 
   sendTest(): Promise<TelegramSendResult> {
-    return this.track(sendTelegramMessage(
-      this.config,
-      "🧪 Pi Telegram notification test\n\nConfiguration is working.",
-      this.transportOptions,
+    return this.track(this.service.send(
+      "🧪 Pi Telegram integration test\n\nConfiguration and the shared Telegram service are working.",
     ));
   }
 
   async drain(): Promise<void> {
-    while (this.pending.size > 0) {
-      await Promise.allSettled([...this.pending]);
-    }
+    while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
 
   pendingCount(): number {
@@ -62,10 +59,4 @@ export class TelegramNotifier {
     this.pending.add(tracked);
     return tracked;
   }
-}
-
-export function safeDeliveryError(error: unknown): string {
-  return error instanceof TelegramDeliveryError
-    ? error.message
-    : "Telegram notification failed unexpectedly.";
 }

@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export type TelegramGoalDetails = "minimal" | "summary" | "full";
 
@@ -32,7 +32,8 @@ export interface LoadTelegramConfigOptions {
   currentUid?: number;
 }
 
-export const TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
+export const TELEGRAM_CONFIG_FILENAME = "telegram.json";
+export const LEGACY_TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
 export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
 const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details"]);
@@ -62,14 +63,20 @@ export function loadTelegramConfig(options: LoadTelegramConfigOptions = {}): Tel
   const path = typeof options.configFile === "string"
     ? resolveUserPath(options.configFile, homeDir, cwd)
     : defaultTelegramConfigPath(env, homeDir, cwd);
-  const file = readSecureConfigFile(path, {
+  const security = {
     required: Boolean(explicitPath),
     platform: options.platform ?? process.platform,
     currentUid: options.currentUid ?? process.getuid?.(),
-  });
+  };
+  let selectedPath = path;
+  let file = readSecureConfigFile(path, security);
+  if (file.status === "missing" && !explicitPath && typeof options.configFile !== "string") {
+    selectedPath = join(dirname(path), LEGACY_TELEGRAM_CONFIG_FILENAME);
+    file = readSecureConfigFile(selectedPath, { ...security, required: false });
+  }
   if (file.status === "missing") return readTelegramConfig(env);
   if (file.status === "invalid") return file;
-  const parsed = parseTelegramConfigFile(file.content, path);
+  const parsed = parseTelegramConfigFile(file.content, selectedPath);
   if (parsed.status === "invalid") return parsed;
   return readTelegramConfig(env, parsed.config);
 }
