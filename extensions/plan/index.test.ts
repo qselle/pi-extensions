@@ -1,5 +1,4 @@
 import { expect, mock, test } from "bun:test";
-import * as actualTui from "@earendil-works/pi-tui";
 
 mock.module("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[]) => ({ type: "string", enum: values }),
@@ -16,7 +15,6 @@ mock.module("typebox", () => ({
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
-  ...actualTui,
   Input: class Input {
     private value = "";
     focused = false;
@@ -36,6 +34,15 @@ mock.module("@earendil-works/pi-tui", () => ({
     invalidate() {}
   },
   matchesKey: (data: string, key: string) => data === key,
+  truncateToWidth: (value: string, width: number) => value.length <= width ? value : value.slice(0, width),
+  visibleWidth: (value: string) => value.length,
+  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
+  wrapTextWithAnsi: (value: string, width: number) => {
+    if (value.length <= width) return [value];
+    const lines = [];
+    for (let index = 0; index < value.length; index += width) lines.push(value.slice(index, index + width));
+    return lines;
+  },
 }));
 
 const { default: planExtension } = await import("./index.ts");
@@ -243,10 +250,10 @@ test("keeps the card and full panel inside responsive widths", () => {
   const plan = replacePlan(createPlanState(), activePlan.plan as any, activePlan.explanation);
   for (const width of [24, 40, 54, 72]) {
     const card = new PlanOverlayCard(plainTheme, () => plan);
-    expect(card.render(width).every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
+    expect(card.render(width).every((line: string) => line.length <= width)).toBe(true);
   }
   for (const width of [32, 44, 72]) {
     const panel = new PlanPanel(plan, plainTheme, () => {});
-    expect(panel.render(width).every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
+    expect(panel.render(width).every((line: string) => line.length <= width)).toBe(true);
   }
 });

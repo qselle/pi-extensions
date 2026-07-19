@@ -1,8 +1,6 @@
 import { expect, mock, test } from "bun:test";
-import * as actualTui from "@earendil-works/pi-tui";
 
 mock.module("@earendil-works/pi-tui", () => ({
-  ...actualTui,
   Input: class Input {
     private value = "";
     focused = false;
@@ -22,6 +20,10 @@ mock.module("@earendil-works/pi-tui", () => ({
     invalidate() {}
   },
   matchesKey: (data: string, key: string) => data === key,
+  truncateToWidth: (value: string, width: number) => value.length <= width ? value : `${value.slice(0, Math.max(0, width - 1))}…`,
+  visibleWidth: (value: string) => value.length,
+  wrapTextWithAnsi: (value: string) => [value],
+  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
 const { CatPanel, parseCatCommand } = await import("./panel.ts");
@@ -50,7 +52,7 @@ test("renders the cat control panel within narrow and wide widths", () => {
   for (const width of [20, 40, 52, 80]) {
     const lines = panel.render(width);
     expect(lines.length).toBe(12);
-    expect(lines.every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
+    expect(lines.every((line: string) => line.length <= width)).toBe(true);
   }
   expect(panel.render(80).join("\n")).toContain("Occasional movement");
   expect(panel.render(40).join("\n")).not.toContain("Occasional movement");

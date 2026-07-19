@@ -1,8 +1,6 @@
 import { expect, mock, test } from "bun:test";
-import * as actualTui from "@earendil-works/pi-tui";
 
 mock.module("@earendil-works/pi-tui", () => ({
-  ...actualTui,
   Input: class Input {
     private value = "";
     focused = false;
@@ -22,6 +20,10 @@ mock.module("@earendil-works/pi-tui", () => ({
     invalidate() {}
   },
   matchesKey: (data: string, key: string) => data === key,
+  truncateToWidth: (value: string, width: number) => value.length <= width ? value : value.slice(0, width),
+  visibleWidth: (value: string) => value.length,
+  wrapTextWithAnsi: (value: string, width: number) => value.length <= width ? [value] : [value.slice(0, width), value.slice(width)],
+  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
 const { default: overlayStackExtension, OverlayStackView, registerOverlayCard } = await import("./index.ts");

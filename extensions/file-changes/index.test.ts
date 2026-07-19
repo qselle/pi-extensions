@@ -1,6 +1,4 @@
 import { expect, mock, test } from "bun:test";
-import * as actualCodingAgent from "@earendil-works/pi-coding-agent";
-import * as actualTui from "@earendil-works/pi-tui";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -31,7 +29,6 @@ class MockInput {
 }
 
 mock.module("@earendil-works/pi-coding-agent", () => ({
-  ...actualCodingAgent,
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",
@@ -45,7 +42,6 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
-  ...actualTui,
   Input: MockInput,
   Text: class Text {
     constructor(public text: string) {}
@@ -60,6 +56,10 @@ mock.module("@earendil-works/pi-tui", () => ({
     down: "down",
   },
   matchesKey: (data: string, key: string) => data === key || (data === "\x12" && key === "ctrl+r"),
+  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
+  truncateToWidth: (value: string, width: number) => value.slice(0, width),
+  visibleWidth: (value: string) => value.length,
+  wrapTextWithAnsi: (value: string, width: number) => value.length <= width ? [value] : [value.slice(0, width), value.slice(width)],
 }));
 
 const { default: fileChangesExtension } = await import("./index.ts");
