@@ -1,4 +1,6 @@
 import { expect, mock, test } from "bun:test";
+import * as actualCodingAgent from "@earendil-works/pi-coding-agent";
+import * as actualTui from "@earendil-works/pi-tui";
 
 class MockInput {
   private value = "";
@@ -28,6 +30,7 @@ class MockCustomEditor {
 }
 
 mock.module("@earendil-works/pi-coding-agent", () => ({
+  ...actualCodingAgent,
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",
@@ -41,6 +44,7 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
+  ...actualTui,
   Input: MockInput,
   Text: class Text {
     constructor(public text: string) {}
@@ -55,10 +59,6 @@ mock.module("@earendil-works/pi-tui", () => ({
     down: "down",
   },
   matchesKey: (data: string, key: string) => data === key || (data === "\x12" && key === "ctrl+r"),
-  truncateToWidth: (value: string, width: number) => value.length <= width ? value : value.slice(0, width),
-  visibleWidth: (value: string) => value.length,
-  wrapTextWithAnsi: (value: string, width: number) => value.length <= width ? [value] : [value.slice(0, width), value.slice(width)],
-  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
 const { HistoryPicker } = await import("./picker.ts");
@@ -116,7 +116,7 @@ test("filters, ranks, navigates, renders, and selects history", () => {
   for (const width of [20, 44, 80]) {
     const lines = picker.render(width);
     expect(lines.join("\n")).toContain("History");
-    expect(lines.every((line: string) => line.length <= width)).toBe(true);
+    expect(lines.every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
   }
 });
 

@@ -15,6 +15,7 @@ Use `pi config` to enable or disable individual extensions.
 | Extension | Description |
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
+| [`file-cards`](extensions/file-cards/) | Bounded syntax-highlighted cards for native file edits and writes |
 | [`file-changes`](extensions/file-changes/) | Live and last-run summaries of files changed by agent tools |
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |

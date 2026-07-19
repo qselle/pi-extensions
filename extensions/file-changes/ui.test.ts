@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import * as actualTui from "@earendil-works/pi-tui";
 import type { FileChange } from "./changes.ts";
 
 const visibleWidth = (value: string) => value.length;
@@ -17,6 +18,7 @@ class MockInput {
 }
 
 mock.module("@earendil-works/pi-tui", () => ({
+  ...actualTui,
   Input: MockInput,
   Text: class Text {
     constructor(public text: string) {}
@@ -31,10 +33,6 @@ mock.module("@earendil-works/pi-tui", () => ({
     down: "down",
   },
   matchesKey: (data: string, key: string) => data === key || (data === "\x12" && key === "ctrl+r"),
-  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
-  truncateToWidth: (value: string, width: number) => value.slice(0, width),
-  visibleWidth,
-  wrapTextWithAnsi: (value: string, width: number) => value.length <= width ? [value] : [value.slice(0, width), value.slice(width)],
 }));
 
 const { compactFilePath, fileChangesTitle, renderFileChangesBody } = await import("./ui.ts");

@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import * as actualTui from "@earendil-works/pi-tui";
 
 mock.module("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[]) => ({ type: "string", enum: values }),
@@ -15,6 +16,7 @@ mock.module("typebox", () => ({
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
+  ...actualTui,
   Input: class Input {
     private value = "";
     focused = false;
@@ -34,10 +36,6 @@ mock.module("@earendil-works/pi-tui", () => ({
     invalidate() {}
   },
   matchesKey: (data: string, key: string) => data === key,
-  truncateToWidth: (value: string, width: number) => value.slice(0, width),
-  visibleWidth: (value: string) => value.length,
-  wrapTextWithAnsi: (value: string) => [value],
-  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
 const { default: goalExtension } = await import("./index.ts");
@@ -516,12 +514,12 @@ test("keeps compact and expanded goal UI within responsive widths", () => {
 
   for (const width of [20, 41, 42, 60, 100]) {
     const lines = new GoalWidget(theme, () => state, () => undefined).render(width);
-    expect(lines.every((line: string) => line.length <= width)).toBe(true);
+    expect(lines.every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
   }
   for (const width of [28, 54, 72]) {
     const lines = renderGoalOverlayBody(state, width, 6, theme);
     expect(lines.length).toBeLessThanOrEqual(6);
-    expect(lines.every((line: string) => line.length <= width)).toBe(true);
+    expect(lines.every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
   }
   expect(goalOverlayTitle(state, theme)).toContain("ACTIVE");
 
@@ -533,7 +531,7 @@ test("keeps compact and expanded goal UI within responsive widths", () => {
   for (const view of [state, blocked]) {
     for (const width of [44, 60, 100]) {
       const lines = new GoalPanel(view, theme, undefined, () => {}).render(width);
-      expect(lines.every((line: string) => line.length <= width)).toBe(true);
+      expect(lines.every((line: string) => actualTui.visibleWidth(line) <= width)).toBe(true);
     }
   }
 });
