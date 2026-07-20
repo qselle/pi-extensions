@@ -18,7 +18,7 @@ Without configuration, Telegram starts no network requests, poller, or timer. `g
    /telegram setup
    ```
 
-Pi asks for the bot token, chat ID, and question delay. The token input is masked. Setup validates the values, sends a test message, and saves an owner-only `telegram.json` file.
+Pi asks for the bot token, chat ID, and question delay. The token input is masked and is never added to the conversation or sent to the LLM. Setup validates the values, sends a test message, and writes the token to an owner-only `telegram.json` file.
 
 ## Commands
 

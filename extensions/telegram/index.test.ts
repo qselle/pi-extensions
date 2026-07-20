@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoalCompletedEvent, GOAL_COMPLETED_EVENT } from "../goal/events.ts";
@@ -20,6 +20,7 @@ class MockPi {
   commands = new Map<string, any>();
   handlers = new Map<string, Handler[]>();
   eventHandlers = new Map<string, Set<(value: unknown) => void>>();
+  forwardedMessages: unknown[] = [];
   events = {
     on: (name: string, handler: (value: unknown) => void) => {
       const handlers = this.eventHandlers.get(name) ?? new Set();
@@ -32,6 +33,8 @@ class MockPi {
     },
   };
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
+  sendMessage(message: unknown) { this.forwardedMessages.push(message); }
+  sendUserMessage(message: unknown) { this.forwardedMessages.push(message); }
   on(name: string, handler: Handler) {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(handler);
@@ -119,8 +122,14 @@ test("sets up, reports, disables, and re-enables Telegram without reload", async
     expect(getTelegramService()).toBeDefined();
     expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
       status: "enabled",
-      config: { chatId: "987654321", questionDelayMinutes: 0.25 },
+      config: { botToken: TOKEN, chatId: "987654321", questionDelayMinutes: 0.25 },
     });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      botToken: TOKEN,
+      chatId: "987654321",
+      enabled: true,
+    });
+    expect(pi.forwardedMessages).toEqual([]);
     expect(bodies[0].text).toContain("setup test");
     expect(ctx.notifications.at(-1)).toEqual({
       message: "Telegram configured and enabled; test message sent.",
