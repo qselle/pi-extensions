@@ -68,14 +68,14 @@ Schema:
   "chatId": "<numeric chat ID or @chat_username>",
   "threadId": 42,
   "details": "summary",
-  "questionDelayMinutes": 0
+  "questionDelayMinutes": 5
 }
 ```
 
 - `botToken` and `chatId` are required across file and environment settings.
 - `threadId` is optional and targets a forum topic.
 - `details` controls goal-completion messages: `minimal`, `summary`, or `full`.
-- `questionDelayMinutes` optionally delays the first Telegram question card from each questionnaire call. It defaults to `0` (simultaneous terminal and Telegram delivery) and accepts fractional minutes from `0` through `10080`.
+- `questionDelayMinutes` controls how long Pi waits before sending the first Telegram question card from each questionnaire call. It defaults to `5` and accepts positive fractional minutes up to `10080`.
 - Unknown fields and invalid types are rejected.
 
 For backward compatibility, if `telegram.json` does not exist, the extension automatically checks the old `telegram-notify.json` filename in the same directory. Explicit `PI_TELEGRAM_CONFIG_FILE` paths never fall back.
@@ -92,7 +92,7 @@ Non-empty environment values override matching file values.
 | `PI_TELEGRAM_CHAT_ID` | `chatId` | Numeric chat ID or `@chat_username` |
 | `PI_TELEGRAM_THREAD_ID` | `threadId` | Positive forum topic ID |
 | `PI_TELEGRAM_GOAL_DETAILS` | `details` | `minimal`, `summary`, or `full` |
-| `PI_TELEGRAM_QUESTION_DELAY_MINUTES` | `questionDelayMinutes` | Delay before the first question card; `0` disables delay |
+| `PI_TELEGRAM_QUESTION_DELAY_MINUTES` | `questionDelayMinutes` | Positive delay before the first question card; default `5` |
 | `PI_TELEGRAM_CONFIG_FILE` | — | Explicit config path |
 
 With no default file, environment-only setup is supported:
@@ -114,7 +114,7 @@ A genuine goal transition to `complete` emits a versioned event after final acco
 
 ## Question replies
 
-When `questions` finds the registered service, terminal input starts immediately. Telegram delivery is simultaneous by default, or can be delayed with `questionDelayMinutes`. If the terminal resolves before that delay, no Telegram card is sent. Once the first card is delivered, follow-up questions in the same questionnaire are sent immediately. The first valid reply still wins.
+When `questions` finds the registered service, terminal input starts immediately and Telegram waits for `questionDelayMinutes` (five minutes by default). If the terminal resolves during that delay, no Telegram card is sent. Once the first card is delivered, follow-up questions in the same questionnaire are sent immediately. The first valid reply still wins.
 
 - Cards use Telegram HTML, identify the Pi session title (or project directory), and show question progress and clearer wait-duration copy.
 - Listed choices use a one-button-per-row inline keyboard; free-text prompts use `ForceReply`.

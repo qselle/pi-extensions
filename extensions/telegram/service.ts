@@ -1,4 +1,7 @@
-import type { TelegramConfig } from "./config.ts";
+import {
+  DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES,
+  type TelegramConfig,
+} from "./config.ts";
 import { TelegramApiClient, type TelegramApiOptions, type TelegramSendOptions, type TelegramSendResult } from "./api.ts";
 
 const REGISTRY_KEY = Symbol.for("@qselle/pi-extensions.telegram-service.v1");
@@ -131,7 +134,7 @@ export class DefaultTelegramService implements TelegramService {
     options: TelegramServiceOptions = {},
   ) {
     this.api = new TelegramApiClient(config, options);
-    this.questionDelayMs = (config.questionDelayMinutes ?? 0) * 60_000;
+    this.questionDelayMs = (config.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES) * 60_000;
     this.pollTimeoutSeconds = options.pollTimeoutSeconds ?? DEFAULT_POLL_TIMEOUT_SECONDS;
     this.emptyPollDelayMs = options.emptyPollDelayMs ?? 100;
   }

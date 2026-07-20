@@ -33,7 +33,7 @@ test("keeps environment-only Telegram configuration available", () => {
       chatId: "123456789",
       threadId: undefined,
       details: "summary",
-      questionDelayMinutes: 0,
+      questionDelayMinutes: 5,
     },
   });
 });
@@ -60,7 +60,7 @@ test("validates Telegram configuration without exposing secrets", () => {
   expect(readTelegramConfig({
     PI_TELEGRAM_BOT_TOKEN: TOKEN,
     PI_TELEGRAM_CHAT_ID: "123456789",
-    PI_TELEGRAM_QUESTION_DELAY_MINUTES: "-1",
+    PI_TELEGRAM_QUESTION_DELAY_MINUTES: "0",
   }).status).toBe("invalid");
   expect(readTelegramConfig({
     PI_TELEGRAM_BOT_TOKEN: TOKEN,
@@ -82,7 +82,7 @@ test("loads optional thread and detail settings", () => {
       chatId: "-1001234567890",
       threadId: 42,
       details: "full",
-      questionDelayMinutes: 0,
+      questionDelayMinutes: 5,
     },
   });
 });
@@ -144,7 +144,7 @@ test("loads the legacy telegram-notify config when the new default is absent", (
         chatId: "444444444",
         threadId: undefined,
         details: "summary",
-        questionDelayMinutes: 0,
+        questionDelayMinutes: 5,
       },
     });
   } finally {
@@ -168,7 +168,7 @@ test("supports an environment-only quick test when the default file is absent", 
         chatId: "333333333",
         threadId: undefined,
         details: "summary",
-        questionDelayMinutes: 0,
+        questionDelayMinutes: 5,
       },
     });
     expect(loadTelegramConfig({

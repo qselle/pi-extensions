@@ -4,7 +4,7 @@ Claude Code-style structured questions for Pi, with terminal and Telegram replie
 
 ## Behavior
 
-For every non-secret question, Pi opens a terminal picker and—when the optional Telegram hub is enabled—offers the same question through Telegram. Delivery is simultaneous by default, or the first Telegram card can be delayed by configuration. The first valid reply wins:
+For every non-secret question, Pi opens a terminal picker immediately and—when the optional Telegram hub is enabled—offers the same question through Telegram after a configurable delay (five minutes by default). The first valid reply wins:
 
 - a terminal answer immediately stops Telegram polling and edits the Telegram card to show completion without copying the answer
 - a Telegram answer immediately closes the terminal picker, appears in the terminal result, and updates the original card
@@ -53,10 +53,10 @@ The extension optionally acquires the shared service documented by [`telegram`](
 export PI_TELEGRAM_BOT_TOKEN="<token from BotFather>"
 export PI_TELEGRAM_CHAT_ID="<numeric chat ID or @username>"
 export PI_TELEGRAM_THREAD_ID="<optional forum topic ID>"
-export PI_TELEGRAM_QUESTION_DELAY_MINUTES="<optional first-alert delay; default 0>"
+export PI_TELEGRAM_QUESTION_DELAY_MINUTES="<optional positive first-alert delay; default 5>"
 ```
 
-Telegram uses compact HTML cards labelled with the Pi session title, or the project directory when no title is set. The first card can be delayed with `questionDelayMinutes`/`PI_TELEGRAM_QUESTION_DELAY_MINUTES`; if terminal input wins before the delay, no card is sent. After one card opens, later questions in that questionnaire are delivered immediately.
+Telegram uses compact HTML cards labelled with the Pi session title, or the project directory when no title is set. The first card is delayed by `questionDelayMinutes`/`PI_TELEGRAM_QUESTION_DELAY_MINUTES`; if terminal input wins before the delay, no card is sent. After one card opens, later questions in that questionnaire are delivered immediately.
 
 - Questions with listed options show an inline keyboard with one choice per row.
 - Questions without options use Telegram `ForceReply` for free text.
@@ -98,7 +98,7 @@ This extension ignores the Telegram service in `PI_SUBAGENT_CHILD` processes so 
 ## Dependencies and limitations
 
 - **Runtime:** Pi's public extension and TUI APIs.
-- **Optional integration:** [`telegram`](../telegram/) adds simultaneous or configured-delay remote questions when enabled; terminal questions do not depend on it.
+- **Optional integration:** [`telegram`](../telegram/) adds delayed remote questions when enabled; terminal questions do not depend on it.
 - **Third-party packages:** None.
 - **Platforms:** Terminal interaction is cross-platform. Telegram requires outbound HTTPS access.
 - **Limits:** Four questions per call, eight listed options per question, and 4,000 characters per freeform answer.

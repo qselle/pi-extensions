@@ -38,7 +38,7 @@ export const TELEGRAM_CONFIG_FILENAME = "telegram.json";
 export const LEGACY_TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
 export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
-const DEFAULT_QUESTION_DELAY_MINUTES = 0;
+export const DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES = 5;
 const MAX_QUESTION_DELAY_MINUTES = 7 * 24 * 60;
 const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details", "questionDelayMinutes"]);
 
@@ -95,7 +95,8 @@ export function readTelegramConfig(
   const rawThreadId: string | number | undefined = envThreadId || file.threadId;
   const details = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
   const envQuestionDelay = env.PI_TELEGRAM_QUESTION_DELAY_MINUTES?.trim();
-  const rawQuestionDelay: string | number = envQuestionDelay || (file.questionDelayMinutes ?? DEFAULT_QUESTION_DELAY_MINUTES);
+  const rawQuestionDelay: string | number = envQuestionDelay
+    || (file.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES);
 
   const configured = Object.keys(file).length > 0
     || Boolean(
@@ -127,10 +128,10 @@ export function readTelegramConfig(
     return { status: "invalid", message: "Telegram goal details must be minimal, summary, or full." };
   }
   const questionDelayMinutes = typeof rawQuestionDelay === "number" ? rawQuestionDelay : Number(rawQuestionDelay);
-  if (!Number.isFinite(questionDelayMinutes) || questionDelayMinutes < 0 || questionDelayMinutes > MAX_QUESTION_DELAY_MINUTES) {
+  if (!Number.isFinite(questionDelayMinutes) || questionDelayMinutes <= 0 || questionDelayMinutes > MAX_QUESTION_DELAY_MINUTES) {
     return {
       status: "invalid",
-      message: `Telegram question delay must be between 0 and ${MAX_QUESTION_DELAY_MINUTES} minutes.`,
+      message: `Telegram question delay must be greater than 0 and no more than ${MAX_QUESTION_DELAY_MINUTES} minutes.`,
     };
   }
 

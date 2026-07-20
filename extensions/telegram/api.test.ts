@@ -8,7 +8,7 @@ const config: TelegramConfig = {
   chatId: "-1001234567890",
   threadId: 42,
   details: "summary",
-  questionDelayMinutes: 0,
+  questionDelayMinutes: 5,
 };
 
 function jsonResponse(value: unknown, status = 200): Response {
