@@ -48,14 +48,7 @@ The terminal title changes to `❓ Input needed` while a question is pending. Th
 
 ## Telegram replies
 
-The extension optionally acquires the shared service documented by [`telegram`](../telegram/README.md). It never loads credentials, starts polling, or performs Telegram requests itself. Configure the owner-only `telegram.json` file (the old `telegram-notify.json` name is still detected) or these environment variables:
-
-```bash
-export PI_TELEGRAM_BOT_TOKEN="<token from BotFather>"
-export PI_TELEGRAM_CHAT_ID="<numeric chat ID or @username>"
-export PI_TELEGRAM_THREAD_ID="<optional forum topic ID>"
-export PI_TELEGRAM_QUESTION_DELAY_MINUTES="<optional positive first-alert delay; default 5>"
-```
+The extension optionally acquires the shared service documented by [`telegram`](../telegram/README.md). It never loads credentials, starts polling, or performs Telegram requests itself. Run `/telegram setup` to configure the shared service; manual file and environment configuration remain available for advanced settings.
 
 Telegram uses compact HTML cards labelled with the Pi session title, or the project directory when no title is set. The first card is delayed by `questionDelayMinutes`/`PI_TELEGRAM_QUESTION_DELAY_MINUTES`; if terminal input wins before the delay, no card is sent. After one card opens, later questions in that questionnaire are delivered immediately.
 
@@ -92,7 +85,7 @@ Secret questions are terminal-only. If Telegram is enabled, it receives a passiv
 
 ## Configuration lifecycle
 
-The central Telegram extension validates configuration and registers its service when enabled. Run `/reload` after changing the config file or enabling/disabling Telegram. Missing service registration silently leaves this extension terminal-only; invalid Telegram configuration produces a sanitized warning from the hub without breaking questions.
+The central Telegram extension validates configuration and registers its service when enabled. `/telegram on` and `/telegram off` apply immediately; manual file edits require `/reload`. Missing service registration silently leaves this extension terminal-only, and invalid configuration produces a sanitized warning without breaking questions.
 
 This extension ignores the Telegram service in `PI_SUBAGENT_CHILD` processes so child agents cannot independently solicit remote replies.
 

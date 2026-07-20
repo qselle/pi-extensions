@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +16,7 @@ import {
   defaultTelegramConfigPath,
   loadTelegramConfig,
   readTelegramConfig,
+  saveTelegramConfig,
 } from "./config.ts";
 
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
@@ -128,6 +138,38 @@ test("loads a secure file and applies per-field environment overrides", () => {
   }
 });
 
+test("writes atomic owner-only configuration and persists the enabled state", async () => {
+  const directory = temporaryDirectory();
+  const path = join(directory, "nested", "telegram.json");
+  try {
+    const config = {
+      botToken: TOKEN,
+      chatId: "123456789",
+      details: "summary" as const,
+      questionDelayMinutes: 5,
+      enabled: false,
+    };
+    expect(await saveTelegramConfig(config, { env: {}, configFile: path })).toBe(path);
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(config);
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toEqual({
+      status: "disabled",
+      config: {
+        botToken: TOKEN,
+        chatId: "123456789",
+        threadId: undefined,
+        details: "summary",
+        questionDelayMinutes: 5,
+      },
+    });
+
+    await saveTelegramConfig({ ...config, enabled: true }, { env: {}, configFile: path });
+    expect(loadTelegramConfig({ env: {}, configFile: path }).status).toBe("enabled");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("loads the legacy telegram-notify config when the new default is absent", () => {
   const directory = temporaryDirectory();
   try {
@@ -205,6 +247,12 @@ test("rejects malformed, unknown, oversized, and non-regular config files", () =
     expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("questionDelayMinutes must be a finite number"),
+    });
+
+    writeSecure(path, { botToken: TOKEN, chatId: "1", enabled: "sometimes" });
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("enabled must be a boolean"),
     });
 
     writeFileSync(path, "x".repeat(MAX_TELEGRAM_CONFIG_BYTES + 1), { mode: 0o600 });

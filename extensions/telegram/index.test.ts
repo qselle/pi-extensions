@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoalCompletedEvent, GOAL_COMPLETED_EVENT } from "../goal/events.ts";
 import { createGoal, setGoalStatus } from "../goal/goal.ts";
+import { loadTelegramConfig } from "./config.ts";
 import telegramExtension from "./index.ts";
 import { getTelegramService } from "./service.ts";
 
@@ -89,6 +90,61 @@ test("keeps missing configuration quiet and reports malformed configuration safe
   expect(invalidCtx.notifications).toHaveLength(2);
   expect(invalidCtx.notifications.map((item) => item.message).join(" ")).not.toContain(TOKEN);
   expect(invalidCtx.notifications.at(-1)?.level).toBe("error");
+});
+
+test("sets up, reports, disables, and re-enables Telegram without reload", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-telegram-setup-"));
+  const path = join(directory, "telegram.json");
+  const pi = new MockPi();
+  const ctx = context() as any;
+  ctx.mode = "tui";
+  ctx.cwd = "/tmp/project";
+  ctx.ui.custom = async () => TOKEN;
+  const inputs = ["987654321", "0.25"];
+  ctx.ui.input = async () => inputs.shift();
+  const bodies: any[] = [];
+
+  try {
+    expect(telegramExtension(pi as any, {
+      env: {},
+      configFile: path,
+      fetch: (async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return success();
+      }) as typeof fetch,
+    })).toBeUndefined();
+    await pi.emit("session_start", {}, ctx);
+
+    await pi.commands.get("telegram").handler("setup", ctx);
+    expect(getTelegramService()).toBeDefined();
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
+      status: "enabled",
+      config: { chatId: "987654321", questionDelayMinutes: 0.25 },
+    });
+    expect(bodies[0].text).toContain("setup test");
+    expect(ctx.notifications.at(-1)).toEqual({
+      message: "Telegram configured and enabled; test message sent.",
+      level: "info",
+    });
+
+    await pi.commands.get("telegram").handler("status", ctx);
+    expect(ctx.notifications.at(-1).message).toContain("15 seconds");
+    await pi.commands.get("telegram").handler("off", ctx);
+    expect(getTelegramService()).toBeUndefined();
+    expect(loadTelegramConfig({ env: {}, configFile: path }).status).toBe("disabled");
+    await pi.commands.get("telegram").handler("on", ctx);
+    expect(getTelegramService()).toBeDefined();
+    expect(loadTelegramConfig({ env: {}, configFile: path }).status).toBe("enabled");
+
+    await pi.commands.get("telegram").handler("test", ctx);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].text).toContain("integration test");
+    expect(JSON.stringify(ctx.notifications)).not.toContain(TOKEN);
+    await pi.emit("session_shutdown", {}, ctx);
+    expect(getTelegramService()).toBeUndefined();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("registers the shared service, delivers goal events, and exposes explicit testing", async () => {

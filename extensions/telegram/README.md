@@ -1,169 +1,101 @@
 # telegram
 
-Optional shared Telegram infrastructure for Pi extensions. This extension owns Telegram configuration, Bot API transport, one long-polling cursor, pending reply routing, and lifecycle cleanup.
+Optional shared Telegram integration for Pi. It provides:
 
-When enabled, it currently provides:
+- [`goal`](../goal/) completion notifications
+- delayed remote replies for [`questions`](../questions/)
+- one central `getUpdates` poller for every Telegram prompt
 
-- persistent [`goal`](../goal/) completion notifications
-- remote replies for [`questions`](../questions/), raced against the terminal
-- `/telegram-test` for explicit configuration testing
+Without configuration, Telegram starts no network requests, poller, or timer. `goal` and `questions` continue working normally.
 
-`goal` and `questions` remain fully functional without Telegram. With no configuration—or when this extension is disabled—no Telegram service is registered, no network requests are made, and no polling loop or timer is started.
+## Setup
 
-## Architecture
+1. Create a bot with [@BotFather](https://t.me/BotFather) and keep its token private.
+2. Start a chat with the bot and get your chat ID. For a group, get the group chat ID instead.
+3. In Pi, run:
 
-`telegram` is the single Telegram owner, analogous to the shared [`overlay-stack`](../overlay-stack/) compositor:
-
-- credentials and destination are loaded and validated once
-- all consumers use one versioned global service registry
-- all interactive prompts share one `getUpdates` cursor and polling loop
-- replies are routed by exact Telegram question message ID
-- session shutdown aborts polling, marks pending and passive cards closed, and drains tracked delivery
-- `PI_SUBAGENT_CHILD` processes never register the service
-
-Goal completion formatting remains an adapter inside this extension. The goal extension only emits `GOAL_COMPLETED_EVENT`; it has no Telegram or network dependency.
-
-## Bot setup
-
-1. Open a chat with [@BotFather](https://t.me/BotFather), run `/newbot`, and keep the token private.
-2. Start a direct conversation with the bot, or add it to the destination group with permission to post and read replies.
-3. Send the bot a message, then inspect `getUpdates` locally without putting the token in the command line:
-
-   ```bash
-   read -rsp "Telegram bot token: " PI_TELEGRAM_BOT_TOKEN && echo
-   export PI_TELEGRAM_BOT_TOKEN
-   bun -e 'fetch("https://api.telegram.org/bot" + process.env.PI_TELEGRAM_BOT_TOKEN + "/getUpdates").then(r => r.json()).then(v => console.dir(v, {depth: 8}))'
+   ```text
+   /telegram setup
    ```
 
-   Use `message.chat.id`. Forum topics additionally use `message.message_thread_id`. The response can contain private messages; do not publish it.
-4. Create the secure configuration below and run `/reload`.
+Pi asks for the bot token, chat ID, and question delay. The token input is masked. Setup validates the values, sends a test message, and saves an owner-only `telegram.json` file.
 
-## Configuration file
+## Commands
 
-The preferred path follows Pi's agent directory:
+- `/telegram setup` — configure, test, save, and enable Telegram
+- `/telegram status` — show whether Telegram is on or off and its question delay
+- `/telegram test` — send a test message
+- `/telegram on` — enable the saved configuration
+- `/telegram off` — disable Telegram without deleting its configuration
 
-```text
-$PI_CODING_AGENT_DIR/telegram.json
-```
+`/telegram-test` remains as an alias for `/telegram test`.
 
-When `PI_CODING_AGENT_DIR` is unset:
+## Question behavior
 
-```text
-~/.pi/agent/telegram.json
-```
+Terminal input starts immediately. Telegram waits five minutes by default. If you answer in Pi before then, no Telegram question is sent. After the first Telegram alert in a questionnaire, its remaining questions are sent immediately.
 
-Create an owner-only file on Unix:
+Question cards:
 
-```bash
-mkdir -p "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
-install -m 600 /dev/null "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/telegram.json"
-${EDITOR:-vi} "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/telegram.json"
-```
+- use the Pi session title or project directory as their label
+- show listed answers as one-button-per-row keyboards
+- also accept permitted free text, option numbers, exact option text, and `/cancel`
+- race atomically with terminal input; the first valid reply wins
+- edit the original message when answered, cancelled, failed, or closed
 
-Schema:
+Secret questions are terminal-only. Telegram receives a redacted notice but never the question text, choices, or answer.
 
-```json
-{
-  "botToken": "<token from BotFather>",
-  "chatId": "<numeric chat ID or @chat_username>",
-  "threadId": 42,
-  "details": "summary",
-  "questionDelayMinutes": 5
-}
-```
-
-- `botToken` and `chatId` are required across file and environment settings.
-- `threadId` is optional and targets a forum topic.
-- `details` controls goal-completion messages: `minimal`, `summary`, or `full`.
-- `questionDelayMinutes` controls how long Pi waits before sending the first Telegram question card from each questionnaire call. It defaults to `5` and accepts positive fractional minutes up to `10080`.
-- Unknown fields and invalid types are rejected.
-
-For backward compatibility, if `telegram.json` does not exist, the extension automatically checks the old `telegram-notify.json` filename in the same directory. Explicit `PI_TELEGRAM_CONFIG_FILE` paths never fall back.
-
-The file is loaded once per extension lifecycle. Run `/reload` after editing it.
-
-## Environment variables
-
-Non-empty environment values override matching file values.
-
-| Variable | File equivalent | Description |
-|---|---|---|
-| `PI_TELEGRAM_BOT_TOKEN` | `botToken` | BotFather token |
-| `PI_TELEGRAM_CHAT_ID` | `chatId` | Numeric chat ID or `@chat_username` |
-| `PI_TELEGRAM_THREAD_ID` | `threadId` | Positive forum topic ID |
-| `PI_TELEGRAM_GOAL_DETAILS` | `details` | `minimal`, `summary`, or `full` |
-| `PI_TELEGRAM_QUESTION_DELAY_MINUTES` | `questionDelayMinutes` | Positive delay before the first question card; default `5` |
-| `PI_TELEGRAM_CONFIG_FILE` | — | Explicit config path |
-
-With no default file, environment-only setup is supported:
-
-```bash
-export PI_TELEGRAM_BOT_TOKEN="<token>"
-export PI_TELEGRAM_CHAT_ID="<chat ID>"
-```
+Replies must match the configured chat, optional forum topic, and exact question message. One shared polling cursor serves all pending prompts. A bot using `getUpdates` cannot also use a webhook or another update consumer reliably.
 
 ## Goal notifications
 
-A genuine goal transition to `complete` emits a versioned event after final accounting. The Telegram adapter:
+A completed persistent goal is sent once with the configured detail level: `minimal`, `summary`, or `full`. Delivery is best effort and is drained during normal shutdown.
 
-- deduplicates completion IDs in memory
-- formats the selected detail level
-- sends only after final parent token/time accounting
-- tracks delivery through normal session shutdown
-- never changes goal behavior when Telegram is unavailable
+## Configuration file
 
-## Question replies
+`/telegram setup` writes `~/.pi/agent/telegram.json` by default, or `$PI_CODING_AGENT_DIR/telegram.json` when that directory is configured.
 
-When `questions` finds the registered service, terminal input starts immediately and Telegram waits for `questionDelayMinutes` (five minutes by default). If the terminal resolves during that delay, no Telegram card is sent. Once the first card is delivered, follow-up questions in the same questionnaire are sent immediately. The first valid reply still wins.
+Example:
 
-- Cards use Telegram HTML, identify the Pi session title (or project directory), and show question progress and clearer wait-duration copy.
-- Listed choices use a one-button-per-row inline keyboard; free-text prompts use `ForceReply`.
-- Telegram wins: the terminal picker closes and its answer appears in the terminal tool result.
-- Terminal wins: Telegram polling closes and the original card is edited to its resolved state without copying the terminal answer into Telegram.
-- Telegram answers, terminal/Telegram cancellation, and secret completion all edit the original card instead of adding completion replies.
-- A card that finishes sending after terminal input already won is immediately finalized rather than left pending.
-- Polling failure or shutdown marks unresolved cards closed and removes their controls.
-- Direct text replies remain available for freeform answers, numbered/exact choices, and `/cancel`.
-- A secret question sends only a redacted passive alert and must be answered in the terminal; it never starts Telegram polling or exposes the prompt, options, or answer.
-
-The service accepts only callbacks or text replies from the configured chat/topic and routes them by the exact Telegram question message. Callback indexes are mapped to the current typed choices rather than trusting answer text from Telegram. Callback queries are acknowledged, and stale or resolved keyboards are cleared. Stale and unrelated updates cannot answer a question.
-
-### Long-polling constraints
-
-Telegram interactive replies use `getUpdates`:
-
-- Webhooks and `getUpdates` cannot be active for the same bot.
-- Telegram exposes one update cursor per bot. Use a dedicated bot if another application consumes updates.
-- One central poller serves every Pi extension and concurrent pending prompt, including both `message` and `callback_query` updates.
-- Polling starts only while at least one prompt is pending and stops when none remain.
-
-## Command
-
-```text
-/telegram-test
+```json
+{
+  "botToken": "<BotFather token>",
+  "chatId": "<chat ID>",
+  "details": "summary",
+  "questionDelayMinutes": 5,
+  "enabled": true
+}
 ```
 
-This explicitly sends one test message. Nothing is sent automatically during startup or validation.
+Optional fields:
 
-## Security and privacy
+- `threadId` — positive forum-topic ID
+- `details` — `minimal`, `summary`, or `full`
+- `questionDelayMinutes` — positive delay up to seven days; default `5`
+- `enabled` — `false` keeps the configuration but disables Telegram
 
-Telegram is an external service. Goal summaries, non-secret questions, and answers entered through Telegram leave the local machine and are retained under Telegram's policies.
+Manual file changes require `/reload`. The old `telegram-notify.json` filename is still read when `telegram.json` is absent.
 
-The config contains a plaintext credential. Do not commit or share it. On Unix, the loader rejects symlinks, non-regular files, foreign ownership, group/other permissions, and files over 64 KiB. Windows relies on ACLs. Errors and tool results never expose the token or token-bearing request URL.
+Environment values can override file values:
 
-A question marked `secret` is masked and omitted from Pi's transcript. Telegram receives only a redacted notification that secret input is waiting; the prompt text, options, and answer remain terminal-only.
+- `PI_TELEGRAM_BOT_TOKEN`
+- `PI_TELEGRAM_CHAT_ID`
+- `PI_TELEGRAM_THREAD_ID`
+- `PI_TELEGRAM_GOAL_DETAILS`
+- `PI_TELEGRAM_QUESTION_DELAY_MINUTES`
+- `PI_TELEGRAM_CONFIG_FILE`
 
-## Delivery guarantees
+## Security and limitations
 
-- Requests have bounded timeouts and bounded response bodies.
-- Only an explicit short Telegram `429 retry_after` is retried once for messages.
-- Ambiguous network/server failures are not retried automatically to avoid duplicate messages.
-- Delivery is best effort; crashes, force termination, network outages, or Telegram outages can prevent it.
+The bot token is a plaintext credential. Do not commit or share it. On Unix, configuration files must be owned by the current user with mode `0600`; symlinks, non-regular files, oversized files, and broader permissions are rejected. Windows relies on ACLs.
 
-## Dependencies and limitations
+Telegram is an external service. Goal summaries, non-secret questions, and Telegram-entered answers leave the local machine. Requests have bounded timeouts and response sizes; errors are sanitized so credentials are not exposed.
 
-- **Runtime:** Pi's public extension API, Bun-compatible `fetch`, and Telegram Bot API.
-- **Depends on extensions:** [`goal`](../goal/) only for optional completion events.
-- **Used by extensions:** [`questions`](../questions/) acquires the service optionally at execution time.
-- **Third-party packages:** None.
-- **Platforms:** macOS, Linux, and Windows; outbound HTTPS is required only when enabled.
+Delivery is best effort. Network failures, Telegram outages, crashes, or forced termination can prevent messages.
+
+## Dependencies
+
+- **Runtime:** Pi's public extension API, Bun-compatible `fetch`, and the Telegram Bot API
+- **Depends on:** [`goal`](../goal/) only for optional completion events
+- **Used by:** [`questions`](../questions/) through the optional shared service
+- **Third-party packages:** None
+- **Platforms:** macOS, Linux, and Windows; outbound HTTPS is required when enabled

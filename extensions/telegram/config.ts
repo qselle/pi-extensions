@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -18,11 +20,12 @@ export interface TelegramConfigFile {
   threadId?: number;
   details?: TelegramGoalDetails;
   questionDelayMinutes?: number;
+  enabled?: boolean;
 }
 
 export type TelegramConfigResult =
   | { status: "enabled"; config: TelegramConfig }
-  | { status: "disabled" }
+  | { status: "disabled"; config?: TelegramConfig }
   | { status: "invalid"; message: string };
 
 export interface LoadTelegramConfigOptions {
@@ -34,13 +37,20 @@ export interface LoadTelegramConfigOptions {
   currentUid?: number;
 }
 
+export interface SaveTelegramConfigOptions {
+  env?: Readonly<Record<string, string | undefined>>;
+  configFile?: string | false;
+  homeDir?: string;
+  cwd?: string;
+}
+
 export const TELEGRAM_CONFIG_FILENAME = "telegram.json";
 export const LEGACY_TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
 export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
 export const DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES = 5;
 const MAX_QUESTION_DELAY_MINUTES = 7 * 24 * 60;
-const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details", "questionDelayMinutes"]);
+const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details", "questionDelayMinutes", "enabled"]);
 
 export function defaultTelegramConfigPath(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -83,6 +93,38 @@ export function loadTelegramConfig(options: LoadTelegramConfigOptions = {}): Tel
   const parsed = parseTelegramConfigFile(file.content, selectedPath);
   if (parsed.status === "invalid") return parsed;
   return readTelegramConfig(env, parsed.config);
+}
+
+export async function saveTelegramConfig(
+  config: TelegramConfig & { enabled?: boolean },
+  options: SaveTelegramConfigOptions = {},
+): Promise<string> {
+  if (options.configFile === false) throw new Error("Telegram file configuration is disabled.");
+  const validation = readTelegramConfig({}, config);
+  if (validation.status === "invalid" || !validation.config) {
+    throw new Error(validation.status === "invalid" ? validation.message : "Telegram configuration is incomplete.");
+  }
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? homedir();
+  const cwd = options.cwd ?? process.cwd();
+  const path = typeof options.configFile === "string"
+    ? resolveUserPath(options.configFile, homeDir, cwd)
+    : defaultTelegramConfigPath(env, homeDir, cwd);
+  const content = `${JSON.stringify(config, null, 2)}\n`;
+  if (Buffer.byteLength(content) > MAX_TELEGRAM_CONFIG_BYTES) {
+    throw new Error(`Telegram configuration must be at most ${MAX_TELEGRAM_CONFIG_BYTES} bytes.`);
+  }
+
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    await rename(temporary, path);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+  return path;
 }
 
 export function readTelegramConfig(
@@ -135,10 +177,10 @@ export function readTelegramConfig(
     };
   }
 
-  return {
-    status: "enabled",
-    config: { botToken, chatId, threadId, details, questionDelayMinutes },
-  };
+  const config = { botToken, chatId, threadId, details, questionDelayMinutes };
+  return file.enabled === false
+    ? { status: "disabled", config }
+    : { status: "enabled", config };
 }
 
 function parseTelegramConfigFile(
@@ -175,6 +217,9 @@ function parseTelegramConfigFile(
   ) {
     return invalidFile(path, "field questionDelayMinutes must be a finite number");
   }
+  if (record.enabled !== undefined && typeof record.enabled !== "boolean") {
+    return invalidFile(path, "field enabled must be a boolean");
+  }
   return {
     status: "valid",
     config: {
@@ -183,6 +228,7 @@ function parseTelegramConfigFile(
       threadId: record.threadId as number | undefined,
       details: record.details as TelegramGoalDetails | undefined,
       questionDelayMinutes: record.questionDelayMinutes as number | undefined,
+      enabled: record.enabled as boolean | undefined,
     },
   };
 }
