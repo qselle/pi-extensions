@@ -118,6 +118,42 @@ test("mirrors terminal answers through the prompt handle and masks secrets", asy
   expect(JSON.stringify(mirrors)).not.toContain("actual-secret");
 });
 
+test("finalizes a card when terminal input wins while Telegram is still sending it", async () => {
+  const mirrors: unknown[] = [];
+  let finishOpen!: () => void;
+  let finishResult!: (result: { status: "unavailable" }) => void;
+  const service = fakeService<string>(() => new Promise((resolve) => {
+    finishOpen = () => {
+      const result = new Promise<{ status: "unavailable" }>((done) => { finishResult = done; });
+      resolve({
+        messageId: 9,
+        result,
+        close: async (outcome) => {
+          mirrors.push(outcome);
+          finishResult({ status: "unavailable" });
+        },
+      });
+    };
+  }));
+  const [question] = normalizeQuestions([{ id: "race", question: "Ship now?" }]);
+  const reply = createTelegramQuestionReply(service, question, 0, 1);
+  const controller = new AbortController();
+  const running = reply.source.run(controller.signal);
+  await Bun.sleep(0);
+
+  controller.abort();
+  const mirrored = reply.mirror({ status: "answered", answer: "Yes", source: "terminal" });
+  finishOpen();
+
+  await mirrored;
+  expect(await running).toEqual({ status: "unavailable" });
+  expect(mirrors).toEqual([{
+    status: "answered",
+    source: "terminal",
+    displayText: "Yes",
+  }]);
+});
+
 test("formats bounded HTML cards, context, delay copy, and redacted secrets", () => {
   const [secret] = normalizeQuestions([{
     id: "token",
@@ -148,6 +184,8 @@ test("formats bounded HTML cards, context, delay copy, and redacted secrets", ()
   });
   expect(resolved).toContain("Answered in Telegram");
   expect(resolved).toContain("Ship &lt;now&gt;");
+  expect(formatResolvedTelegramQuestion(longQuestion, 0, 1, "workspace", { status: "closed" }))
+    .toContain("Question closed");
 });
 
 test("does not open Telegram when the terminal wins during the configured delay", async () => {

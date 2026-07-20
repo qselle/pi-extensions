@@ -29,70 +29,88 @@ export function createTelegramQuestionReply(
   options: TelegramQuestionOptions = {},
 ): TelegramQuestionReply {
   let handle: TelegramPromptHandle<string> | undefined;
+  let settleHandleReady!: (opened: TelegramPromptHandle<string> | undefined) => void;
+  let handleReadySettled = false;
+  const handleReady = new Promise<TelegramPromptHandle<string> | undefined>((resolve) => {
+    settleHandleReady = resolve;
+  });
+  const settleReady = (opened: TelegramPromptHandle<string> | undefined) => {
+    if (handleReadySettled) return;
+    handleReadySettled = true;
+    settleHandleReady(opened);
+  };
   const contextLabel = options.contextLabel?.trim() || "Pi";
   const delayMs = Math.max(0, options.delayMs ?? 0);
   const source: ReplySource = {
     name: "telegram",
     run: async (signal): Promise<SourceReply> => {
-      await waitForDelay(delayMs, signal);
-      const opened = await service.openPrompt<string>({
-        text: formatTelegramQuestion(question, index, total, contextLabel, delayMs),
-        inputPlaceholder: "Reply with a number or your answer",
-        choices: question.secret
-          ? []
-          : question.options.map((option) => ({
-              label: option,
-              value: option,
-              displayText: option,
-            })),
-        parseMode: "HTML",
-        interactive: !question.secret,
-        formatResolved: (resolution) => formatResolvedTelegramQuestion(
-          question,
-          index,
-          total,
-          contextLabel,
-          resolution,
-        ),
-        parse: (text) => {
-          if (question.secret) {
-            return { status: "rejected", message: "Secret questions must be answered in Pi." };
-          }
-          const parsed = parseReplyText(question, text);
-          if (parsed === "cancel") return { status: "cancelled" };
-          if (parsed === undefined) {
+      try {
+        await waitForDelay(delayMs, signal);
+        const opened = await service.openPrompt<string>({
+          text: formatTelegramQuestion(question, index, total, contextLabel, delayMs),
+          inputPlaceholder: "Reply with a number or your answer",
+          choices: question.secret
+            ? []
+            : question.options.map((option) => ({
+                label: option,
+                value: option,
+                displayText: option,
+              })),
+          parseMode: "HTML",
+          interactive: !question.secret,
+          formatResolved: (resolution) => formatResolvedTelegramQuestion(
+            question,
+            index,
+            total,
+            contextLabel,
+            resolution,
+          ),
+          parse: (text) => {
+            if (question.secret) {
+              return { status: "rejected", message: "Secret questions must be answered in Pi." };
+            }
+            const parsed = parseReplyText(question, text);
+            if (parsed === "cancel") return { status: "cancelled" };
+            if (parsed === undefined) {
+              return {
+                status: "rejected",
+                message: "Please reply with one of the listed option numbers, or send /cancel.",
+              };
+            }
             return {
-              status: "rejected",
-              message: "Please reply with one of the listed option numbers, or send /cancel.",
+              status: "accepted",
+              value: parsed,
+              displayText: parsed,
             };
-          }
-          return {
-            status: "accepted",
-            value: parsed,
-            displayText: parsed,
-          };
-        },
-      }, signal);
-      handle = opened;
-      options.onOpened?.();
-      const result = await opened.result;
-      if (result.status === "answered") return { status: "answered", answer: result.value };
-      return result.status === "cancelled" ? { status: "cancelled" } : { status: "unavailable" };
+          },
+        }, signal);
+        handle = opened;
+        settleReady(opened);
+        options.onOpened?.();
+        const result = await opened.result;
+        if (result.status === "answered") return { status: "answered", answer: result.value };
+        return result.status === "cancelled" ? { status: "cancelled" } : { status: "unavailable" };
+      } catch (error) {
+        settleReady(undefined);
+        throw error;
+      }
     },
   };
 
   return {
     source,
     async mirror(outcome) {
-      if (!handle || outcome.status === "unavailable" || outcome.source !== "terminal") return;
+      if (outcome.source === "telegram") return;
+      const opened = handle ?? await handleReady;
+      if (!opened) return;
       if (outcome.status === "answered") {
-        await handle.close({
+        await opened.close({
           status: "answered",
           source: "terminal",
           displayText: question.secret ? "[secret provided]" : outcome.answer,
         });
-      } else if (outcome.status === "cancelled") {
-        await handle.close({ status: "cancelled", source: "terminal" });
+      } else {
+        await opened.close({ status: "cancelled", source: "terminal" });
       }
     },
   };
@@ -148,15 +166,17 @@ export function formatResolvedTelegramQuestion(
   contextLabel: string,
   resolution: TelegramPromptResolution,
 ): string {
-  const heading = resolution.status === "cancelled"
-    ? resolution.source === "terminal"
-      ? "⚪ <b>Question cancelled in Pi</b>"
-      : "⚪ <b>Question cancelled from Telegram</b>"
-    : question.secret
-      ? "✅ <b>Answered securely in Pi</b>"
-      : resolution.source === "telegram"
-        ? "✅ <b>Answered in Telegram</b>"
-        : "✅ <b>Answered in Pi</b>";
+  const heading = resolution.status === "closed"
+    ? "⚪ <b>Question closed</b>"
+    : resolution.status === "cancelled"
+      ? resolution.source === "terminal"
+        ? "⚪ <b>Question cancelled in Pi</b>"
+        : "⚪ <b>Question cancelled from Telegram</b>"
+      : question.secret
+        ? "✅ <b>Answered securely in Pi</b>"
+        : resolution.source === "telegram"
+          ? "✅ <b>Answered in Telegram</b>"
+          : "✅ <b>Answered in Pi</b>";
   const lines = [
     heading,
     `<b>${escapeTelegramHtml(preview(contextLabel, 100))}</b> · Question ${index + 1} of ${total}`,

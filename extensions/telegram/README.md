@@ -18,7 +18,7 @@ When enabled, it currently provides:
 - all consumers use one versioned global service registry
 - all interactive prompts share one `getUpdates` cursor and polling loop
 - replies are routed by exact Telegram question message ID
-- session shutdown aborts polling, resolves pending prompts, and drains tracked delivery
+- session shutdown aborts polling, marks pending and passive cards closed, and drains tracked delivery
 - `PI_SUBAGENT_CHILD` processes never register the service
 
 Goal completion formatting remains an adapter inside this extension. The goal extension only emits `GOAL_COMPLETED_EVENT`; it has no Telegram or network dependency.
@@ -121,6 +121,8 @@ When `questions` finds the registered service, terminal input starts immediately
 - Telegram wins: the terminal picker closes and its answer appears in the terminal tool result.
 - Terminal wins: Telegram polling closes and the original card is edited to its resolved state without copying the terminal answer into Telegram.
 - Telegram answers, terminal/Telegram cancellation, and secret completion all edit the original card instead of adding completion replies.
+- A card that finishes sending after terminal input already won is immediately finalized rather than left pending.
+- Polling failure or shutdown marks unresolved cards closed and removes their controls.
 - Direct text replies remain available for freeform answers, numbered/exact choices, and `/cancel`.
 - A secret question sends only a redacted passive alert and must be answered in the terminal; it never starts Telegram polling or exposes the prompt, options, or answer.
 

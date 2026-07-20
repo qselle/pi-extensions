@@ -20,7 +20,8 @@ export interface TelegramPromptChoice<T> {
 
 export type TelegramPromptResolution =
   | { status: "answered"; source: "terminal" | "telegram"; displayText: string }
-  | { status: "cancelled"; source: "terminal" | "telegram" };
+  | { status: "cancelled"; source: "terminal" | "telegram" }
+  | { status: "closed" };
 
 export interface TelegramPromptRequest<T> {
   text: string;
@@ -120,6 +121,8 @@ export class DefaultTelegramService implements TelegramService {
   private readonly pollTimeoutSeconds: number;
   private readonly emptyPollDelayMs: number;
   private readonly pendingPrompts = new Map<number, PendingPrompt>();
+  private readonly passivePrompts = new Map<number, TelegramPromptRequest<unknown>>();
+  private readonly messageDeliveries = new Map<number, Promise<void>>();
   private readonly background = new Set<Promise<unknown>>();
   private offset = 0;
   private initialized = false;
@@ -168,18 +171,20 @@ export class DefaultTelegramService implements TelegramService {
 
     let closed = false;
     const close = async (outcome: TelegramPromptMirror) => {
-      if (closed) return;
+      if (closed || this.stopped) return;
       closed = true;
+      this.passivePrompts.delete(messageId);
       this.removePrompt(messageId, { status: "unavailable" });
       const resolution: TelegramPromptResolution = outcome.status === "answered"
         ? { status: "answered", source: "terminal", displayText: outcome.displayText }
         : { status: "cancelled", source: "terminal" };
-      const delivery = this.deliverResolution(messageId, request, resolution);
+      const delivery = this.queueResolution(messageId, request, resolution);
       this.track(delivery);
       await delivery;
     };
 
     if (!interactive) {
+      this.passivePrompts.set(messageId, request as TelegramPromptRequest<unknown>);
       return {
         messageId,
         result: Promise.resolve({ status: "unavailable" }),
@@ -224,9 +229,13 @@ export class DefaultTelegramService implements TelegramService {
     for (const messageId of [...this.pendingPrompts.keys()]) {
       const pending = this.pendingPrompts.get(messageId);
       const removed = this.removePrompt(messageId, { status: "unavailable" });
-      if (removed && pending && hasInlineChoices(pending.request)) {
-        this.track(this.api.clearInlineKeyboard(messageId));
+      if (removed && pending) {
+        this.track(this.queueResolution(messageId, pending.request, { status: "closed" }));
       }
+    }
+    for (const [messageId, request] of this.passivePrompts) {
+      this.passivePrompts.delete(messageId);
+      this.track(this.queueResolution(messageId, request, { status: "closed" }));
     }
     await this.pollPromise?.catch(() => undefined);
     await this.drain();
@@ -319,7 +328,7 @@ export class DefaultTelegramService implements TelegramService {
       return;
     }
     this.track(this.api.answerCallbackQuery(callback.id, `Selected: ${choice.displayText}`));
-    this.track(this.deliverResolution(questionMessageId, pending.request, {
+    this.track(this.queueResolution(questionMessageId, pending.request, {
       status: "answered",
       source: "telegram",
       displayText: choice.displayText,
@@ -344,7 +353,7 @@ export class DefaultTelegramService implements TelegramService {
     }
     if (parsed.status === "cancelled") {
       if (!this.removePrompt(questionMessageId, { status: "cancelled" })) return;
-      this.track(this.deliverResolution(questionMessageId, pending.request, {
+      this.track(this.queueResolution(questionMessageId, pending.request, {
         status: "cancelled",
         source: "telegram",
       }));
@@ -352,7 +361,7 @@ export class DefaultTelegramService implements TelegramService {
     }
 
     if (!this.removePrompt(questionMessageId, { status: "answered", value: parsed.value })) return;
-    this.track(this.deliverResolution(questionMessageId, pending.request, {
+    this.track(this.queueResolution(questionMessageId, pending.request, {
       status: "answered",
       source: "telegram",
       displayText: parsed.displayText,
@@ -377,6 +386,23 @@ export class DefaultTelegramService implements TelegramService {
     return true;
   }
 
+  private queueResolution<T>(
+    messageId: number,
+    request: TelegramPromptRequest<T>,
+    resolution: TelegramPromptResolution,
+  ): Promise<void> {
+    const previous = this.messageDeliveries.get(messageId) ?? Promise.resolve();
+    const queued = previous
+      .catch(() => undefined)
+      .then(() => this.deliverResolution(messageId, request, resolution));
+    this.messageDeliveries.set(messageId, queued);
+    const cleanup = () => {
+      if (this.messageDeliveries.get(messageId) === queued) this.messageDeliveries.delete(messageId);
+    };
+    void queued.then(cleanup, cleanup);
+    return queued;
+  }
+
   private deliverResolution<T>(
     messageId: number,
     request: TelegramPromptRequest<T>,
@@ -393,13 +419,15 @@ export class DefaultTelegramService implements TelegramService {
       });
     }
 
-    const text = resolution.status === "answered"
-      ? resolution.source === "terminal"
-        ? `✅ Pi · Reply received first in the terminal.\n\n${resolution.displayText}`
-        : `✅ Pi · Reply received first on Telegram.\n\n${resolution.displayText}`
-      : resolution.source === "terminal"
-        ? "⏹ Pi · Question cancelled in the terminal."
-        : "⏹ Pi · Question cancelled from Telegram.";
+    const text = resolution.status === "closed"
+      ? "⚪ Pi · Question closed."
+      : resolution.status === "answered"
+        ? resolution.source === "terminal"
+          ? `✅ Pi · Reply received first in the terminal.\n\n${resolution.displayText}`
+          : `✅ Pi · Reply received first on Telegram.\n\n${resolution.displayText}`
+        : resolution.source === "terminal"
+          ? "⏹ Pi · Question cancelled in the terminal."
+          : "⏹ Pi · Question cancelled from Telegram.";
     const deliveries: Promise<unknown>[] = [
       this.api.sendMessage(text, { replyToMessageId: messageId }),
     ];
@@ -423,7 +451,7 @@ export class DefaultTelegramService implements TelegramService {
     this.pendingPrompts.delete(messageId);
     if (pending.signal && pending.abort) pending.signal.removeEventListener("abort", pending.abort);
     pending.reject(error);
-    if (hasInlineChoices(pending.request)) this.track(this.api.clearInlineKeyboard(messageId));
+    this.track(this.queueResolution(messageId, pending.request, { status: "closed" }));
     if (this.pendingPrompts.size === 0) this.pollController?.abort();
   }
 

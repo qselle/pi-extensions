@@ -462,3 +462,101 @@ test("edits an interactive card in place when Telegram wins", async () => {
   });
   await service.shutdown();
 });
+
+test("marks interactive and passive cards closed during shutdown", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let sendId = 400;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: ++sendId });
+      if (method === "editMessageText") return response(true);
+      if (body.offset === -1) return response([]);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }) as typeof fetch,
+  });
+  const render = (resolution: { status: string }) => resolution.status === "closed"
+    ? "<b>Question closed</b>"
+    : "<b>Resolved</b>";
+
+  const interactive = await service.openPrompt({
+    text: "<b>Input needed</b>",
+    parseMode: "HTML",
+    choices: [{ label: "A", value: "A", displayText: "A" }],
+    formatResolved: render,
+    parse: parser,
+  });
+  const passive = await service.openPrompt({
+    text: "<b>Secret input needed</b>",
+    parseMode: "HTML",
+    interactive: false,
+    formatResolved: render,
+    parse: parser,
+  });
+
+  await service.shutdown();
+  expect(await interactive.result).toEqual({ status: "unavailable" });
+  expect(await passive.result).toEqual({ status: "unavailable" });
+  expect(requests
+    .filter((request) => request.method === "editMessageText")
+    .map((request) => [request.body.message_id, request.body.text]))
+    .toEqual([
+      [interactive.messageId, "<b>Question closed</b>"],
+      [passive.messageId, "<b>Question closed</b>"],
+    ]);
+
+  await passive.close({ status: "cancelled", source: "terminal" });
+  expect(requests.filter((request) => request.method === "editMessageText")).toHaveLength(2);
+});
+
+test("marks a card closed when Telegram polling fails", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let updatesCalls = 0;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 501 });
+      if (method === "editMessageText") return response(true);
+      updatesCalls++;
+      if (updatesCalls === 1) return response([]);
+      return new Response(JSON.stringify({ ok: false }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt({
+    text: "<b>Input needed</b>",
+    parseMode: "HTML",
+    choices: [{ label: "A", value: "A", displayText: "A" }],
+    formatResolved: (resolution) => resolution.status === "closed"
+      ? "<b>Question closed</b>"
+      : "<b>Resolved</b>",
+    parse: parser,
+  });
+  await expect(prompt.result).rejects.toThrow();
+  await service.drain();
+
+  expect(requests.find((request) => request.method === "editMessageText")?.body).toMatchObject({
+    message_id: 501,
+    text: "<b>Question closed</b>",
+    reply_markup: { inline_keyboard: [] },
+  });
+
+  await prompt.close({ status: "answered", source: "terminal", displayText: "A" });
+  await service.drain();
+  expect(requests
+    .filter((request) => request.method === "editMessageText")
+    .map((request) => request.body.text))
+    .toEqual(["<b>Question closed</b>", "<b>Resolved</b>"]);
+  await service.shutdown();
+});

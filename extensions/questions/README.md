@@ -10,6 +10,7 @@ For every non-secret question, Pi opens a terminal picker immediately and—when
 - a Telegram answer immediately closes the terminal picker, appears in the terminal result, and updates the original card
 - Escape or `/cancel` interrupts the questionnaire and updates the other channel
 - a Telegram delivery or polling failure leaves the terminal picker usable
+- late delivery races are finalized safely, while shutdown or failed polling closes unresolved cards
 
 Questions run sequentially. The picker shows numbered options in a bordered Claude-style panel. `Other` is the final choice by default and opens a freeform input; set `allow_other: false` to restrict a question to its listed options. Questions without options always use freeform input.
 
