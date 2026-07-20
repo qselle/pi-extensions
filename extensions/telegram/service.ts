@@ -15,10 +15,17 @@ export interface TelegramPromptChoice<T> {
   displayText: string;
 }
 
+export type TelegramPromptResolution =
+  | { status: "answered"; source: "terminal" | "telegram"; displayText: string }
+  | { status: "cancelled"; source: "terminal" | "telegram" };
+
 export interface TelegramPromptRequest<T> {
   text: string;
   inputPlaceholder?: string;
   choices?: readonly TelegramPromptChoice<T>[];
+  parseMode?: "HTML";
+  interactive?: boolean;
+  formatResolved?(resolution: TelegramPromptResolution): string;
   parse(text: string): TelegramPromptParseResult<T>;
 }
 
@@ -38,6 +45,7 @@ export interface TelegramPromptHandle<T> {
 }
 
 export interface TelegramService {
+  readonly questionDelayMs?: number;
   send(text: string, options?: TelegramSendOptions): Promise<TelegramSendResult>;
   openPrompt<T>(request: TelegramPromptRequest<T>, signal?: AbortSignal): Promise<TelegramPromptHandle<T>>;
   drain(): Promise<void>;
@@ -104,6 +112,7 @@ export function getTelegramService(): TelegramService | undefined {
 }
 
 export class DefaultTelegramService implements TelegramService {
+  readonly questionDelayMs: number;
   private readonly api: TelegramApiClient;
   private readonly pollTimeoutSeconds: number;
   private readonly emptyPollDelayMs: number;
@@ -122,6 +131,7 @@ export class DefaultTelegramService implements TelegramService {
     options: TelegramServiceOptions = {},
   ) {
     this.api = new TelegramApiClient(config, options);
+    this.questionDelayMs = (config.questionDelayMinutes ?? 0) * 60_000;
     this.pollTimeoutSeconds = options.pollTimeoutSeconds ?? DEFAULT_POLL_TIMEOUT_SECONDS;
     this.emptyPollDelayMs = options.emptyPollDelayMs ?? 100;
   }
@@ -137,19 +147,42 @@ export class DefaultTelegramService implements TelegramService {
   ): Promise<TelegramPromptHandle<T>> {
     if (this.stopped) throw new Error("Telegram service is stopped");
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    await this.initializeOffset(signal);
-    const choices = request.choices ?? [];
+    const interactive = request.interactive !== false;
+    if (interactive) await this.initializeOffset(signal);
+    const choices = interactive ? request.choices ?? [] : [];
     const sent = await this.api.sendMessage(request.text, {
       signal,
-      forceReply: choices.length === 0,
+      forceReply: interactive && choices.length === 0,
       inputPlaceholder: request.inputPlaceholder,
       inlineChoices: choices.map((choice, index) => ({
         text: choice.label,
         callbackData: `choice:${index}`,
       })),
+      parseMode: request.parseMode,
     });
     if (sent.messageId === undefined) throw new Error("Telegram did not return a prompt message ID");
     const messageId = sent.messageId;
+
+    let closed = false;
+    const close = async (outcome: TelegramPromptMirror) => {
+      if (closed) return;
+      closed = true;
+      this.removePrompt(messageId, { status: "unavailable" });
+      const resolution: TelegramPromptResolution = outcome.status === "answered"
+        ? { status: "answered", source: "terminal", displayText: outcome.displayText }
+        : { status: "cancelled", source: "terminal" };
+      const delivery = this.deliverResolution(messageId, request, resolution);
+      this.track(delivery);
+      await delivery;
+    };
+
+    if (!interactive) {
+      return {
+        messageId,
+        result: Promise.resolve({ status: "unavailable" }),
+        close,
+      };
+    }
 
     let resolveResult!: (result: TelegramPromptResult<T>) => void;
     let rejectResult!: (error: unknown) => void;
@@ -174,26 +207,7 @@ export class DefaultTelegramService implements TelegramService {
     if (signal?.aborted) queueMicrotask(pending.abort!);
     this.ensurePoller();
 
-    let closed = false;
-    return {
-      messageId,
-      result,
-      close: async (outcome) => {
-        if (closed) return;
-        closed = true;
-        const removed = this.removePrompt(messageId, { status: "unavailable" });
-        const text = outcome.status === "answered"
-          ? `✅ Pi · Reply received first in the terminal.\n\n${outcome.displayText}`
-          : "⏹ Pi · Question cancelled in the terminal.";
-        const deliveries: Promise<unknown>[] = [
-          this.api.sendMessage(text, { replyToMessageId: messageId }),
-        ];
-        if (removed && hasInlineChoices(request)) deliveries.push(this.api.clearInlineKeyboard(messageId));
-        const delivery = Promise.all(deliveries).then(() => undefined);
-        this.track(delivery);
-        await delivery;
-      },
-    };
+    return { messageId, result, close };
   }
 
   async drain(): Promise<void> {
@@ -302,11 +316,11 @@ export class DefaultTelegramService implements TelegramService {
       return;
     }
     this.track(this.api.answerCallbackQuery(callback.id, `Selected: ${choice.displayText}`));
-    this.track(this.api.clearInlineKeyboard(questionMessageId));
-    this.track(this.api.sendMessage(
-      `✅ Pi · Reply received first on Telegram.\n\n${choice.displayText}`,
-      { replyToMessageId: questionMessageId },
-    ));
+    this.track(this.deliverResolution(questionMessageId, pending.request, {
+      status: "answered",
+      source: "telegram",
+      displayText: choice.displayText,
+    }));
   }
 
   private async routeMessage(message: TelegramMessage): Promise<void> {
@@ -327,17 +341,19 @@ export class DefaultTelegramService implements TelegramService {
     }
     if (parsed.status === "cancelled") {
       if (!this.removePrompt(questionMessageId, { status: "cancelled" })) return;
-      if (hasInlineChoices(pending.request)) this.track(this.api.clearInlineKeyboard(questionMessageId));
-      this.track(this.api.sendMessage("⏹ Pi · Question cancelled from Telegram.", { replyToMessageId: questionMessageId }));
+      this.track(this.deliverResolution(questionMessageId, pending.request, {
+        status: "cancelled",
+        source: "telegram",
+      }));
       return;
     }
 
     if (!this.removePrompt(questionMessageId, { status: "answered", value: parsed.value })) return;
-    if (hasInlineChoices(pending.request)) this.track(this.api.clearInlineKeyboard(questionMessageId));
-    this.track(this.api.sendMessage(
-      `✅ Pi · Reply received first on Telegram.\n\n${parsed.displayText}`,
-      { replyToMessageId: questionMessageId },
-    ));
+    this.track(this.deliverResolution(questionMessageId, pending.request, {
+      status: "answered",
+      source: "telegram",
+      displayText: parsed.displayText,
+    }));
   }
 
   private matchesConfiguredTextReply(message: TelegramMessage): boolean {
@@ -356,6 +372,36 @@ export class DefaultTelegramService implements TelegramService {
     if (!matchesChat(this.config.chatId, message.chat)) return false;
     if (this.config.threadId !== undefined && message.message_thread_id !== this.config.threadId) return false;
     return true;
+  }
+
+  private deliverResolution<T>(
+    messageId: number,
+    request: TelegramPromptRequest<T>,
+    resolution: TelegramPromptResolution,
+  ): Promise<void> {
+    if (request.formatResolved) {
+      const edited = Promise.resolve()
+        .then(() => request.formatResolved!(resolution))
+        .then((text) => this.api.editMessageText(messageId, text, { parseMode: request.parseMode }));
+      if (!hasInlineChoices(request)) return edited;
+      return edited.catch(async (error) => {
+        await this.api.clearInlineKeyboard(messageId).catch(() => undefined);
+        throw error;
+      });
+    }
+
+    const text = resolution.status === "answered"
+      ? resolution.source === "terminal"
+        ? `✅ Pi · Reply received first in the terminal.\n\n${resolution.displayText}`
+        : `✅ Pi · Reply received first on Telegram.\n\n${resolution.displayText}`
+      : resolution.source === "terminal"
+        ? "⏹ Pi · Question cancelled in the terminal."
+        : "⏹ Pi · Question cancelled from Telegram.";
+    const deliveries: Promise<unknown>[] = [
+      this.api.sendMessage(text, { replyToMessageId: messageId }),
+    ];
+    if (hasInlineChoices(request)) deliveries.push(this.api.clearInlineKeyboard(messageId));
+    return Promise.all(deliveries).then(() => undefined);
   }
 
   private removePrompt<T>(messageId: number, result: TelegramPromptResult<T>): boolean {

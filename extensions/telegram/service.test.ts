@@ -13,6 +13,7 @@ const config: TelegramConfig = {
   chatId: "-1001234567890",
   threadId: 42,
   details: "summary",
+  questionDelayMinutes: 0,
 };
 
 function response(result: unknown): Response {
@@ -358,5 +359,106 @@ test("mirrors a terminal winner back to Telegram and closes remote waiting", asy
     message_id: prompt.messageId,
     reply_markup: { inline_keyboard: [] },
   }]);
+  await service.shutdown();
+});
+
+test("sends passive cards without polling and edits the original card on terminal resolution", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  const delayedConfig = { ...config, questionDelayMinutes: 0.25 };
+  const service = new DefaultTelegramService(delayedConfig, {
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 301 });
+      if (method === "editMessageText") return response(true);
+      throw new Error(`unexpected ${method}`);
+    }) as typeof fetch,
+  });
+
+  expect(service.questionDelayMs).toBe(15_000);
+  const prompt = await service.openPrompt<string>({
+    text: "<b>Secret input needed</b>",
+    parseMode: "HTML",
+    interactive: false,
+    formatResolved: (resolution) => resolution.status === "answered"
+      ? "<b>Answered securely in Pi</b>"
+      : "<b>Cancelled in Pi</b>",
+    parse: () => ({ status: "rejected", message: "terminal only" }),
+  });
+  expect(await prompt.result).toEqual({ status: "unavailable" });
+  await prompt.close({ status: "answered", source: "terminal", displayText: "[secret provided]" });
+  await service.drain();
+
+  expect(requests).toEqual([
+    {
+      method: "sendMessage",
+      body: {
+        chat_id: "-1001234567890",
+        text: "<b>Secret input needed</b>",
+        disable_web_page_preview: true,
+        message_thread_id: 42,
+        parse_mode: "HTML",
+      },
+    },
+    {
+      method: "editMessageText",
+      body: {
+        chat_id: "-1001234567890",
+        message_id: 301,
+        text: "<b>Answered securely in Pi</b>",
+        disable_web_page_preview: true,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [] },
+      },
+    },
+  ]);
+  await service.shutdown();
+});
+
+test("edits an interactive card in place when Telegram wins", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let updatesCalls = 0;
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      if (method === "sendMessage") return response({ message_id: 311 });
+      if (method === "editMessageText") return response(true);
+      updatesCalls++;
+      if (updatesCalls === 1) return response([]);
+      return response([{
+        update_id: 1,
+        message: {
+          message_id: 312,
+          text: "valid",
+          chat: { id: -1001234567890 },
+          message_thread_id: 42,
+          reply_to_message: { message_id: 311 },
+        },
+      }]);
+    }) as typeof fetch,
+  });
+
+  const prompt = await service.openPrompt({
+    text: "<b>Input needed</b>",
+    parseMode: "HTML",
+    formatResolved: (resolution) => resolution.status === "answered"
+      ? `<b>Answered in ${resolution.source}</b>: ${resolution.displayText}`
+      : "<b>Cancelled</b>",
+    parse: parser,
+  });
+  expect(await prompt.result).toEqual({ status: "answered", value: "accepted" });
+  await service.drain();
+
+  expect(requests.filter((request) => request.method === "sendMessage")).toHaveLength(1);
+  expect(requests.find((request) => request.method === "editMessageText")?.body).toMatchObject({
+    message_id: 311,
+    text: "<b>Answered in telegram</b>: valid",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [] },
+  });
   await service.shutdown();
 });

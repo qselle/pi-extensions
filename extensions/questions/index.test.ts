@@ -4,6 +4,7 @@ import questionsExtension from "./index.ts";
 
 class MockPi {
   tool: any;
+  sessionName?: string;
   emitted: Array<{ name: string; payload: unknown }> = [];
 
   events = {
@@ -11,6 +12,7 @@ class MockPi {
   };
 
   registerTool(tool: any) { this.tool = tool; }
+  getSessionName() { return this.sessionName; }
   on() {}
 }
 
@@ -103,17 +105,18 @@ test("collects a terminal answer first, cancels Telegram polling, and mirrors th
   ]);
 });
 
-test("a Telegram reply closes the terminal prompt and never persists secret text", async () => {
+test("a Telegram reply closes the terminal prompt", async () => {
   const pi = new MockPi();
   let terminalClosed = false;
   const telegram = serviceWithPrompt<string>(async () => ({
     messageId: 1,
-    result: Promise.resolve({ status: "answered", value: "actual-secret" }),
+    result: Promise.resolve({ status: "answered", value: "Remote answer" }),
     close: async () => undefined,
   }));
   questionsExtension(pi as any, { telegramService: telegram });
   const ctx = {
     mode: "tui",
+    cwd: "/work/project",
     ui: {
       theme,
       setTitle: () => undefined,
@@ -133,19 +136,17 @@ test("a Telegram reply closes the terminal prompt and never persists secret text
   } as any;
 
   const result = await pi.tool.execute("call", {
-    questions: [{ id: "token", question: "API token?", secret: true }],
+    questions: [{ id: "destination", question: "Deploy where?" }],
   }, new AbortController().signal, undefined, ctx);
 
   expect(terminalClosed).toBe(true);
-  expect(result.content[0].text).toBe("token: [secret provided] [via Telegram]");
+  expect(result.content[0].text).toBe("destination: Remote answer [via Telegram]");
   expect(result.details.answers).toEqual([{
-    id: "token",
-    question: "API token?",
-    provided: true,
-    secret: true,
+    id: "destination",
+    question: "Deploy where?",
+    answer: "Remote answer",
     source: "telegram",
   }]);
-  expect(JSON.stringify(result)).not.toContain("actual-secret");
 });
 
 test("discovers the optional globally registered Telegram hub at execution time", async () => {
@@ -168,6 +169,67 @@ test("discovers the optional globally registered Telegram hub at execution time"
   } finally {
     registration.unregister();
   }
+});
+
+test("labels delayed first cards with the session and sends follow-up questions immediately", async () => {
+  const pi = new MockPi();
+  pi.sessionName = "Release <v2>";
+  const requests: any[] = [];
+  const telegram = {
+    ...serviceWithPrompt<string>(async (request) => {
+      requests.push(request);
+      return {
+        messageId: requests.length,
+        result: Promise.resolve({ status: "answered", value: `answer-${requests.length}` }),
+        close: async () => undefined,
+      };
+    }),
+    questionDelayMs: 1,
+  } satisfies TelegramService;
+  questionsExtension(pi as any, { telegramService: telegram });
+
+  const result = await pi.tool.execute("call", {
+    questions: [
+      { id: "first", question: "First?" },
+      { id: "second", question: "Second?" },
+    ],
+  }, new AbortController().signal, undefined, {
+    mode: "json",
+    cwd: "/work/project",
+    ui: { notify: () => undefined },
+  });
+
+  expect(result.content[0].text).toContain("first: answer-1 [via Telegram]");
+  expect(requests).toHaveLength(2);
+  expect(requests[0].text).toContain("Release &lt;v2&gt;");
+  expect(requests[0].text).toContain("has been waiting 1 second");
+  expect(requests[1].text).not.toContain("has been waiting");
+});
+
+test("requires TUI for secret questions even when Telegram is configured", async () => {
+  const pi = new MockPi();
+  let passive = false;
+  const telegram = serviceWithPrompt<string>(async (request) => {
+    passive = request.interactive === false;
+    return {
+      messageId: 1,
+      result: Promise.resolve({ status: "unavailable" }),
+      close: async () => undefined,
+    };
+  });
+  questionsExtension(pi as any, { telegramService: telegram });
+
+  const result = await pi.tool.execute("call", {
+    questions: [{ id: "token", question: "Token?", secret: true }],
+  }, new AbortController().signal, undefined, {
+    mode: "json",
+    cwd: "/work/project",
+    ui: { notify: () => undefined },
+  });
+
+  expect(passive).toBe(true);
+  expect(result.content[0].text).toContain("Secret questions require Pi in TUI mode");
+  expect(result.details.interrupted).toBe(true);
 });
 
 test("reports a useful interruption when neither terminal nor Telegram is available", async () => {

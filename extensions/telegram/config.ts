@@ -9,6 +9,7 @@ export interface TelegramConfig {
   chatId: string;
   threadId?: number;
   details: TelegramGoalDetails;
+  questionDelayMinutes: number;
 }
 
 export interface TelegramConfigFile {
@@ -16,6 +17,7 @@ export interface TelegramConfigFile {
   chatId?: string;
   threadId?: number;
   details?: TelegramGoalDetails;
+  questionDelayMinutes?: number;
 }
 
 export type TelegramConfigResult =
@@ -36,7 +38,9 @@ export const TELEGRAM_CONFIG_FILENAME = "telegram.json";
 export const LEGACY_TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
 export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
-const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details"]);
+const DEFAULT_QUESTION_DELAY_MINUTES = 0;
+const MAX_QUESTION_DELAY_MINUTES = 7 * 24 * 60;
+const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details", "questionDelayMinutes"]);
 
 export function defaultTelegramConfigPath(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -90,9 +94,17 @@ export function readTelegramConfig(
   const envThreadId = env.PI_TELEGRAM_THREAD_ID?.trim();
   const rawThreadId: string | number | undefined = envThreadId || file.threadId;
   const details = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
+  const envQuestionDelay = env.PI_TELEGRAM_QUESTION_DELAY_MINUTES?.trim();
+  const rawQuestionDelay: string | number = envQuestionDelay || (file.questionDelayMinutes ?? DEFAULT_QUESTION_DELAY_MINUTES);
 
   const configured = Object.keys(file).length > 0
-    || Boolean(botToken || chatId || rawThreadId !== undefined || env.PI_TELEGRAM_GOAL_DETAILS?.trim());
+    || Boolean(
+      botToken
+      || chatId
+      || rawThreadId !== undefined
+      || env.PI_TELEGRAM_GOAL_DETAILS?.trim()
+      || envQuestionDelay,
+    );
   if (!configured) return { status: "disabled" };
   if (!botToken || !chatId) {
     return { status: "invalid", message: "Telegram notifications require both botToken/chatId in the config file or PI_TELEGRAM_BOT_TOKEN/PI_TELEGRAM_CHAT_ID." };
@@ -114,10 +126,17 @@ export function readTelegramConfig(
   if (details !== "minimal" && details !== "summary" && details !== "full") {
     return { status: "invalid", message: "Telegram goal details must be minimal, summary, or full." };
   }
+  const questionDelayMinutes = typeof rawQuestionDelay === "number" ? rawQuestionDelay : Number(rawQuestionDelay);
+  if (!Number.isFinite(questionDelayMinutes) || questionDelayMinutes < 0 || questionDelayMinutes > MAX_QUESTION_DELAY_MINUTES) {
+    return {
+      status: "invalid",
+      message: `Telegram question delay must be between 0 and ${MAX_QUESTION_DELAY_MINUTES} minutes.`,
+    };
+  }
 
   return {
     status: "enabled",
-    config: { botToken, chatId, threadId, details },
+    config: { botToken, chatId, threadId, details, questionDelayMinutes },
   };
 }
 
@@ -149,6 +168,12 @@ function parseTelegramConfigFile(
   if (record.details !== undefined && record.details !== "minimal" && record.details !== "summary" && record.details !== "full") {
     return invalidFile(path, "field details must be minimal, summary, or full");
   }
+  if (
+    record.questionDelayMinutes !== undefined
+    && (typeof record.questionDelayMinutes !== "number" || !Number.isFinite(record.questionDelayMinutes))
+  ) {
+    return invalidFile(path, "field questionDelayMinutes must be a finite number");
+  }
   return {
     status: "valid",
     config: {
@@ -156,6 +181,7 @@ function parseTelegramConfigFile(
       chatId: record.chatId === undefined ? undefined : String(record.chatId),
       threadId: record.threadId as number | undefined,
       details: record.details as TelegramGoalDetails | undefined,
+      questionDelayMinutes: record.questionDelayMinutes as number | undefined,
     },
   };
 }

@@ -1,5 +1,9 @@
 import { safeTelegramError } from "../telegram/api.ts";
-import type { TelegramPromptHandle, TelegramService } from "../telegram/service.ts";
+import type {
+  TelegramPromptHandle,
+  TelegramPromptResolution,
+  TelegramService,
+} from "../telegram/service.ts";
 import type { Question } from "./model.ts";
 import { parseReplyText } from "./model.ts";
 import type { ReplyOutcome, ReplySource, SourceReply } from "./race.ts";
@@ -11,25 +15,49 @@ export interface TelegramQuestionReply {
   mirror(outcome: ReplyOutcome): Promise<void>;
 }
 
+export interface TelegramQuestionOptions {
+  contextLabel?: string;
+  delayMs?: number;
+  onOpened?(): void;
+}
+
 export function createTelegramQuestionReply(
   service: TelegramService,
   question: Question,
   index: number,
   total: number,
+  options: TelegramQuestionOptions = {},
 ): TelegramQuestionReply {
   let handle: TelegramPromptHandle<string> | undefined;
+  const contextLabel = options.contextLabel?.trim() || "Pi";
+  const delayMs = Math.max(0, options.delayMs ?? 0);
   const source: ReplySource = {
     name: "telegram",
     run: async (signal): Promise<SourceReply> => {
+      await waitForDelay(delayMs, signal);
       const opened = await service.openPrompt<string>({
-        text: formatTelegramQuestion(question, index, total),
-        inputPlaceholder: question.secret ? "Reply with the secret answer" : "Reply with a number or your answer",
-        choices: question.options.map((option) => ({
-          label: option,
-          value: option,
-          displayText: question.secret ? "[secret provided]" : option,
-        })),
+        text: formatTelegramQuestion(question, index, total, contextLabel, delayMs),
+        inputPlaceholder: "Reply with a number or your answer",
+        choices: question.secret
+          ? []
+          : question.options.map((option) => ({
+              label: option,
+              value: option,
+              displayText: option,
+            })),
+        parseMode: "HTML",
+        interactive: !question.secret,
+        formatResolved: (resolution) => formatResolvedTelegramQuestion(
+          question,
+          index,
+          total,
+          contextLabel,
+          resolution,
+        ),
         parse: (text) => {
+          if (question.secret) {
+            return { status: "rejected", message: "Secret questions must be answered in Pi." };
+          }
           const parsed = parseReplyText(question, text);
           if (parsed === "cancel") return { status: "cancelled" };
           if (parsed === undefined) {
@@ -41,11 +69,12 @@ export function createTelegramQuestionReply(
           return {
             status: "accepted",
             value: parsed,
-            displayText: question.secret ? "[secret provided]" : parsed,
+            displayText: parsed,
           };
         },
       }, signal);
       handle = opened;
+      options.onOpened?.();
       const result = await opened.result;
       if (result.status === "answered") return { status: "answered", answer: result.value };
       return result.status === "cancelled" ? { status: "cancelled" } : { status: "unavailable" };
@@ -76,26 +105,108 @@ export function safeTelegramQuestionError(error: unknown): string {
     : `${message} The terminal remains available.`;
 }
 
-export function formatTelegramQuestion(question: Question, index: number, total: number): string {
-  const lines = [
-    `❓ Pi needs input · Question ${index + 1}/${total}`,
-    "",
-    clip(question.question, 1_600),
-  ];
-  if (question.options.length > 0) {
-    lines.push("", ...question.options.map((option, optionIndex) => `${optionIndex + 1}. ${clip(option, 180)}`));
+export function formatTelegramQuestion(
+  question: Question,
+  index: number,
+  total: number,
+  contextLabel = "Pi",
+  delayMs = 0,
+): string {
+  const context = `<b>${escapeTelegramHtml(preview(contextLabel, 100))}</b> · Question ${index + 1} of ${total}`;
+  if (question.secret) {
+    const lines = [
+      "🔐 <b>Secret input needed</b>",
+      context,
+      "",
+      "A secret response is waiting in Pi.",
+      "For your security, answer in the terminal.",
+    ];
+    if (delayMs > 0) lines.push("", `⏱ The agent has been waiting ${formatDelay(delayMs)} for your response.`);
+    return clip(lines.join("\n"), TELEGRAM_QUESTION_LIMIT);
   }
-  lines.push(
+
+  const instruction = question.options.length === 0
+    ? "↩️ Reply to this message with your answer."
+    : question.allowOther
+      ? "Choose below, or reply to this message."
+      : "Choose an answer below.";
+  const lines = [
+    "❓ <b>Input needed</b>",
+    context,
     "",
-    question.options.length === 0
-      ? "Reply to this message with your own answer."
-      : question.allowOther
-        ? "Choose a button below, or reply to this message with your own answer."
-        : "Choose a button below. Direct replies with an option number or exact option also work.",
-    "Send /cancel to cancel. The first reply between Telegram and the terminal wins.",
-  );
-  if (question.secret) lines.push("⚠️ Secret replies are not stored in Pi, but Telegram still retains them.");
+    `<blockquote>${escapeTelegramHtml(preview(question.question, 1_600))}</blockquote>`,
+  ];
+  if (delayMs > 0) lines.push(`⏱ The agent has been waiting ${formatDelay(delayMs)} for your response.`);
+  lines.push("", instruction, "Send /cancel to cancel. The first reply between Telegram and the terminal wins.");
   return clip(lines.join("\n"), TELEGRAM_QUESTION_LIMIT);
+}
+
+export function formatResolvedTelegramQuestion(
+  question: Question,
+  index: number,
+  total: number,
+  contextLabel: string,
+  resolution: TelegramPromptResolution,
+): string {
+  const heading = resolution.status === "cancelled"
+    ? resolution.source === "terminal"
+      ? "⚪ <b>Question cancelled in Pi</b>"
+      : "⚪ <b>Question cancelled from Telegram</b>"
+    : question.secret
+      ? "✅ <b>Answered securely in Pi</b>"
+      : resolution.source === "telegram"
+        ? "✅ <b>Answered in Telegram</b>"
+        : "✅ <b>Answered in Pi</b>";
+  const lines = [
+    heading,
+    `<b>${escapeTelegramHtml(preview(contextLabel, 100))}</b> · Question ${index + 1} of ${total}`,
+  ];
+  if (!question.secret) {
+    lines.push("", `<blockquote>${escapeTelegramHtml(preview(question.question, 1_600))}</blockquote>`);
+    if (resolution.status === "answered" && resolution.source === "telegram") {
+      lines.push(`<b>Answer</b>  ${escapeTelegramHtml(preview(resolution.displayText, 1_200))}`);
+    } else if (resolution.status === "cancelled") {
+      lines.push("No answer was submitted.");
+    }
+  }
+  return clip(lines.join("\n"), TELEGRAM_QUESTION_LIMIT);
+}
+
+export function escapeTelegramHtml(value: string): string {
+  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
+function preview(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  const characters = [...normalized];
+  return characters.length <= limit
+    ? normalized
+    : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
+}
+
+function formatDelay(delayMs: number): string {
+  const seconds = Math.max(1, Math.round(delayMs / 1_000));
+  if (delayMs < 60_000) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = delayMs / 60_000;
+  const value = Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2).replace(/0+$/u, "").replace(/\.$/u, "");
+  return `${value} minute${minutes === 1 ? "" : "s"}`;
+}
+
+async function waitForDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function clip(value: string, limit: number): string {

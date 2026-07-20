@@ -8,6 +8,7 @@ const config: TelegramConfig = {
   chatId: "-1001234567890",
   threadId: 42,
   details: "summary",
+  questionDelayMinutes: 0,
 };
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -63,6 +64,7 @@ test("renders inline choices and exposes callback/control helpers", async () => 
   });
   await api.answerCallbackQuery("callback-1", "Selected: Staging");
   await api.clearInlineKeyboard(21);
+  await api.editMessageText(21, "<b>Answered</b>", { parseMode: "HTML" });
 
   expect(requests[0]).toEqual({
     method: "sendMessage",
@@ -88,6 +90,17 @@ test("renders inline choices and exposes callback/control helpers", async () => 
     body: {
       chat_id: "-1001234567890",
       message_id: 21,
+      reply_markup: { inline_keyboard: [] },
+    },
+  });
+  expect(requests[3]).toEqual({
+    method: "editMessageText",
+    body: {
+      chat_id: "-1001234567890",
+      message_id: 21,
+      text: "<b>Answered</b>",
+      disable_web_page_preview: true,
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: [] },
     },
   });

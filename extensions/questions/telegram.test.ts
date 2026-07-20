@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import type { TelegramPromptHandle, TelegramPromptRequest, TelegramService } from "../telegram/service.ts";
 import { normalizeQuestions } from "./model.ts";
-import { createTelegramQuestionReply, formatTelegramQuestion } from "./telegram.ts";
+import {
+  createTelegramQuestionReply,
+  formatResolvedTelegramQuestion,
+  formatTelegramQuestion,
+} from "./telegram.ts";
 
 function fakeService<T>(
   open: (request: TelegramPromptRequest<T>, signal?: AbortSignal) => Promise<TelegramPromptHandle<T>>,
@@ -65,16 +69,16 @@ test("rejects unlisted replies when freeform is disabled", async () => {
   expect(await reply.source.run(new AbortController().signal)).toEqual({ status: "cancelled" });
 });
 
-test("uses redacted callback display text for secret choices", async () => {
+test("sends only a passive redacted alert for secret questions", async () => {
   const service = fakeService<string>(async (request) => {
-    expect(request.choices).toEqual([{
-      label: "Use production token",
-      value: "Use production token",
-      displayText: "[secret provided]",
-    }]);
+    expect(request.interactive).toBe(false);
+    expect(request.choices).toEqual([]);
+    expect(request.text).not.toContain("Which token?");
+    expect(request.text).not.toContain("Use production token");
+    expect(request.text).toContain("answer in the terminal");
     return {
       messageId: 1,
-      result: Promise.resolve({ status: "answered", value: request.choices![0]!.value }),
+      result: Promise.resolve({ status: "unavailable" }),
       close: async () => undefined,
     };
   });
@@ -87,10 +91,7 @@ test("uses redacted callback display text for secret choices", async () => {
   }]);
 
   const reply = createTelegramQuestionReply(service, question, 0, 1);
-  expect(await reply.source.run(new AbortController().signal)).toEqual({
-    status: "answered",
-    answer: "Use production token",
-  });
+  expect(await reply.source.run(new AbortController().signal)).toEqual({ status: "unavailable" });
 });
 
 test("mirrors terminal answers through the prompt handle and masks secrets", async () => {
@@ -103,11 +104,11 @@ test("mirrors terminal answers through the prompt handle and masks secrets", asy
   const [question] = normalizeQuestions([{ id: "token", question: "Token?", secret: true }]);
   const reply = createTelegramQuestionReply(service, question, 0, 1);
   void reply.source.run(new AbortController().signal);
-  await Promise.resolve();
+  await Bun.sleep(0);
   await reply.mirror({ status: "answered", answer: "actual-secret", source: "terminal" });
   const cancelled = createTelegramQuestionReply(service, question, 0, 1);
   void cancelled.source.run(new AbortController().signal);
-  await Promise.resolve();
+  await Bun.sleep(0);
   await cancelled.mirror({ status: "cancelled", source: "terminal" });
 
   expect(mirrors).toEqual([
@@ -117,24 +118,49 @@ test("mirrors terminal answers through the prompt handle and masks secrets", asy
   expect(JSON.stringify(mirrors)).not.toContain("actual-secret");
 });
 
-test("formats bounded freeform and secret Telegram guidance", () => {
-  const [question] = normalizeQuestions([{
+test("formats bounded HTML cards, context, delay copy, and redacted secrets", () => {
+  const [secret] = normalizeQuestions([{
     id: "token",
-    question: "Provide the token",
+    question: "Provide <the> & token",
     secret: true,
   }]);
-  const message = formatTelegramQuestion(question, 1, 3);
-  expect(message).toContain("Question 2/3");
-  expect(message).toContain("your own answer");
-  expect(message).toContain("Telegram still retains them");
+  const secretMessage = formatTelegramQuestion(secret, 1, 3, "Release <v2>", 90_000);
+  expect(secretMessage).toContain("Question 2 of 3");
+  expect(secretMessage).toContain("Release &lt;v2&gt;");
+  expect(secretMessage).toContain("1.5 minutes");
+  expect(secretMessage).not.toContain("Provide");
 
   const [longQuestion] = normalizeQuestions([{
     id: "long",
-    question: "q".repeat(2_000),
+    question: `<plan> & ${"q".repeat(1_900)}`,
     options: Array.from({ length: 8 }, (_, index) => `${index}-${"x".repeat(295)}`),
   }]);
-  const bounded = formatTelegramQuestion(longQuestion, 0, 1);
+  const bounded = formatTelegramQuestion(longQuestion, 0, 1, "workspace");
   expect(bounded.length).toBeLessThanOrEqual(3_900);
-  expect(bounded).toContain("Choose a button below");
+  expect(bounded).toContain("&lt;plan&gt; &amp;");
+  expect(bounded).toContain("Choose below, or reply to this message");
   expect(bounded).toContain("Send /cancel");
+
+  const resolved = formatResolvedTelegramQuestion(longQuestion, 0, 1, "workspace", {
+    status: "answered",
+    source: "telegram",
+    displayText: "Ship <now>",
+  });
+  expect(resolved).toContain("Answered in Telegram");
+  expect(resolved).toContain("Ship &lt;now&gt;");
+});
+
+test("does not open Telegram when the terminal wins during the configured delay", async () => {
+  let opened = false;
+  const service = fakeService<string>(async () => {
+    opened = true;
+    throw new Error("should not open");
+  });
+  const [question] = normalizeQuestions([{ id: "wait", question: "Wait?" }]);
+  const reply = createTelegramQuestionReply(service, question, 0, 1, { delayMs: 60_000 });
+  const controller = new AbortController();
+  const result = reply.source.run(controller.signal).catch((error) => error as Error);
+  controller.abort();
+  expect((await result).name).toBe("AbortError");
+  expect(opened).toBe(false);
 });

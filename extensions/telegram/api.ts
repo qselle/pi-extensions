@@ -27,6 +27,7 @@ export interface TelegramSendOptions extends TelegramRequestOptions {
   inputPlaceholder?: string;
   replyToMessageId?: number;
   inlineChoices?: readonly TelegramInlineChoice[];
+  parseMode?: "HTML";
 }
 
 export interface TelegramSendResult {
@@ -65,6 +66,7 @@ export class TelegramApiClient {
       disable_web_page_preview: true,
     };
     if (this.config.threadId !== undefined) body.message_thread_id = this.config.threadId;
+    if (options.parseMode) body.parse_mode = options.parseMode;
     if (options.inlineChoices && options.inlineChoices.length > 0) {
       body.reply_markup = {
         inline_keyboard: options.inlineChoices.map((choice) => [{
@@ -112,6 +114,21 @@ export class TelegramApiClient {
     await this.call("editMessageReplyMarkup", {
       chat_id: this.config.chatId,
       message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    }, options);
+  }
+
+  async editMessageText(
+    messageId: number,
+    text: string,
+    options: TelegramRequestOptions & { parseMode?: "HTML" } = {},
+  ): Promise<void> {
+    await this.call("editMessageText", {
+      chat_id: this.config.chatId,
+      message_id: messageId,
+      text,
+      disable_web_page_preview: true,
+      ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
       reply_markup: { inline_keyboard: [] },
     }, options);
   }

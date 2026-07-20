@@ -67,13 +67,15 @@ Schema:
   "botToken": "<token from BotFather>",
   "chatId": "<numeric chat ID or @chat_username>",
   "threadId": 42,
-  "details": "summary"
+  "details": "summary",
+  "questionDelayMinutes": 0
 }
 ```
 
 - `botToken` and `chatId` are required across file and environment settings.
 - `threadId` is optional and targets a forum topic.
 - `details` controls goal-completion messages: `minimal`, `summary`, or `full`.
+- `questionDelayMinutes` optionally delays the first Telegram question card from each questionnaire call. It defaults to `0` (simultaneous terminal and Telegram delivery) and accepts fractional minutes from `0` through `10080`.
 - Unknown fields and invalid types are rejected.
 
 For backward compatibility, if `telegram.json` does not exist, the extension automatically checks the old `telegram-notify.json` filename in the same directory. Explicit `PI_TELEGRAM_CONFIG_FILE` paths never fall back.
@@ -90,6 +92,7 @@ Non-empty environment values override matching file values.
 | `PI_TELEGRAM_CHAT_ID` | `chatId` | Numeric chat ID or `@chat_username` |
 | `PI_TELEGRAM_THREAD_ID` | `threadId` | Positive forum topic ID |
 | `PI_TELEGRAM_GOAL_DETAILS` | `details` | `minimal`, `summary`, or `full` |
+| `PI_TELEGRAM_QUESTION_DELAY_MINUTES` | `questionDelayMinutes` | Delay before the first question card; `0` disables delay |
 | `PI_TELEGRAM_CONFIG_FILE` | — | Explicit config path |
 
 With no default file, environment-only setup is supported:
@@ -111,14 +114,15 @@ A genuine goal transition to `complete` emits a versioned event after final acco
 
 ## Question replies
 
-When `questions` finds the registered service, each question appears simultaneously in the terminal and Telegram. The first valid reply wins.
+When `questions` finds the registered service, terminal input starts immediately. Telegram delivery is simultaneous by default, or can be delayed with `questionDelayMinutes`. If the terminal resolves before that delay, no Telegram card is sent. Once the first card is delivered, follow-up questions in the same questionnaire are sent immediately. The first valid reply still wins.
 
+- Cards use Telegram HTML, identify the Pi session title (or project directory), and show question progress and clearer wait-duration copy.
 - Listed choices use a one-button-per-row inline keyboard; free-text prompts use `ForceReply`.
 - Telegram wins: the terminal picker closes and its answer appears in the terminal tool result.
-- Terminal wins: Telegram polling closes, the keyboard is removed, and the terminal answer is mirrored under the Telegram question.
+- Terminal wins: Telegram polling closes and the original card is edited to its resolved state without copying the terminal answer into Telegram.
+- Telegram answers, terminal/Telegram cancellation, and secret completion all edit the original card instead of adding completion replies.
 - Direct text replies remain available for freeform answers, numbered/exact choices, and `/cancel`.
-- Cancellation is mirrored to the other channel.
-- Secret answers and callback notices are represented only as `[secret provided]`; the raw value is never mirrored or stored in Pi.
+- A secret question sends only a redacted passive alert and must be answered in the terminal; it never starts Telegram polling or exposes the prompt, options, or answer.
 
 The service accepts only callbacks or text replies from the configured chat/topic and routes them by the exact Telegram question message. Callback indexes are mapped to the current typed choices rather than trusting answer text from Telegram. Callback queries are acknowledged, and stale or resolved keyboards are cleared. Stale and unrelated updates cannot answer a question.
 
@@ -141,11 +145,11 @@ This explicitly sends one test message. Nothing is sent automatically during sta
 
 ## Security and privacy
 
-Telegram is an external service. Goal summaries, questions, and non-secret answers sent through it leave the local machine and are retained under Telegram's policies.
+Telegram is an external service. Goal summaries, non-secret questions, and answers entered through Telegram leave the local machine and are retained under Telegram's policies.
 
 The config contains a plaintext credential. Do not commit or share it. On Unix, the loader rejects symlinks, non-regular files, foreign ownership, group/other permissions, and files over 64 KiB. Windows relies on ACLs. Errors and tool results never expose the token or token-bearing request URL.
 
-A question marked `secret` is masked and omitted from Pi's transcript, but a secret entered in Telegram is still retained by Telegram. Prefer terminal input when that retention is unacceptable.
+A question marked `secret` is masked and omitted from Pi's transcript. Telegram receives only a redacted notification that secret input is waiting; the prompt text, options, and answer remain terminal-only.
 
 ## Delivery guarantees
 

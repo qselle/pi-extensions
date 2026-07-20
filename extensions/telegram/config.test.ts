@@ -28,7 +28,13 @@ test("keeps environment-only Telegram configuration available", () => {
     PI_TELEGRAM_CHAT_ID: "123456789",
   })).toEqual({
     status: "enabled",
-    config: { botToken: TOKEN, chatId: "123456789", threadId: undefined, details: "summary" },
+    config: {
+      botToken: TOKEN,
+      chatId: "123456789",
+      threadId: undefined,
+      details: "summary",
+      questionDelayMinutes: 0,
+    },
   });
 });
 
@@ -53,6 +59,11 @@ test("validates Telegram configuration without exposing secrets", () => {
   }).status).toBe("invalid");
   expect(readTelegramConfig({
     PI_TELEGRAM_BOT_TOKEN: TOKEN,
+    PI_TELEGRAM_CHAT_ID: "123456789",
+    PI_TELEGRAM_QUESTION_DELAY_MINUTES: "-1",
+  }).status).toBe("invalid");
+  expect(readTelegramConfig({
+    PI_TELEGRAM_BOT_TOKEN: TOKEN,
     PI_TELEGRAM_CHAT_ID: "@valid_channel",
     PI_TELEGRAM_GOAL_DETAILS: "everything",
   }).status).toBe("invalid");
@@ -71,6 +82,7 @@ test("loads optional thread and detail settings", () => {
       chatId: "-1001234567890",
       threadId: 42,
       details: "full",
+      questionDelayMinutes: 0,
     },
   });
 });
@@ -92,11 +104,13 @@ test("loads a secure file and applies per-field environment overrides", () => {
       chatId: "111111111",
       threadId: 42,
       details: "full",
+      questionDelayMinutes: 3,
     });
     expect(loadTelegramConfig({
       env: {
         PI_TELEGRAM_CHAT_ID: "222222222",
         PI_TELEGRAM_GOAL_DETAILS: "minimal",
+        PI_TELEGRAM_QUESTION_DELAY_MINUTES: "1.5",
       },
       configFile: path,
     })).toEqual({
@@ -106,6 +120,7 @@ test("loads a secure file and applies per-field environment overrides", () => {
         chatId: "222222222",
         threadId: 42,
         details: "minimal",
+        questionDelayMinutes: 1.5,
       },
     });
   } finally {
@@ -124,7 +139,13 @@ test("loads the legacy telegram-notify config when the new default is absent", (
       env: { PI_CODING_AGENT_DIR: directory },
     })).toEqual({
       status: "enabled",
-      config: { botToken: TOKEN, chatId: "444444444", threadId: undefined, details: "summary" },
+      config: {
+        botToken: TOKEN,
+        chatId: "444444444",
+        threadId: undefined,
+        details: "summary",
+        questionDelayMinutes: 0,
+      },
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -142,7 +163,13 @@ test("supports an environment-only quick test when the default file is absent", 
       },
     })).toEqual({
       status: "enabled",
-      config: { botToken: OTHER_TOKEN, chatId: "333333333", threadId: undefined, details: "summary" },
+      config: {
+        botToken: OTHER_TOKEN,
+        chatId: "333333333",
+        threadId: undefined,
+        details: "summary",
+        questionDelayMinutes: 0,
+      },
     });
     expect(loadTelegramConfig({
       env: { PI_TELEGRAM_CONFIG_FILE: join(directory, "missing.json") },
@@ -172,6 +199,12 @@ test("rejects malformed, unknown, oversized, and non-regular config files", () =
     expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
       status: "invalid",
       message: expect.stringContaining("unsupported field"),
+    });
+
+    writeSecure(path, { botToken: TOKEN, chatId: "1", questionDelayMinutes: "later" });
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("questionDelayMinutes must be a finite number"),
     });
 
     writeFileSync(path, "x".repeat(MAX_TELEGRAM_CONFIG_BYTES + 1), { mode: 0o600 });

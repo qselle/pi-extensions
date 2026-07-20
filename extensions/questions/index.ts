@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { homedir } from "node:os";
+import { basename, resolve } from "node:path";
 import { getTelegramService, type TelegramService } from "../telegram/service.ts";
 import {
   MAX_ID_CHARS,
@@ -111,14 +113,20 @@ export default function questionsExtension(
         : options.telegramService ?? getTelegramService();
       let interrupted = false;
       let telegramWarningShown = false;
+      let telegramActivated = false;
+      const contextLabel = telegramContextLabel(pi.getSessionName?.(), ctx.cwd || process.cwd());
 
       try {
         for (const [index, question] of questions.entries()) {
           setAttentionTitle(pi, ctx, index, questions.length);
           const sources = [];
-          const terminal = createTerminalReplySource(ctx, question, index, questions.length, Boolean(telegram));
+          const terminal = createTerminalReplySource(ctx, question, index, questions.length, Boolean(telegram && !question.secret));
           const telegramReply = telegram
-            ? createTelegramQuestionReply(telegram, question, index, questions.length)
+            ? createTelegramQuestionReply(telegram, question, index, questions.length, {
+                contextLabel,
+                delayMs: telegramActivated ? 0 : telegram.questionDelayMs ?? 0,
+                onOpened: () => { telegramActivated = true; },
+              })
             : undefined;
           if (terminal) sources.push(terminal);
           if (telegramReply) sources.push(telegramReply.source);
@@ -175,9 +183,14 @@ export default function questionsExtension(
         .filter(hasAnswer)
         .map((answer) => `${answer.id}: ${answer.secret ? "[secret provided]" : answer.answer}${answer.source === "telegram" ? " [via Telegram]" : ""}`)
         .join("\n");
-      const unavailable = interrupted && answers.length === 1 && !answers[0].source && sourcesUnavailable(ctx, telegram);
+      const unavailable = interrupted
+        && answers.length === 1
+        && !answers[0].source
+        && sourcesUnavailable(ctx, telegram, Boolean(answers[0].secret));
       const suffix = unavailable
-        ? "No reply channel is available. Open Pi in TUI mode or configure Telegram."
+        ? answers[0].secret
+          ? "Secret questions require Pi in TUI mode."
+          : "No reply channel is available. Open Pi in TUI mode or configure Telegram."
         : "Questionnaire interrupted";
       return {
         content: [{ type: "text", text: interrupted ? `${response}\n${suffix}`.trim() : response }],
@@ -195,6 +208,17 @@ export default function questionsExtension(
 
 }
 
-function sourcesUnavailable(ctx: ExtensionContext, telegram: TelegramService | undefined): boolean {
-  return ctx.mode !== "tui" && !telegram;
+function sourcesUnavailable(
+  ctx: ExtensionContext,
+  telegram: TelegramService | undefined,
+  secret: boolean,
+): boolean {
+  return ctx.mode !== "tui" && (!telegram || secret);
+}
+
+export function telegramContextLabel(sessionName: string | undefined, cwd: string, home = homedir()): string {
+  const title = sessionName?.trim();
+  if (title) return title;
+  const resolved = resolve(cwd);
+  return resolved === resolve(home) ? "pi" : basename(resolved) || "pi";
 }

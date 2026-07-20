@@ -4,11 +4,11 @@ Claude Code-style structured questions for Pi, with terminal and Telegram replie
 
 ## Behavior
 
-For every question, Pi opens a terminal picker and—when the optional Telegram hub is enabled—sends the same question to Telegram. Both remain visible at the same time and the first valid reply wins:
+For every non-secret question, Pi opens a terminal picker and—when the optional Telegram hub is enabled—offers the same question through Telegram. Delivery is simultaneous by default, or the first Telegram card can be delayed by configuration. The first valid reply wins:
 
-- a terminal answer immediately stops Telegram polling and is mirrored to Telegram
-- a Telegram answer immediately closes the terminal picker and appears in the terminal result
-- Escape or `/cancel` interrupts the questionnaire and is mirrored to the other channel
+- a terminal answer immediately stops Telegram polling and edits the Telegram card to show completion without copying the answer
+- a Telegram answer immediately closes the terminal picker, appears in the terminal result, and updates the original card
+- Escape or `/cancel` interrupts the questionnaire and updates the other channel
 - a Telegram delivery or polling failure leaves the terminal picker usable
 
 Questions run sequentially. The picker shows numbered options in a bordered Claude-style panel. `Other` is the final choice by default and opens a freeform input; set `allow_other: false` to restrict a question to its listed options. Questions without options always use freeform input.
@@ -53,9 +53,10 @@ The extension optionally acquires the shared service documented by [`telegram`](
 export PI_TELEGRAM_BOT_TOKEN="<token from BotFather>"
 export PI_TELEGRAM_CHAT_ID="<numeric chat ID or @username>"
 export PI_TELEGRAM_THREAD_ID="<optional forum topic ID>"
+export PI_TELEGRAM_QUESTION_DELAY_MINUTES="<optional first-alert delay; default 0>"
 ```
 
-Telegram mirrors the terminal interaction style:
+Telegram uses compact HTML cards labelled with the Pi session title, or the project directory when no title is set. The first card can be delayed with `questionDelayMinutes`/`PI_TELEGRAM_QUESTION_DELAY_MINUTES`; if terminal input wins before the delay, no card is sent. After one card opens, later questions in that questionnaire are delivered immediately.
 
 - Questions with listed options show an inline keyboard with one choice per row.
 - Questions without options use Telegram `ForceReply` for free text.
@@ -69,7 +70,7 @@ For safety, the central poller accepts only:
 3. a callback on, or direct reply to, the exact Telegram question message
 4. a callback index that maps to a current listed choice
 
-Old updates are drained before the first question is sent. Unrelated messages, stale buttons, stale replies, other chats, and other topics cannot win the race. Callback queries are acknowledged, and inline controls are removed as soon as Telegram, the terminal, cancellation, or shutdown closes the question. The winning non-secret answer is displayed in both channels; secret answers and callback acknowledgements use only `[secret provided]`.
+Old updates are drained before the first interactive question is sent. Unrelated messages, stale buttons, stale replies, other chats, and other topics cannot win the race. Callback queries are acknowledged, and inline controls are removed as soon as Telegram, the terminal, cancellation, or shutdown closes the question. Resolution edits the original card. Telegram-entered answers remain visible there; terminal-entered answers are not copied to Telegram.
 
 ### Telegram Bot API limitations
 
@@ -80,13 +81,13 @@ Telegram reply support uses long polling through `getUpdates`:
 - Bots need permission to read replies in the configured group or topic.
 - Telegram delivery and polling are best effort. Network or Telegram failures do not prevent terminal answers.
 
-In non-interactive Pi modes, Telegram can be the only reply channel. Without TUI or valid Telegram configuration, the tool returns a clear interruption instead of waiting forever.
+In non-interactive Pi modes, Telegram can be the only reply channel for non-secret questions. Without TUI or valid Telegram configuration—or for a secret question outside TUI—the tool returns a clear interruption instead of waiting forever.
 
 ## Secret questions
 
 Set `secret: true` to mask terminal input and omit the value from Pi's transcript. Pi stores only `[secret provided]`.
 
-A secret sent through Telegram is still visible to and retained by Telegram. The bot includes this warning in the question. Use the terminal for secrets when Telegram retention is unacceptable.
+Secret questions are terminal-only. If Telegram is enabled, it receives a passive redacted card saying that secure input is waiting; the question text, choices, and answer are never sent, and no Telegram polling starts for that card. Completion edits the card to `Answered securely in Pi` without exposing the value.
 
 ## Configuration lifecycle
 
@@ -97,7 +98,7 @@ This extension ignores the Telegram service in `PI_SUBAGENT_CHILD` processes so 
 ## Dependencies and limitations
 
 - **Runtime:** Pi's public extension and TUI APIs.
-- **Optional integration:** [`telegram`](../telegram/) adds simultaneous remote questions when enabled; terminal questions do not depend on it.
+- **Optional integration:** [`telegram`](../telegram/) adds simultaneous or configured-delay remote questions when enabled; terminal questions do not depend on it.
 - **Third-party packages:** None.
 - **Platforms:** Terminal interaction is cross-platform. Telegram requires outbound HTTPS access.
 - **Limits:** Four questions per call, eight listed options per question, and 4,000 characters per freeform answer.
