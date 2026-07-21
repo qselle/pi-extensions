@@ -21,6 +21,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |
 | [`plan`](extensions/plan/) | Tactical execution plans with an independent progress card |
 | [`questions`](extensions/questions/) | Claude-style questions with first-reply-wins terminal and optional Telegram input |
+| [`side-chat`](extensions/side-chat/) | Persistent, multi-turn side conversations you can spawn, follow up, and navigate during a long-running job |
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
 | [`telegram`](extensions/telegram/) | Optional shared Telegram hub for goals, questions, and future extensions |
 
@@ -29,6 +30,7 @@ Use `pi config` to enable or disable individual extensions.
 | Key | Action |
 |---|---|
 | `Ctrl+R` | Fuzzy-search prompt history |
+| `Ctrl+Shift+S` | Open the side-chat workspace |
 | `Ctrl+Shift+O` | Show or hide the workflow overlay stack |
 | `Ctrl+Shift+C` | Show or hide the input-bar cat |
 
