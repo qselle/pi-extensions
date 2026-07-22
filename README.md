@@ -16,6 +16,7 @@ Use `pi config` to enable or disable individual extensions.
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
 | [`file-changes`](extensions/file-changes/) | Live and last-run summaries of files changed by agent tools |
+| [`footer`](extensions/footer/) | Single-line Codex-style status bar: model+effort, Ready/Working status, context, and cost |
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |

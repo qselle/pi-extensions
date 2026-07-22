@@ -1,0 +1,236 @@
+/**
+ * tool-render — restyles pi's built-in tools into Codex-style transcript blocks:
+ *
+ *   • Ran bun test
+ *     └ 12 pass  0 fail
+ *
+ *   • Edited src/auth.ts
+ *     └ 41 - return a - b
+ *       41 + return a + b
+ *
+ * A subtle `•` status bullet + bold verb + target on line 1, then the output or
+ * diff indented under a dim `└` branch. The command/path is shown once (in the
+ * headline) — never duplicated.
+ *
+ * Safety: execution is untouched (each tool spreads the exported
+ * createXToolDefinition, preserving execute/params/details); only rendering
+ * changes. Every line is width-fit and each component catches its own errors, so
+ * a display bug degrades to one plain line rather than crashing the TUI.
+ * Reversible via ~/.pi/agent/tool-render.json { "enabled": false } or
+ * /tool-render off + /reload. No monkey-patching.
+ */
+
+import {
+	createBashToolDefinition,
+	createEditToolDefinition,
+	createFindToolDefinition,
+	createGrepToolDefinition,
+	createLsToolDefinition,
+	createReadToolDefinition,
+	createWriteToolDefinition,
+	getAgentDir,
+	getLanguageFromPath,
+	highlightCode,
+	type ExtensionAPI,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+	boundTail,
+	fileLink,
+	firstLine,
+	resultText,
+	summarize,
+	targetFor,
+	toAbs,
+	verbFor,
+	type ToolName,
+} from "./render.ts";
+import { contentToAddRows, gutterWidth, parseUnifiedPatch, type DiffRow } from "./diff.ts";
+
+const BULLET = "•";
+const BRANCH = "└";
+const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
+
+/** Hard-fit a (possibly ANSI-colored) line to `width`; never returns wider. */
+const fit = (s: string, width: number): string =>
+	visibleWidth(s) <= width ? s : truncateToWidth(s, width, "…");
+
+/** A width-safe component: re-fits on resize and can never throw out of render(). */
+class Lines implements Component {
+	constructor(
+		private readonly build: (width: number) => string[],
+		private readonly fallback: string,
+	) {}
+	render(width: number): string[] {
+		const w = Math.max(1, width);
+		try {
+			return this.build(w).map((l) => fit(l, w));
+		} catch {
+			return [fit(this.fallback, w)];
+		}
+	}
+	invalidate(): void {}
+}
+
+/** Subtle status bullet: red on error, otherwise muted (Codex keeps it quiet). */
+function bullet(theme: Theme, ctx: any): string {
+	return theme.fg(ctx?.isError ? "error" : "muted", BULLET);
+}
+
+/** Indent detail lines under a dim `└` branch (Codex style): first line gets the
+ *  branch, the rest align beneath it. Content is fit to the remaining width. */
+function branchBody(theme: Theme, contentLines: string[], width: number): string[] {
+	const inner = Math.max(1, width - 4);
+	const first = `${theme.fg("dim", `  ${BRANCH} `)}`;
+	const rest = "    ";
+	return contentLines.map((line, i) => (i === 0 ? first : rest) + fit(line, inner));
+}
+
+/** bash: output only (the command is already in the headline), bounded. */
+function bashBody(result: any, opts: any, theme: Theme, width: number): string[] {
+	const { text } = resultText(result);
+	if (text.trim().length === 0) return [];
+	const { lines, omitted } = boundTail(text, opts?.expanded ? 200 : 8);
+	const body: string[] = [];
+	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines`));
+	for (const l of lines) body.push(theme.fg("toolOutput", l));
+	return branchBody(theme, body, width);
+}
+
+/** Codex-style diff: line-numbered, syntax-highlighted, +/- colored — no wash. */
+function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, expanded: boolean): string[] {
+	if (rows.length === 0) return [];
+	const gw = gutterWidth(rows);
+	const lang = path ? getLanguageFromPath(path) : undefined;
+	const contents = rows.map((r) => r.content);
+	let hl: string[] = contents;
+	if (lang) {
+		try {
+			const out = highlightCode(contents.join("\n"), lang);
+			if (out.length === rows.length) hl = out;
+		} catch {
+			// keep raw content
+		}
+	}
+	const maxRows = expanded ? 400 : 12;
+	const shown = rows.slice(0, maxRows);
+	const omitted = rows.length - shown.length;
+	const lines = shown.map((row, i) => {
+		const num = theme.fg("dim", String(row.num).padStart(gw));
+		const code = hl[i] ?? row.content;
+		if (row.kind === "ctx") return `${num}   ${code}`;
+		const marker = theme.fg(row.kind === "add" ? "toolDiffAdded" : "toolDiffRemoved", row.kind === "add" ? "+" : "-");
+		return `${num} ${marker} ${code}`;
+	});
+	if (omitted > 0) lines.push(theme.fg("dim", `… +${omitted} lines`));
+	return branchBody(theme, lines, width);
+}
+
+function makeRenderCall(name: ToolName) {
+	return (args: any, theme: Theme, ctx: any): Component => {
+		const a = args ?? ctx?.args;
+		const build = (width: number): string[] => {
+			const running = name === "bash" && ctx?.executionStarted && ctx?.isPartial;
+			const verbText = name === "bash" && running ? "Running" : verbFor(name);
+			const verb = theme.bold(theme.fg("text", verbText));
+			const target = targetFor(name, a);
+			if (!target) return [`${bullet(theme, ctx)} ${verb}`];
+			const shown = fit(target, Math.max(3, width - (verbText.length + 3)));
+			const colored = theme.fg("muted", shown);
+			const targetPart = PATH_TOOLS.has(name)
+				? fileLink(colored, toAbs(String(a?.path ?? a?.dir ?? "."), ctx?.cwd ?? process.cwd()))
+				: colored;
+			return [`${bullet(theme, ctx)} ${verb} ${targetPart}`];
+		};
+		return new Lines(build, `${verbFor(name)} ${targetFor(name, a)}`.trim());
+	};
+}
+
+function makeRenderResult(name: ToolName) {
+	return (result: any, opts: any, theme: Theme, ctx: any): Component => {
+		const build = (width: number): string[] => {
+			if (ctx?.isError) {
+				const msg = firstLine(resultText(result).text).trim() || "failed";
+				return branchBody(theme, [theme.fg("error", msg)], width);
+			}
+			if (name === "bash") return bashBody(result, opts, theme, width);
+			if (name === "edit") {
+				const rows = parseUnifiedPatch(result?.details?.patch ?? "");
+				if (rows.length > 0) return diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded);
+			}
+			if (name === "write") {
+				const content = typeof ctx?.args?.content === "string" ? ctx.args.content : "";
+				const rows = contentToAddRows(content);
+				if (rows.length > 0) return diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded);
+			}
+			if (opts?.isPartial) return branchBody(theme, [theme.fg("muted", "…")], width);
+			const summary = summarize(name, result, ctx?.args);
+			return summary ? branchBody(theme, [theme.fg("muted", summary)], width) : [];
+		};
+		return new Lines(build, summarize(name, result, ctx?.args) || "done");
+	};
+}
+
+const configPath = () => join(getAgentDir(), "tool-render.json");
+
+function readEnabled(): boolean {
+	try {
+		return JSON.parse(readFileSync(configPath(), "utf8"))?.enabled !== false;
+	} catch {
+		return true;
+	}
+}
+
+function writeEnabled(on: boolean): void {
+	try {
+		writeFileSync(configPath(), `${JSON.stringify({ enabled: on }, null, 2)}\n`);
+	} catch {
+		// best-effort; toggling is a convenience, not critical
+	}
+}
+
+export default function toolRenderExtension(pi: ExtensionAPI): void {
+	if (readEnabled()) {
+		const cwd = process.cwd();
+		const factories: Record<ToolName, (dir: string) => any> = {
+			read: createReadToolDefinition,
+			write: createWriteToolDefinition,
+			edit: createEditToolDefinition,
+			bash: createBashToolDefinition,
+			grep: createGrepToolDefinition,
+			find: createFindToolDefinition,
+			ls: createLsToolDefinition,
+		};
+		for (const name of Object.keys(factories) as ToolName[]) {
+			try {
+				pi.registerTool({
+					...factories[name](cwd),
+					renderShell: "self",
+					renderCall: makeRenderCall(name),
+					renderResult: makeRenderResult(name),
+				});
+			} catch {
+				// Leave this tool as pi's built-in if the override can't be registered.
+			}
+		}
+	}
+
+	pi.registerCommand("tool-render", {
+		description: "Toggle Codex-style tool rendering (reload to apply)",
+		handler: async (args: string, ctx: any) => {
+			const arg = String(args ?? "").trim().toLowerCase();
+			if (arg === "on" || arg === "off") {
+				writeEnabled(arg === "on");
+				ctx.ui.notify(`tool-render ${arg} — run /reload or restart to apply.`, "info");
+			} else {
+				ctx.ui.notify(
+					`tool-render is currently ${readEnabled() ? "on" : "off"}. Use \`/tool-render on|off\` (reload to apply).`,
+					"info",
+				);
+			}
+		},
+	});
+}
