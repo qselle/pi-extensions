@@ -15,6 +15,7 @@ Use `pi config` to enable or disable individual extensions.
 | Extension | Description |
 |---|---|
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat sitting on the input bar |
+| [`codex-prompt`](extensions/codex-prompt/) | Flat Codex-style `›` input prompt instead of pi's ruled editor box |
 | [`file-changes`](extensions/file-changes/) | Live and last-run summaries of files changed by agent tools |
 | [`footer`](extensions/footer/) | Single-line Codex-style status bar: model+effort, Ready/Working status, context, and cost |
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
@@ -26,6 +27,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
 | [`telegram`](extensions/telegram/) | Optional shared Telegram hub for goals, questions, and future extensions |
 | [`tool-render`](extensions/tool-render/) | Codex-style tool blocks: reason-first headline + accent left rail, replacing pi's default card |
+| [`turn-separator`](extensions/turn-separator/) | Dim "Worked for <time>" rule between assistant messages that follow tool work |
 
 ## Custom keybindings
 
