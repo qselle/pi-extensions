@@ -25,6 +25,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`side-chat`](extensions/side-chat/) | Persistent, multi-turn side conversations you can spawn, follow up, and navigate during a long-running job |
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
 | [`telegram`](extensions/telegram/) | Optional shared Telegram hub for goals, questions, and future extensions |
+| [`tool-render`](extensions/tool-render/) | Codex-style tool blocks: reason-first headline + accent left rail, replacing pi's default card |
 
 ## Custom keybindings
 
