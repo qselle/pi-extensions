@@ -17,6 +17,11 @@ is shown once (in the headline), never duplicated.
     41 - return a - b
     41 + return a + b
     42 }
+
+• Explored
+  ├ Read src/auth.ts
+  ├ Read src/footer.ts
+  └ Searched "verify("
 ```
 
 - **Headline** (`• Verb target`) — a subtle status bullet (muted, red on error) +
@@ -26,6 +31,10 @@ is shown once (in the headline), never duplicated.
   of output; `edit`/`write` render a line-numbered, syntax-highlighted diff with
   `+`/`-` colored markers (no background wash); read-only tools (`read`, `ls`,
   `grep`, `find`) show a one-line count summary. `Ctrl+O` expands output/diffs.
+- **Grouping** — consecutive exploration calls (`read`/`grep`/`find`/`ls`) collapse
+  into one `• Explored` block (a `├`/`└` tree of what was read/searched), so a burst
+  of reads doesn't flood the transcript. Any other tool or a new assistant message
+  starts a fresh block.
 
 ## Safety
 
@@ -49,8 +58,9 @@ is shown once (in the headline), never duplicated.
   per tool at startup. This is expected.
 - `read` results are summarized to a line count; inline image previews are not
   rendered in this compact view (open the file to view it).
-- Consecutive exploration calls are not yet grouped into a single block; each
-  call renders its own two-line block.
+- Exploration grouping is live-only: after a reload, restored exploration calls
+  render as individual standalone blocks (the grouping isn't rebuilt from the
+  session).
 
 ## Dependencies
 

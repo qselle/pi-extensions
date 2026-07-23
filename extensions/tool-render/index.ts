@@ -49,6 +49,17 @@ import {
 	type ToolName,
 } from "./render.ts";
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, type DiffRow } from "./diff.ts";
+import {
+	EXPLORATION_TOOLS,
+	bindLeaderRerender,
+	closeGroup,
+	groupState,
+	isLeader,
+	noteEnd,
+	noteStart,
+	resetExploration,
+	type Activity,
+} from "./exploration.ts";
 
 const BULLET = "•";
 const BRANCH = "└";
@@ -129,8 +140,41 @@ function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, ex
 	return branchBody(theme, lines, width);
 }
 
+/** The grouped `• Explored` block (one leader renders it; followers render empty). */
+function explorationBlock(activities: Activity[], active: boolean, theme: Theme, width: number): string[] {
+	const dot = theme.fg(active ? "accent" : "muted", BULLET);
+	const title = theme.bold(theme.fg("text", active ? "Exploring" : "Explored"));
+	const inner = Math.max(1, width - 4);
+	const lines = [fit(`${dot} ${title}`, width)];
+	activities.forEach((act, i) => {
+		const connector = theme.fg("dim", `  ${i === activities.length - 1 ? "└" : "├"} `);
+		const verb = theme.fg("muted", act.verb);
+		const detail = theme.fg(act.status === "error" ? "error" : "text", act.detail);
+		lines.push(connector + fit(`${verb} ${detail}`, inner));
+	});
+	return lines;
+}
+
+/** Fallback for an ungrouped exploration call (e.g. after reload): headline + summary. */
+function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: any, width: number): string[] {
+	const verb = theme.bold(theme.fg("text", verbFor(name)));
+	const target = targetFor(name, ctx?.args);
+	const head = target
+		? `${bullet(theme, ctx)} ${verb} ${theme.fg("muted", fit(target, Math.max(3, width - (verbFor(name).length + 3))))}`
+		: `${bullet(theme, ctx)} ${verb}`;
+	if (ctx?.isError) {
+		const msg = firstLine(resultText(result).text).trim() || "failed";
+		return [head, ...branchBody(theme, [theme.fg("error", msg)], width)];
+	}
+	const summary = summarize(name, result, ctx?.args);
+	return summary ? [head, ...branchBody(theme, [theme.fg("muted", summary)], width)] : [head];
+}
+
 function makeRenderCall(name: ToolName) {
 	return (args: any, theme: Theme, ctx: any): Component => {
+		// Exploration tools show nothing on the call line; the grouped block (or a
+		// standalone block) is rendered by the result slot.
+		if (EXPLORATION_TOOLS.has(name)) return new Lines(() => [], "");
 		const a = args ?? ctx?.args;
 		const build = (width: number): string[] => {
 			const running = name === "bash" && ctx?.executionStarted && ctx?.isPartial;
@@ -151,6 +195,21 @@ function makeRenderCall(name: ToolName) {
 
 function makeRenderResult(name: ToolName) {
 	return (result: any, opts: any, theme: Theme, ctx: any): Component => {
+		if (EXPLORATION_TOOLS.has(name)) {
+			return new Lines((width: number): string[] => {
+				const st = groupState(ctx?.toolCallId);
+				if (!st) return standaloneExploration(name, result, theme, ctx, width);
+				if (!isLeader(ctx?.toolCallId)) return []; // follower — renders nothing
+				bindLeaderRerender(ctx?.toolCallId, () => {
+					try {
+						ctx.invalidate();
+					} catch {
+						// ignore
+					}
+				});
+				return explorationBlock(st.activities, st.active, theme, width);
+			}, summarize(name, result, ctx?.args) || "done");
+		}
 		const build = (width: number): string[] => {
 			if (ctx?.isError) {
 				const msg = firstLine(resultText(result).text).trim() || "failed";
@@ -216,6 +275,21 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 				// Leave this tool as pi's built-in if the override can't be registered.
 			}
 		}
+
+		// Exploration grouping: track runs of read/grep/find/ls, broken by any
+		// other tool or a new assistant message.
+		resetExploration();
+		pi.on("session_start", () => resetExploration());
+		pi.on("tool_execution_start", (event: any) => {
+			if (EXPLORATION_TOOLS.has(event?.toolName)) noteStart(event.toolCallId, event.toolName, event.args);
+			else closeGroup();
+		});
+		pi.on("tool_execution_end", (event: any) => {
+			if (EXPLORATION_TOOLS.has(event?.toolName)) noteEnd(event.toolCallId, !!event.isError);
+		});
+		pi.on("message_start", (event: any) => {
+			if (event?.message?.role === "assistant") closeGroup();
+		});
 	}
 
 	pi.registerCommand("tool-render", {
