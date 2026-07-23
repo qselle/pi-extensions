@@ -1,7 +1,6 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Input,
-  Key,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -10,6 +9,21 @@ import {
   type Focusable,
   type TUI,
 } from "@earendil-works/pi-tui";
+
+// pi-tui's `Key` value export isn't reliably importable across runtimes (it
+// fails to load under some). Its values are plain key-id strings that
+// matchesKey accepts, so define the ones we use locally.
+const Key = {
+  up: "up",
+  down: "down",
+  right: "right",
+  enter: "enter",
+  escape: "escape",
+  home: "home",
+  end: "end",
+  pageUp: "pageUp",
+  pageDown: "pageDown",
+} as const;
 import { compactText } from "./prompts.ts";
 import { formatSideUsage, isEmptyUsage } from "./usage.ts";
 import { modelLabel, type SideChat } from "./types.ts";

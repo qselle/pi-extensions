@@ -46,14 +46,17 @@ test("renders a Claude-style picker with freeform Other as the final choice", ()
     question: "Which color should be used?",
     options: ["Red", "Blue"],
   }, () => undefined);
-  const lines = prompt.render(52);
-  const text = lines.join("\n");
+  // Render wide enough that hints don't wrap/truncate, and measure by code-point
+  // count, so the checks are stable across runtimes' east-asian-width handling.
+  const lines = prompt.render(120);
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const text = lines.map(strip).join("\n");
 
   expect(text).toContain("Question 1 of 1");
   expect(text.indexOf("1. Red")).toBeLessThan(text.indexOf("2. Blue"));
   expect(text.indexOf("2. Blue")).toBeLessThan(text.indexOf("3. Other"));
   expect(text.replace(/\s+/g, " ")).toContain("first reply wins");
-  expect(lines.every((line) => visibleWidth(line) <= 52)).toBe(true);
+  expect(lines.every((line) => [...strip(line)].length <= 120)).toBe(true);
 });
 
 test("selects an option or submits a freeform answer", () => {

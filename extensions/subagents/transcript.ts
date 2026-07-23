@@ -1,6 +1,5 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
-  Key,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -9,6 +8,10 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { AgentTranscript } from "./coordinator.ts";
+
+// pi-tui's `Key` value export isn't reliably importable across runtimes; its
+// values are plain key-id strings that matchesKey accepts.
+const Key = { home: "home", end: "end" } as const;
 
 export class LiveTranscriptViewer implements Component {
   private scroll = 0;
