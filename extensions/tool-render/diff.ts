@@ -67,3 +67,14 @@ export function washLine(bgAnsi: string, precolored: string, visibleLen: number,
 	const pad = visibleLen < width ? " ".repeat(width - visibleLen) : "";
 	return `${bgAnsi}${body}${pad}\x1b[0m`;
 }
+
+/** Count added/removed rows in a parsed diff (context rows ignored). */
+export function diffCounts(rows: DiffRow[]): { added: number; removed: number } {
+	let added = 0;
+	let removed = 0;
+	for (const r of rows) {
+		if (r.kind === "add") added++;
+		else if (r.kind === "del") removed++;
+	}
+	return { added, removed };
+}

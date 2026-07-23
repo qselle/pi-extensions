@@ -4,9 +4,9 @@
  *   • Ran bun test
  *     └ 12 pass  0 fail
  *
- *   • Edited src/auth.ts
- *     └ 41 - return a - b
- *       41 + return a + b
+ *   • Edited src/auth.ts (+1 -1)
+ *     41 - return a - b
+ *     41 + return a + b
  *
  * A subtle `•` status bullet + bold verb + target on line 1, then the output or
  * diff indented under a dim `└` branch. The command/path is shown once (in the
@@ -48,7 +48,7 @@ import {
 	verbFor,
 	type ToolName,
 } from "./render.ts";
-import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, type DiffRow } from "./diff.ts";
+import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -146,6 +146,37 @@ function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, ex
 	return lines;
 }
 
+/** `(+A -B)` count label — additions green, removals red, parens dim (Codex). */
+function countLabel(theme: Theme, added: number, removed: number): string {
+	const parts = [theme.fg("toolDiffAdded", `+${added}`)];
+	if (removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${removed}`));
+	return `${theme.fg("dim", "(")}${parts.join(" ")}${theme.fg("dim", ")")}`;
+}
+
+/** `• Edited path (+A -B)` headline for edit/write (rendered result-side so the
+ *  count can come from the patch). Omits the count when `count` is undefined. */
+function diffHeadline(
+	name: ToolName,
+	theme: Theme,
+	ctx: any,
+	width: number,
+	count?: { added: number; removed: number },
+): string {
+	const verbText = verbFor(name);
+	const verb = theme.bold(theme.fg("text", verbText));
+	const label = count ? countLabel(theme, count.added, count.removed) : "";
+	const overhead = 3 + verbText.length + (label ? 1 + visibleWidth(label) : 0);
+	const a = ctx?.args;
+	const target = String(targetFor(name, a) ?? "");
+	const parts = [bullet(theme, ctx), verb];
+	if (target) {
+		const colored = theme.fg("muted", fit(target, Math.max(3, width - overhead)));
+		parts.push(fileLink(colored, toAbs(String(a?.path ?? "."), ctx?.cwd ?? process.cwd())));
+	}
+	if (label) parts.push(label);
+	return parts.join(" ");
+}
+
 /** The grouped `• Explored` block (one leader renders it; followers render empty). */
 function explorationBlock(activities: Activity[], active: boolean, theme: Theme, width: number): string[] {
 	const dot = theme.fg(active ? "accent" : "muted", BULLET);
@@ -181,6 +212,8 @@ function makeRenderCall(name: ToolName) {
 		// Exploration tools show nothing on the call line; the grouped block (or a
 		// standalone block) is rendered by the result slot.
 		if (EXPLORATION_TOOLS.has(name)) return new Lines(() => [], "");
+		// edit/write render their headline result-side (the +/- count needs the patch).
+		if (name === "edit" || name === "write") return new Lines(() => [], "");
 		const a = args ?? ctx?.args;
 		const build = (width: number): string[] => {
 			const running = name === "bash" && ctx?.executionStarted && ctx?.isPartial;
@@ -217,20 +250,28 @@ function makeRenderResult(name: ToolName) {
 			}, summarize(name, result, ctx?.args) || "done");
 		}
 		const build = (width: number): string[] => {
+			// edit/write own their headline here (renderCall is empty) so the +/-
+			// count can be read from the result patch.
+			if (name === "edit" || name === "write") {
+				if (ctx?.isError) {
+					const msg = firstLine(resultText(result).text).trim() || "failed";
+					return [diffHeadline(name, theme, ctx, width), ...branchBody(theme, [theme.fg("error", msg)], width)];
+				}
+				const rows =
+					name === "edit"
+						? parseUnifiedPatch(result?.details?.patch ?? "")
+						: contentToAddRows(typeof ctx?.args?.content === "string" ? ctx.args.content : "");
+				const { added, removed } = diffCounts(rows);
+				const head = diffHeadline(name, theme, ctx, width, { added, removed });
+				return rows.length > 0
+					? [head, ...diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded)]
+					: [head];
+			}
 			if (ctx?.isError) {
 				const msg = firstLine(resultText(result).text).trim() || "failed";
 				return branchBody(theme, [theme.fg("error", msg)], width);
 			}
 			if (name === "bash") return bashBody(result, opts, theme, width);
-			if (name === "edit") {
-				const rows = parseUnifiedPatch(result?.details?.patch ?? "");
-				if (rows.length > 0) return diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded);
-			}
-			if (name === "write") {
-				const content = typeof ctx?.args?.content === "string" ? ctx.args.content : "";
-				const rows = contentToAddRows(content);
-				if (rows.length > 0) return diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded);
-			}
 			if (opts?.isPartial) return branchBody(theme, [theme.fg("muted", "…")], width);
 			const summary = summarize(name, result, ctx?.args);
 			return summary ? branchBody(theme, [theme.fg("muted", summary)], width) : [];

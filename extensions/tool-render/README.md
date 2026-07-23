@@ -12,7 +12,7 @@ is shown once (in the headline), never duplicated.
 • Read src/auth.ts
   └ 42 lines
 
-• Edited src/auth.ts
+• Edited src/auth.ts (+1 -1)
    40   export function add(a, b) {
    41 - return a - b
    41 + return a + b
@@ -29,7 +29,8 @@ is shown once (in the headline), never duplicated.
   target is a clickable OSC 8 hyperlink; `bash` shows the command (once).
 - **Body** — detail indented under a dim `└` branch. `bash` shows a bounded tail
   of output; `edit`/`write` render a line-numbered, syntax-highlighted diff with a
-  **full-width red/green background** on removed/added lines (Codex-style); read-only
+  **full-width red/green background** on removed/added lines and a **`(+A -B)` change
+  count** in the headline (additions green, removals red), Codex-style; read-only
   tools (`read`, `ls`, `grep`, `find`) show a one-line count summary. `Ctrl+O`
   expands output/diffs.
 - **Grouping** — consecutive exploration calls (`read`/`grep`/`find`/`ls`) collapse

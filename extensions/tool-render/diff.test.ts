@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine } from "./diff.ts";
+import { contentToAddRows, diffCounts, gutterWidth, parseUnifiedPatch, washLine } from "./diff.ts";
 
 describe("parseUnifiedPatch", () => {
 	test("numbers context/add/del rows from the hunk header", () => {
@@ -57,5 +57,18 @@ describe("washLine", () => {
 		expect(out.startsWith(BG)).toBe(true);
 		expect(out).toContain(`\x1b[0m${BG}`); // bg re-injected after the reset
 		expect(out.endsWith(`  \x1b[0m`)).toBe(true); // padded (4 - 2) then closed
+	});
+});
+
+describe("diffCounts", () => {
+	test("counts add/del rows and ignores context", () => {
+		const rows = parseUnifiedPatch("--- a\n+++ b\n@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n");
+		expect(diffCounts(rows)).toEqual({ added: 1, removed: 1 });
+	});
+	test("an all-add (write) diff has zero removed", () => {
+		expect(diffCounts(contentToAddRows("a\nb\nc\n"))).toEqual({ added: 3, removed: 0 });
+	});
+	test("an empty diff is zero/zero", () => {
+		expect(diffCounts([])).toEqual({ added: 0, removed: 0 });
 	});
 });
