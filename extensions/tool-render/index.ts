@@ -48,7 +48,7 @@ import {
 	verbFor,
 	type ToolName,
 } from "./render.ts";
-import { contentToAddRows, gutterWidth, parseUnifiedPatch, type DiffRow } from "./diff.ts";
+import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, type DiffRow } from "./diff.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -111,10 +111,13 @@ function bashBody(result: any, opts: any, theme: Theme, width: number): string[]
 	return branchBody(theme, body, width);
 }
 
-/** Codex-style diff: line-numbered, syntax-highlighted, +/- colored — no wash. */
+/** Codex-style diff: line-numbered, syntax-highlighted, with a full-width
+ *  green/red background wash on added/removed lines. */
 function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, expanded: boolean): string[] {
 	if (rows.length === 0) return [];
 	const gw = gutterWidth(rows);
+	const addBg = theme.getBgAnsi("toolSuccessBg");
+	const delBg = theme.getBgAnsi("toolErrorBg");
 	const lang = path ? getLanguageFromPath(path) : undefined;
 	const contents = rows.map((r) => r.content);
 	let hl: string[] = contents;
@@ -129,15 +132,18 @@ function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, ex
 	const maxRows = expanded ? 400 : 12;
 	const shown = rows.slice(0, maxRows);
 	const omitted = rows.length - shown.length;
+	const inner = Math.max(1, width - 2); // 2-space left margin sits outside the wash
 	const lines = shown.map((row, i) => {
 		const num = theme.fg("dim", String(row.num).padStart(gw));
 		const code = hl[i] ?? row.content;
-		if (row.kind === "ctx") return `${num}   ${code}`;
+		if (row.kind === "ctx") return `  ${fit(`${num}   ${code}`, inner)}`;
 		const marker = theme.fg(row.kind === "add" ? "toolDiffAdded" : "toolDiffRemoved", row.kind === "add" ? "+" : "-");
-		return `${num} ${marker} ${code}`;
+		const content = fit(`${num} ${marker} ${code}`, inner);
+		const bg = row.kind === "add" ? addBg : delBg;
+		return `  ${washLine(bg, content, visibleWidth(content), inner)}`;
 	});
-	if (omitted > 0) lines.push(theme.fg("dim", `… +${omitted} lines`));
-	return branchBody(theme, lines, width);
+	if (omitted > 0) lines.push(`  ${fit(theme.fg("dim", `… +${omitted} lines`), inner)}`);
+	return lines;
 }
 
 /** The grouped `• Explored` block (one leader renders it; followers render empty). */

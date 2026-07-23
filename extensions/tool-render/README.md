@@ -13,10 +13,10 @@ is shown once (in the headline), never duplicated.
   └ 42 lines
 
 • Edited src/auth.ts
-  └ 40   export function add(a, b) {
-    41 - return a - b
-    41 + return a + b
-    42 }
+   40   export function add(a, b) {
+   41 - return a - b
+   41 + return a + b
+   42 }
 
 • Explored
   ├ Read src/auth.ts
@@ -28,9 +28,10 @@ is shown once (in the headline), never duplicated.
   a bold verb + the target. For file tools (`read`/`write`/`edit`/`ls`) the
   target is a clickable OSC 8 hyperlink; `bash` shows the command (once).
 - **Body** — detail indented under a dim `└` branch. `bash` shows a bounded tail
-  of output; `edit`/`write` render a line-numbered, syntax-highlighted diff with
-  `+`/`-` colored markers (no background wash); read-only tools (`read`, `ls`,
-  `grep`, `find`) show a one-line count summary. `Ctrl+O` expands output/diffs.
+  of output; `edit`/`write` render a line-numbered, syntax-highlighted diff with a
+  **full-width red/green background** on removed/added lines (Codex-style); read-only
+  tools (`read`, `ls`, `grep`, `find`) show a one-line count summary. `Ctrl+O`
+  expands output/diffs.
 - **Grouping** — consecutive exploration calls (`read`/`grep`/`find`/`ls`) collapse
   into one `• Explored` block (a `├`/`└` tree of what was read/searched), so a burst
   of reads doesn't flood the transcript. Any other tool or a new assistant message

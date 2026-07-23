@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contentToAddRows, gutterWidth, parseUnifiedPatch } from "./diff.ts";
+import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine } from "./diff.ts";
 
 describe("parseUnifiedPatch", () => {
 	test("numbers context/add/del rows from the hunk header", () => {
@@ -47,5 +47,15 @@ describe("gutterWidth", () => {
 	test("is the widest number, at least the minimum", () => {
 		expect(gutterWidth([{ kind: "ctx", num: 5, content: "" }])).toBe(2);
 		expect(gutterWidth([{ kind: "ctx", num: 1234, content: "" }])).toBe(4);
+	});
+});
+
+describe("washLine", () => {
+	const BG = "\x1b[48;2;1;2;3m";
+	test("re-injects the background after inner resets and pads to width", () => {
+		const out = washLine(BG, "\x1b[38;2;9;9;9mX\x1b[0mY", 2, 4);
+		expect(out.startsWith(BG)).toBe(true);
+		expect(out).toContain(`\x1b[0m${BG}`); // bg re-injected after the reset
+		expect(out.endsWith(`  \x1b[0m`)).toBe(true); // padded (4 - 2) then closed
 	});
 });

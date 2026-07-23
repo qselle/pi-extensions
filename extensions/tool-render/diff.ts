@@ -55,3 +55,15 @@ export function contentToAddRows(content: string): DiffRow[] {
 export function gutterWidth(rows: DiffRow[], min = 2): number {
 	return rows.reduce((w, r) => Math.max(w, String(r.num).length), min);
 }
+
+/**
+ * Paint a full-width background wash behind a (possibly syntax-highlighted) line.
+ * Highlighters emit resets (`\x1b[0m`/`[39m`/`[49m`) mid-line that would punch
+ * holes in the tint, so re-inject the background after each, then pad to `width`
+ * and close with one reset.
+ */
+export function washLine(bgAnsi: string, precolored: string, visibleLen: number, width: number): string {
+	const body = precolored.replace(/\x1b\[(?:0|39|49)m/g, (m) => m + bgAnsi);
+	const pad = visibleLen < width ? " ".repeat(width - visibleLen) : "";
+	return `${bgAnsi}${body}${pad}\x1b[0m`;
+}
