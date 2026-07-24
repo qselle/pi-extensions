@@ -21,6 +21,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |
 | [`notify`](extensions/notify/) | Terminal-owned desktop notifications (click to focus your window) + bell when the agent finishes, needs input, or a tool fails — only while your tab is unfocused |
+| [`prevent-sleep`](extensions/prevent-sleep/) | Keeps the computer awake (`caffeinate` / `systemd-inhibit`) while the agent is working, so long runs and goals don't stall on idle sleep |
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |
 | [`plan`](extensions/plan/) | Tactical execution plans with an independent progress card |
 | [`questions`](extensions/questions/) | Claude-style questions with first-reply-wins terminal and optional Telegram input |
