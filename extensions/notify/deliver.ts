@@ -45,6 +45,37 @@ export function bellSequence(inTmux: boolean): string {
 	return inTmux ? `\u001bPtmux;${bell.replace(/\u001b/g, "\u001b\u001b")}\u001b\\` : bell;
 }
 
+/** Strip control chars that would break an OSC notification field. */
+function oscField(s: string): string {
+	return (s ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
+}
+
+/**
+ * A terminal-owned desktop notification via an OSC escape, or undefined if the
+ * terminal isn't known to support one. Ghostty/WezTerm use OSC 777 (title +
+ * body); iTerm2 uses OSC 9 (body only). Because the terminal posts it, clicking
+ * the notification focuses that terminal window (unlike osascript, which posts
+ * from Script Editor). Wrapped in tmux passthrough when inside tmux.
+ */
+export function notificationEscape(
+	env: NodeJS.ProcessEnv,
+	title: string,
+	body: string,
+	inTmux = false,
+): string | undefined {
+	const id = `${env.TERM_PROGRAM ?? ""} ${env.TERM ?? ""}`.toLowerCase();
+	const t = oscField(title);
+	const b = oscField(body);
+	let seq: string | undefined;
+	if (["ghostty", "wezterm", "rxvt"].some((x) => id.includes(x))) {
+		seq = `\u001b]777;notify;${t.replace(/;/g, ",") || "pi"};${b}\u0007`;
+	} else if (id.includes("iterm")) {
+		seq = `\u001b]9;${t && b ? `${t} \u2014 ${b}` : t || b}\u0007`;
+	}
+	if (!seq) return undefined;
+	return inTmux ? `\u001bPtmux;${seq.replace(/\u001b/g, "\u001b\u001b")}\u001b\\` : seq;
+}
+
 const FOCUS_REPORT = /\u001b\[([IO])/g;
 
 /** Terminals whose focus-reporting (CSI I / CSI O) we trust. */

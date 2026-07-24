@@ -20,6 +20,7 @@ import { join } from "node:path";
 import {
 	bellSequence,
 	isDuplicate,
+	notificationEscape,
 	notifyCommand,
 	parseFocusReports,
 	preview,
@@ -82,9 +83,7 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 	let goalActive = false;
 	let notifiedThisRun = false;
 
-	const send = (title: string, body: string): void => {
-		if (!cfg.enabled || !shouldEmit(focusAware, focused)) return;
-		if (isDuplicate(dedupe, title, body, Date.now())) return;
+	const deliver = (title: string, body: string): void => {
 		if (cfg.bell) {
 			try {
 				process.stdout.write(bellSequence(!!process.env.TMUX));
@@ -92,24 +91,46 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 				// terminal not writable
 			}
 		}
-		if (cfg.banner) {
-			const c = notifyCommand(process.platform, title, body);
-			if (c) {
-				try {
-					const child = spawn(c.cmd, c.args, { stdio: "ignore", detached: true });
-					child.on("error", () => {});
-					child.unref();
-				} catch {
-					// notifier missing/unavailable — bell already covered it
-				}
+		if (!cfg.banner) return;
+		// Prefer a terminal-owned notification (OSC escape): the terminal posts it,
+		// so clicking focuses this window (unlike osascript, from Script Editor).
+		// Fall back to an external notifier only when the terminal has no OSC support.
+		const esc = notificationEscape(process.env, title, body, !!process.env.TMUX);
+		if (esc) {
+			try {
+				process.stdout.write(esc);
+			} catch {
+				// terminal not writable
+			}
+			return;
+		}
+		const c = notifyCommand(process.platform, title, body);
+		if (c) {
+			try {
+				const child = spawn(c.cmd, c.args, { stdio: "ignore", detached: true });
+				child.on("error", () => {});
+				child.unref();
+			} catch {
+				// notifier missing/unavailable — bell already covered it
 			}
 		}
+	};
+
+	const send = (title: string, body: string): void => {
+		if (!cfg.enabled || !shouldEmit(focusAware, focused)) return;
+		if (isDuplicate(dedupe, title, body, Date.now())) return;
+		deliver(title, body);
 	};
 
 	pi.registerCommand("notify", {
 		description: "Toggle native desktop notifications for agent activity",
 		handler: async (args: string, ctx: any) => {
 			const a = String(args ?? "").trim().toLowerCase();
+			if (a === "test") {
+				deliver(`${project}: test`, "Notification test — click to focus this window.");
+				ctx.ui.notify("Sent a test notification (bypasses the focus check).", "info");
+				return;
+			}
 			if (a === "on" || a === "off") {
 				cfg = { ...cfg, enabled: a === "on" };
 				saveEnabled(a === "on");
