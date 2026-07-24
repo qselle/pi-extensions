@@ -136,8 +136,11 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 				saveEnabled(a === "on");
 				ctx.ui.notify(`Desktop notifications ${a === "on" ? "enabled" : "disabled"}.`, "info");
 			} else {
+				const focusInfo = focusAware
+					? `focus-aware — tab is currently ${focused ? "focused, so it will stay quiet" : "unfocused, so it will notify"}`
+					: "this terminal doesn't report focus, so it always notifies";
 				ctx.ui.notify(
-					`Desktop notifications are ${cfg.enabled ? "on (unfocused tabs only)" : "off"}. Use \`/notify on|off\`.`,
+					`Desktop notifications are ${cfg.enabled ? "on" : "off"} (${focusInfo}). Use \`/notify on|off|test\`.`,
 					"info",
 				);
 			}
