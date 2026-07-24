@@ -58,7 +58,7 @@ import {
 	noteEnd,
 	noteStart,
 	resetExploration,
-	type Activity,
+	type DisplayRow,
 } from "./exploration.ts";
 
 const BULLET = "•";
@@ -178,16 +178,17 @@ function diffHeadline(
 }
 
 /** The grouped `• Explored` block (one leader renders it; followers render empty). */
-function explorationBlock(activities: Activity[], active: boolean, theme: Theme, width: number): string[] {
+function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, width: number): string[] {
 	const dot = theme.fg(active ? "accent" : "muted", BULLET);
 	const title = theme.bold(theme.fg("text", active ? "Exploring" : "Explored"));
 	const inner = Math.max(1, width - 4);
 	const lines = [fit(`${dot} ${title}`, width)];
-	activities.forEach((act, i) => {
-		const connector = theme.fg("dim", `  ${i === activities.length - 1 ? "└" : "├"} `);
-		const verb = theme.fg("muted", act.verb);
-		const detail = theme.fg(act.status === "error" ? "error" : "text", act.detail);
-		lines.push(connector + fit(`${verb} ${detail}`, inner));
+	rows.forEach((row, i) => {
+		const connector = theme.fg("dim", `  ${i === rows.length - 1 ? "└" : "├"} `);
+		const verb = theme.fg("muted", row.verb);
+		const detail = theme.fg(row.status === "error" ? "error" : "text", row.detail);
+		const suffix = row.suffix ? theme.fg("dim", ` · ${row.suffix}`) : "";
+		lines.push(connector + fit(`${verb} ${detail}${suffix}`, inner));
 	});
 	return lines;
 }
@@ -246,7 +247,7 @@ function makeRenderResult(name: ToolName) {
 						// ignore
 					}
 				});
-				return explorationBlock(st.activities, st.active, theme, width);
+				return explorationBlock(st.rows, st.active, theme, width);
 			}, summarize(name, result, ctx?.args) || "done");
 		}
 		const build = (width: number): string[] => {
@@ -332,7 +333,10 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 			else closeGroup();
 		});
 		pi.on("tool_execution_end", (event: any) => {
-			if (EXPLORATION_TOOLS.has(event?.toolName)) noteEnd(event.toolCallId, !!event.isError);
+			if (EXPLORATION_TOOLS.has(event?.toolName)) {
+				const count = event.isError ? undefined : summarize(event.toolName as ToolName, event.result, undefined);
+				noteEnd(event.toolCallId, !!event.isError, count);
+			}
 		});
 		pi.on("message_start", (event: any) => {
 			if (event?.message?.role === "assistant") closeGroup();

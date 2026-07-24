@@ -19,9 +19,10 @@ is shown once (in the headline), never duplicated.
    42 }
 
 • Explored
-  ├ Read src/auth.ts
-  ├ Read src/footer.ts
-  └ Searched "verify("
+  ├ Read src/big.ts · lines 1-40, 101-200
+  ├ Read src/util.ts · 8 lines
+  ├ Searched "verify(" · 3 matches
+  └ Listed src · 12 entries
 ```
 
 - **Headline** (`• Verb target`) — a subtle status bullet (muted, red on error) +
@@ -35,8 +36,10 @@ is shown once (in the headline), never duplicated.
   expands output/diffs.
 - **Grouping** — consecutive exploration calls (`read`/`grep`/`find`/`ls`) collapse
   into one `• Explored` block (a `├`/`└` tree of what was read/searched), so a burst
-  of reads doesn't flood the transcript. Any other tool or a new assistant message
-  starts a fresh block.
+  of reads doesn't flood the transcript. Each row carries a dim detail: a line count
+  or, for chunked reads, a `lines A-B` range; grep/find/ls show a result count.
+  Consecutive reads of the same file coalesce into one row (merging ranges). Any
+  other tool or a new assistant message starts a fresh block.
 
 ## Safety
 
