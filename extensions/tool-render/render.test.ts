@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { closeDanglingLink, hasDanglingLink } from "../hyperlinks/link.ts";
 import {
 	boundTail,
 	countNonEmptyLines,
@@ -102,5 +103,18 @@ describe("file links", () => {
 		const link = fileLink("src", "/a/src");
 		expect(link).toBe("\x1b]8;;file:///a/src\x1b\\src\x1b]8;;\x1b\\");
 		expect(link.endsWith("\x1b]8;;\x1b\\")).toBe(true);
+	});
+
+	test("width-fitting a linked line would strand the link without repair", () => {
+		// This mirrors `fit()` in index.ts: Lines.render re-fits every built line, and
+		// truncation keeps the zero-width opener while dropping the terminator. The
+		// truncated bytes are written out literally because other test files mock
+		// pi-tui process-wide.
+		const truncated = "\x1b]8;;file:///a/src/long.ts\x1b\\src/lo\u2026";
+		expect(hasDanglingLink(truncated)).toBe(true);
+
+		const repaired = closeDanglingLink(truncated);
+		expect(hasDanglingLink(repaired)).toBe(false);
+		expect(repaired.startsWith(truncated)).toBe(true);
 	});
 });

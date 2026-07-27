@@ -6,6 +6,7 @@
 
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { fileUri as sharedFileUri, link as osc8Link } from "../hyperlinks/link.ts";
 
 export type ToolName = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls";
 
@@ -136,14 +137,15 @@ export function toAbs(p: string, cwd: string): string {
 
 /** file:// URI for an absolute path (percent-encoded, POSIX slashes). */
 export function fileUri(absPath: string): string {
-	return `file://${encodeURI(absPath.replace(/\\/g, "/"))}`;
+	return sharedFileUri(absPath);
 }
 
 /**
  * Wrap display text in an OSC 8 hyperlink to a file. The closing terminator is
- * always emitted, and callers pre-fit the visible text, so a truncated path
- * can never leave a dangling link. Terminals without OSC 8 ignore it.
+ * always emitted here, but a later width-fit of the whole line can still drop it,
+ * so rendering runs every line through `closeDanglingLink`. Terminals without
+ * OSC 8 ignore the sequence.
  */
 export function fileLink(display: string, absPath: string): string {
-	return `\x1b]8;;${fileUri(absPath)}\x1b\\${display}\x1b]8;;\x1b\\`;
+	return osc8Link(display, sharedFileUri(absPath));
 }

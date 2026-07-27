@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { closeDanglingLink, hyperlinkPath } from "../hyperlinks/link.ts";
 import type { FileChange } from "./changes.ts";
 
 const MAX_VISIBLE_FILES = 8;
@@ -21,6 +22,7 @@ export function renderFileChangesBody(
   width: number,
   maxHeight: number,
   theme: Theme,
+  cwd?: string,
 ): string[] {
   if (width < 10 || maxHeight <= 0 || display.files.length === 0) return [];
 
@@ -30,7 +32,7 @@ export function renderFileChangesBody(
   const needsOverflow = display.files.length > visibleCapacity;
   const fileCapacity = needsOverflow && visibleCapacity >= 2 ? visibleCapacity - 1 : visibleCapacity;
   const visibleFiles = display.files.slice(0, fileCapacity);
-  const lines = visibleFiles.map((file) => renderFileRow(file, width, theme));
+  const lines = visibleFiles.map((file) => renderFileRow(file, width, theme, cwd));
 
   if (needsOverflow && visibleCapacity >= 2) {
     lines.push(theme.fg("dim", `  … ${display.files.length - visibleFiles.length} more`));
@@ -38,7 +40,9 @@ export function renderFileChangesBody(
   if (includeSpacer) lines.push("");
   lines.push(renderTotals(display.files, theme));
 
-  return lines.slice(0, maxHeight).map((line) => truncateToWidth(line, width, ""));
+  // closeDanglingLink: truncation can drop a hyperlink terminator and swallow
+  // every following line into the link.
+  return lines.slice(0, maxHeight).map((line) => closeDanglingLink(truncateToWidth(line, width, "")));
 }
 
 export function compactFilePath(filePath: string, maxWidth: number): string {
@@ -63,7 +67,7 @@ export function compactFilePath(filePath: string, maxWidth: number): string {
   return `…${sliceByColumn(leaf, Math.max(0, leafWidth - tailWidth), tailWidth, true)}`;
 }
 
-function renderFileRow(file: FileChange, width: number, theme: Theme): string {
+function renderFileRow(file: FileChange, width: number, theme: Theme, cwd?: string): string {
   const marker = file.kind === "created" ? theme.fg("success", "+") : theme.fg("accent", "~");
   const counts = [
     file.additions > 0 ? theme.fg("success", `+${file.additions}`) : "",
@@ -72,7 +76,9 @@ function renderFileRow(file: FileChange, width: number, theme: Theme): string {
   const prefix = `${marker} `;
   const countGap = counts ? 1 : 0;
   const pathWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(counts) - countGap);
-  const filePath = compactFilePath(file.path, pathWidth);
+  const compact = compactFilePath(file.path, pathWidth);
+  // Link after fitting, so the visible width is unchanged.
+  const filePath = hyperlinkPath(compact, file.path, cwd);
   if (!counts) return `${prefix}${filePath}`;
   const gap = " ".repeat(Math.max(1, width - visibleWidth(prefix) - visibleWidth(filePath) - visibleWidth(counts)));
   return `${prefix}${filePath}${gap}${counts}`;
