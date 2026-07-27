@@ -80,9 +80,27 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     currentTitle = pi.getSessionName() || undefined;
     ownTitle = currentTitle;
     last = undefined;
-    // An existing name is respected: nothing is regenerated until the refresh
-    // interval passes.
-    if (currentTitle) state.titledAtTurn = 0;
+  };
+
+  /**
+   * Recovers history when loading into an existing session (resume, /reload, or
+   * tree navigation), so titling works without waiting for a fresh prompt.
+   */
+  const hydrate = (ctx: ExtensionContext) => {
+    reset();
+    const texts: string[] = [];
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      const message = (entry as any)?.message;
+      if ((entry as any)?.type !== "message" || message?.role !== "user") continue;
+      const text = userText(message.content);
+      if (text) texts.push(text);
+    }
+    state.userTurns = texts.length;
+    anchor = texts[0];
+    recent = texts.slice(-MAX_TRACKED_PROMPTS);
+    // An existing name is left alone until the refresh interval passes, so a
+    // resume never silently spends on a retitle.
+    if (currentTitle && texts.length > 0) state.titledAtTurn = texts.length;
   };
 
   const apply = (title: string) => {
@@ -105,8 +123,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     return result;
   };
 
-  pi.on("session_start", () => reset());
-  pi.on("session_tree", () => reset());
+  pi.on("session_start", (_event, ctx) => hydrate(ctx));
+  pi.on("session_tree", (_event, ctx) => hydrate(ctx));
 
   pi.on("before_agent_start", (event) => {
     if (!config.enabled || state.manual) return undefined;
@@ -203,6 +221,17 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
       ctx.ui.notify(statusText(config, state, currentTitle, last), "info");
     },
   });
+}
+
+/** Plain text of a user message, ignoring images and other non-text blocks. */
+function userText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
+    .map((part: any) => part.text)
+    .join(" ")
+    .trim();
 }
 
 export function statusText(
