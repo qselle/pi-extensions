@@ -73,3 +73,121 @@ describe("turn-separator wiring", () => {
 		expect(lines[0]).toContain("Worked for 1m 14s");
 	});
 });
+
+const usage = (over: any = {}) => ({
+	message: {
+		role: "assistant",
+		usage: { input: 100, output: 50, cacheRead: 900, cacheWrite: 0, cost: { total: 0.01 }, ...over },
+	},
+});
+
+describe("turn-separator stats", () => {
+	test("accumulates usage from every response in the work block", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("message_end", usage());
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant); // emits, carrying the block's usage
+
+		const stats = h.appended[0]!.data.stats;
+		expect(stats).toMatchObject({ input: 100, output: 50, cacheRead: 900, cost: 0.01 });
+	});
+
+	test("sums several responses before the separator", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("message_end", usage());
+		h.fire("message_end", usage({ output: 25, cost: { total: 0.02 } }));
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended[0]!.data.stats).toMatchObject({ output: 75, cost: 0.03 });
+	});
+
+	test("records ttft from the request-send anchor, not message_start", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("before_provider_request", { payload: {} });
+		h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+		h.fire("message_end", usage());
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(typeof h.appended[0]!.data.stats.ttftMs).toBe("number");
+	});
+
+	test("omits ttft when there was no send anchor, instead of reporting 0ms", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+		h.fire("message_end", usage());
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		// A 0ms ttft is a measurement artifact, never a real provider latency.
+		expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
+	});
+
+	test("ignores non-delta stream events for ttft", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("before_provider_request", { payload: {} });
+		h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta" } });
+		h.fire("message_end", { message: { role: "assistant", usage: { output: 0 } } });
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended[0]!.data.stats?.ttftMs).toBeUndefined();
+	});
+
+	test("omits stats entirely when nothing was recorded", () => {
+		const h = harness();
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended[0]!.data.stats).toBeUndefined();
+	});
+
+	test("starts a fresh block after each separator", () => {
+		const h = harness();
+		h.fire("message_start", assistant);
+		h.fire("message_end", usage());
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		h.fire("message_end", usage({ output: 7, cost: { total: 0.05 } }));
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended).toHaveLength(2);
+		expect(h.appended[1]!.data.stats).toMatchObject({ output: 7, cost: 0.05 });
+	});
+
+	test("ignores usage from non-assistant messages", () => {
+		const h = harness();
+		h.fire("message_end", { message: { role: "toolResult", usage: { output: 999 } } });
+		h.fire("tool_execution_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended[0]!.data.stats).toBeUndefined();
+	});
+
+	test("session_start clears a pending block", () => {
+		const h = harness();
+		h.fire("message_end", usage());
+		h.fire("tool_execution_start", {});
+		h.fire("session_start", {});
+		h.fire("message_start", assistant);
+		expect(h.appended).toHaveLength(0);
+	});
+
+	test("renderer includes stats in the rule", () => {
+		const h = harness();
+		const theme = { fg: (_c: string, s: string) => s };
+		const entry = { data: { seconds: 74, stats: { input: 100, output: 318, cacheRead: 4_100, cacheWrite: 0, cost: 0.21 } } };
+		const line = h.renderer!(entry, { expanded: false }, theme).render(100)[0];
+		expect(line).toContain("Worked for 1m 14s");
+		expect(line).toContain("↑318");
+		expect(line).toContain("$0.21");
+	});
+
+	test("renderer still handles legacy entries with only seconds", () => {
+		const h = harness();
+		const theme = { fg: (_c: string, s: string) => s };
+		const line = h.renderer!({ data: { seconds: 5 } }, { expanded: false }, theme).render(60)[0];
+		expect(line).toContain("Worked for 5s");
+		expect(line).not.toContain("$");
+	});
+});
