@@ -30,7 +30,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
 | [`telegram`](extensions/telegram/) | Optional shared Telegram hub for goals, questions, and future extensions |
 | [`tool-render`](extensions/tool-render/) | Codex-style tool blocks: reason-first headline + accent left rail, replacing pi's default card |
-| [`turn-separator`](extensions/turn-separator/) | Dim "Worked for <time>" rule between assistant messages that follow tool work |
+| [`turn-separator`](extensions/turn-separator/) | Dim "Worked for <time>" rule between assistant messages that follow tool work, with that block's tokens, cache hit rate, throughput, and cost |
 | [`verify`](extensions/verify/) | Runs your project's check after each edit and appends failures to that tool result, so the agent learns on the same turn |
 
 ## Custom keybindings
