@@ -35,6 +35,7 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { closeDanglingLink } from "../hyperlinks/link.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -65,9 +66,12 @@ const BULLET = "•";
 const BRANCH = "└";
 const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
 
-/** Hard-fit a (possibly ANSI-colored) line to `width`; never returns wider. */
+/** Hard-fit a (possibly ANSI-colored) line to `width`; never returns wider.
+ *  Truncation can cut a hyperlink open (the opener has zero visible width, so it
+ *  survives while the terminator is dropped), which would swallow every later
+ *  line into the link. closeDanglingLink repairs that. */
 const fit = (s: string, width: number): string =>
-	visibleWidth(s) <= width ? s : truncateToWidth(s, width, "…");
+	closeDanglingLink(visibleWidth(s) <= width ? s : truncateToWidth(s, width, "…"));
 
 /** A width-safe component: re-fits on resize and can never throw out of render(). */
 class Lines implements Component {

@@ -70,5 +70,5 @@ is shown once (in the headline), never duplicated.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API (`registerTool` built-in override, `renderShell:"self"`, `highlightCode`, `createXToolDefinition`).
-- **Depends on extensions:** None.
+- **Depends on extensions:** [`hyperlinks`](../hyperlinks/) for the OSC 8 helpers behind clickable target paths, and for repairing links broken by width-fitting.
 - **Used by extensions:** None.

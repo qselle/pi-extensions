@@ -35,7 +35,7 @@ When the agent settles, the summary is saved as a non-context session entry. Rel
 ## Dependencies and limitations
 
 - **Runtime:** Pi's public extension, tool-event, session, and TUI APIs.
-- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
+- **Depends on extensions:** [`overlay-stack`](../overlay-stack/), and [`hyperlinks`](../hyperlinks/) so each row links to its file.
 - **Third-party packages or executables:** None.
 - **Tracked mutations:** Successful local built-in `edit` and `write` calls only.
 - **Not tracked:** Changes made through `bash`, `!` commands, custom mutation tools, remote tool backends, or external programs.

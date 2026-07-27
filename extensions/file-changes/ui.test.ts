@@ -38,6 +38,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 }));
 
 const { compactFilePath, fileChangesTitle, renderFileChangesBody } = await import("./ui.ts");
+const { setHyperlinkMode, hasDanglingLink } = await import("../hyperlinks/link.ts");
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -91,4 +92,30 @@ test("uses distinct created and modified markers and omits zero counters", () =>
   expect(lines[1]).toStartWith("~ ");
   expect(lines[1]).toContain("-2");
   expect(lines[1]).not.toContain("+0");
+});
+
+test("emits no escape sequences when hyperlinks are disabled", () => {
+  setHyperlinkMode("never");
+  const lines = renderFileChangesBody({
+    phase: "last",
+    files: [{ path: "src/auth.ts", kind: "modified", additions: 3, removals: 1 }],
+  }, 42, 5, theme);
+  expect(lines[0]).not.toContain("\x1b]8;;");
+  expect(lines[0]).toContain("src/auth.ts");
+});
+
+test("links each row to its file when hyperlinks are enabled", () => {
+  setHyperlinkMode("always");
+  try {
+    const lines = renderFileChangesBody({
+      phase: "last",
+      files: [{ path: "src/auth.ts", kind: "modified", additions: 3, removals: 1 }],
+    }, 42, 5, theme, "/repo");
+    expect(lines[0]).toContain("file:///repo/src/auth.ts");
+    expect(lines[0]).toContain("src/auth.ts");
+    // Never leave a link open, or later rows join it.
+    expect(hasDanglingLink(lines[0]!)).toBe(false);
+  } finally {
+    setHyperlinkMode("auto");
+  }
 });

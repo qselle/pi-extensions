@@ -26,6 +26,8 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
   let enabled = true;
   let activeRun: FileChangeRun | undefined;
   let display: FileChangesDisplay = { phase: "last", files: [] };
+  // Needed to resolve stored display paths for clickable links.
+  let sessionCwd = process.cwd();
 
   const card = registerOverlayCard({
     id: CARD_ID,
@@ -36,7 +38,7 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
     minTerminalHeight: 12,
     visible: () => enabled && display.files.length > 0,
     title: (theme) => fileChangesTitle(display, theme),
-    renderBody: (width, maxHeight, theme) => renderFileChangesBody(display, width, maxHeight, theme),
+    renderBody: (width, maxHeight, theme) => renderFileChangesBody(display, width, maxHeight, theme, sessionCwd),
   });
 
   const invalidate = () => card.invalidate();
@@ -100,7 +102,10 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
+  pi.on("session_start", (_event, ctx) => {
+    sessionCwd = ctx.cwd;
+    restore(ctx);
+  });
   pi.on("session_tree", (_event, ctx) => restore(ctx));
 
   pi.on("before_agent_start", () => beginRun());
