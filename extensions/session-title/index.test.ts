@@ -37,8 +37,13 @@ function setup(options: { config?: SessionTitleConfig; results?: TitleResult[]; 
     request: (async (args: any) => { calls.push(args); return results[Math.min(index++, results.length - 1)]!; }) as any,
   });
   const notifications: { message: string; level?: string }[] = [];
-  const ctx: any = { signal: undefined, ui: { notify: (m: string, l?: string) => notifications.push({ message: m, level: l }) } };
-  return { pi, calls, notifications, ctx };
+  const branch: any[] = [];
+  const ctx: any = {
+    signal: undefined,
+    sessionManager: { getBranch: () => branch },
+    ui: { notify: (m: string, l?: string) => notifications.push({ message: m, level: l }) },
+  };
+  return { pi, calls, notifications, ctx, branch };
 }
 
 async function firstTurn(h: ReturnType<typeof setup>, prompt = "please fix the retry loop in fetch") {
@@ -249,5 +254,59 @@ describe("statusText", () => {
     const text = statusText(config(), { userTurns: 3, titledAtTurn: 1, manual: true }, "Mine", { error: "no credentials" });
     expect(text).toContain("automatic: off (renamed manually)");
     expect(text).toContain("last error: no credentials");
+  });
+});
+
+const userEntry = (text: string) => ({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
+
+describe("loading into an existing session", () => {
+  test("recovers user history so /title now works immediately", async () => {
+    const h = setup();
+    h.branch.push(userEntry("hello"), userEntry("add hyperlinks"), userEntry("now add stats"));
+    await h.pi.emit("session_start", {}, h.ctx);
+
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0].prompt).toContain("first_request: hello");
+    expect(h.calls[0].prompt).toContain("- now add stats");
+    expect(h.pi.name).toBe("Generated Title");
+  });
+
+  test("does not retitle a named session on resume", async () => {
+    const h = setup({ name: "Existing name" });
+    h.branch.push(userEntry("a"), userEntry("b"));
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("agent_settled", {}, h.ctx);
+    expect(h.calls).toHaveLength(0);
+    expect(h.pi.name).toBe("Existing name");
+  });
+
+  test("titles an unnamed session on its next settled turn", async () => {
+    const h = setup();
+    h.branch.push(userEntry("a"), userEntry("b"));
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("agent_settled", {}, h.ctx);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  test("ignores non-user entries and image-only messages", async () => {
+    const h = setup();
+    h.branch.push(
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "reply" }] } },
+      { type: "custom", customType: "x", data: {} },
+      { type: "message", message: { role: "user", content: [{ type: "image", data: "..." }] } },
+      userEntry("real prompt"),
+    );
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    expect(h.calls[0].prompt).toContain("first_request: real prompt");
+    expect(h.calls[0].prompt).not.toContain("reply");
+  });
+
+  test("still reports nothing to title in an empty session", async () => {
+    const h = setup();
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    expect(h.notifications.at(-1)?.message).toContain("Nothing to title yet");
   });
 });
