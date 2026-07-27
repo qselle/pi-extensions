@@ -93,6 +93,12 @@ instructions remain authoritative.
   is rebuilt from the active branch, and any interrupted generation is
   normalized back to idle.
 
+## Titles
+
+A new chat is named instantly from its first question, then retitled by
+[`session-title`](../session-title/) after its first answer using the same cheap
+model and the same policy as session titles.
+
 ## Dependencies and limitations
 
 - **Runtime:** Pi's public extension, session, model, and TUI APIs, plus

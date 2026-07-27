@@ -25,6 +25,8 @@ export type SideRunModel = (chat: SideChat, signal: AbortSignal) => Promise<Side
 export interface SideChatHooks {
   /** Fired after any observable state change (for UI refresh). */
   onChange?: () => void;
+  /** Fired after an answer is committed, with the updated chat. */
+  onAnswer?: (chat: SideChat) => void;
   /** Persist immutable chat metadata (once, at creation). */
   persistMeta?: (chat: SideChat) => void;
   /** Persist mutable chat state (turns, title, usage, status). */
@@ -239,6 +241,7 @@ export class SideChatStore {
     chat.updatedAt = timestamp;
     this.persistState(chat);
     this.change();
+    this.hooks.onAnswer?.(chat);
   }
 
   private applyFailure(id: string, error: unknown, aborted: boolean): void {
