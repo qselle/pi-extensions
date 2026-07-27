@@ -4,7 +4,7 @@
  * titles and side-chat titles so both behave identically.
  */
 
-import { DEFAULT_REFRESH_EVERY, buildTitlePrompt, shouldGenerate } from "./engine.ts";
+import { DEFAULT_REFRESH_EVERY, buildTitlePrompt, pickAnchor, shouldGenerate } from "./engine.ts";
 import type { TitleResult } from "./request.ts";
 
 export interface ConversationTitleState {
@@ -39,9 +39,10 @@ export async function titleConversation(options: TitleConversationOptions): Prom
 
   const previous = state.titledAtTurn;
   state.titledAtTurn = userTexts.length;
+  const anchor = pickAnchor(userTexts);
   const result = await options.request(buildTitlePrompt({
-    anchor: userTexts[0],
-    recent: userTexts.slice(1),
+    anchor,
+    recent: userTexts.filter((text) => text !== anchor).slice(-6),
     currentTitle: options.currentTitle,
   }));
 

@@ -19,7 +19,9 @@ class MockPi {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
   }
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
+  entries: { customType: string; data: any }[] = [];
   setSessionName(name: string) { this.name = name; this.names.push(name); }
+  appendEntry(customType: string, data: any) { this.entries.push({ customType, data }); }
   getSessionName() { return this.name; }
   async emit(event: string, payload: any = {}, ctx: any = {}) {
     for (const handler of this.handlers.get(event) ?? []) await handler(payload, ctx);
@@ -267,7 +269,8 @@ describe("loading into an existing session", () => {
 
     await h.pi.commands.get("title").handler("now", h.ctx);
     expect(h.calls).toHaveLength(1);
-    expect(h.calls[0].prompt).toContain("first_request: hello");
+    // "hello" is skipped as an anchor; the first real request is used instead.
+    expect(h.calls[0].prompt).toContain("first_request: add hyperlinks");
     expect(h.calls[0].prompt).toContain("- now add stats");
     expect(h.pi.name).toBe("Generated Title");
   });
@@ -308,5 +311,54 @@ describe("loading into an existing session", () => {
     await h.pi.emit("session_start", {}, h.ctx);
     await h.pi.commands.get("title").handler("now", h.ctx);
     expect(h.notifications.at(-1)?.message).toContain("Nothing to title yet");
+  });
+});
+
+const titleEntry = (title: string, manual = false) => ({ type: "custom", customType: "session-title", data: { title, manual } });
+
+describe("manual names survive a restart (regression)", () => {
+  test("a name the extension did not write is treated as manual", async () => {
+    const h = setup({ name: "Important Thing" });
+    h.branch.push(userEntry("a"), titleEntry("Auto Title"), userEntry("b"));
+    await h.pi.emit("session_start", {}, h.ctx);
+    // Session is named "Important Thing" but our last record says "Auto Title":
+    // the user renamed it, so titling must stay off no matter how many turns pass.
+    for (let turn = 0; turn < 10; turn += 1) {
+      await h.pi.emit("before_agent_start", { prompt: `turn ${turn}` }, h.ctx);
+      await h.pi.emit("agent_settled", {}, h.ctx);
+    }
+    expect(h.calls).toHaveLength(0);
+    expect(h.pi.name).toBe("Important Thing");
+  });
+
+  test("a persisted manual flag stops titling", async () => {
+    const h = setup({ name: "Mine" });
+    h.branch.push(userEntry("a"), titleEntry("Mine", true));
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "more" }, h.ctx);
+    await h.pi.emit("agent_settled", {}, h.ctx);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  test("its own previous title does not count as manual", async () => {
+    const h = setup({ name: "Auto Title", config: config({ refreshEvery: 1 }) });
+    h.branch.push(userEntry("a"), titleEntry("Auto Title"));
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "more work" }, h.ctx);
+    await h.pi.emit("agent_settled", {}, h.ctx);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  test("records every title it sets, flagging manual ones", async () => {
+    const h = setup();
+    await firstTurn(h);
+    await h.pi.emit("agent_settled", {}, h.ctx);
+    await h.pi.commands.get("title").handler("set My Own Name", h.ctx);
+    const records = h.pi.entries.filter((e) => e.customType === "session-title");
+    expect(records.map((e) => [e.data.title, e.data.manual])).toEqual([
+      ["fix retry loop fetch", false],
+      ["Generated Title", false],
+      ["My Own Name", true],
+    ]);
   });
 });
