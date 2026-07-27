@@ -7,10 +7,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
-import {
-  provisionalTitle,
-} from "../session-title/engine.ts";
-import { titleConversation, type ConversationTitleState } from "../session-title/conversation.ts";
+import { buildTitlePrompt, provisionalTitle } from "../session-title/engine.ts";
 import { loadConfig as loadTitleConfig } from "../session-title/index.ts";
 import { requestTitle } from "../session-title/request.ts";
 import {
@@ -100,22 +97,22 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
 
   const titleConfig = { ...loadTitleConfig(), ...options.titleConfig };
   const runTitleRequest = options.requestTitle ?? requestTitle;
-  const titleState = new Map<string, ConversationTitleState>();
+  const titled = new Set<string>();
 
-  /** Names a side chat from its own user turns, on the same cheap-model path as session titles. */
+  /** Names a chat once, from its own questions, on the same cheap-model path as sessions. */
   const titleChat = async (chat: SideChat): Promise<void> => {
     const ctx = activeContext;
-    if (!ctx || titleConfig.enabled === false) return;
-    const state = titleState.get(chat.id) ?? {};
-    titleState.set(chat.id, state);
-    await titleConversation({
-      userTexts: chat.turns.filter((turn) => turn.role === "user").map((turn) => turn.text),
-      currentTitle: chat.title === DEFAULT_SIDE_CHAT_TITLE ? undefined : chat.title,
-      state,
-      refreshEvery: titleConfig.refreshEvery,
-      request: (prompt) => runTitleRequest({ ctx: ctx as never, prompt, override: titleConfig.model }),
-      apply: (title) => store.rename(chat.id, title),
+    if (!ctx || titleConfig.enabled === false || titled.has(chat.id)) return;
+    titled.add(chat.id);
+    const questions = chat.turns.filter((turn) => turn.role === "user").map((turn) => turn.text);
+    if (questions.length === 0) return;
+    const result = await runTitleRequest({
+      ctx: ctx as never,
+      prompt: buildTitlePrompt(questions),
+      override: titleConfig.model,
     });
+    if (result.title) store.rename(chat.id, result.title);
+    else titled.delete(chat.id);
   };
 
   const store = new SideChatStore({
