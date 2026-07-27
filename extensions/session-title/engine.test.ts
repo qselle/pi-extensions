@@ -4,7 +4,9 @@ import {
   MAX_TITLE_CHARS,
   MAX_TITLE_WORDS,
   buildTitlePrompt,
+  isCredibleTitle,
   normalizeTitle,
+  pickAnchor,
   provisionalTitle,
   selectTitleModel,
   shouldGenerate,
@@ -186,5 +188,44 @@ describe("selectTitleModel", () => {
     expect(selectTitleModel(registry(["a/b"]), { preferences: ["nope", "/x", "a/b"] })).toEqual({
       provider: "a", id: "b",
     });
+  });
+});
+
+describe("junk-title resistance (regression: title stuck on 'tig')", () => {
+  test("a fragment is not credible", () => {
+    for (const value of ["tig", "abc", "x", "hello", undefined]) {
+      expect(isCredibleTitle(value as never)).toBe(false);
+    }
+  });
+
+  test("a real title is credible", () => {
+    expect(isCredibleTitle("Clickable file paths")).toBe(true);
+    expect(isCredibleTitle("Hyperlinks")).toBe(true);
+  });
+
+  test("a non-credible current title is withheld, so the model replaces it", () => {
+    const prompt = buildTitlePrompt({ anchor: "add stats to the rule", recent: [], currentTitle: "tig" });
+    expect(prompt).not.toContain("current_title");
+  });
+
+  test("a credible current title is kept for continuity", () => {
+    const prompt = buildTitlePrompt({ anchor: "a", recent: [], currentTitle: "Clickable file paths" });
+    expect(prompt).toContain("current_title: Clickable file paths");
+  });
+
+  test("the system prompt tells the model to replace a fragment", () => {
+    expect(TITLE_SYSTEM_PROMPT).toContain("Replace the current title when it is vague, truncated, a fragment");
+  });
+});
+
+describe("pickAnchor", () => {
+  test("skips greetings and picks the first real request", () => {
+    expect(pickAnchor(["hello", "hi", "add hyperlinks to tool blocks"])).toBe("add hyperlinks to tool blocks");
+  });
+  test("keeps the first text when nothing is substantive", () => {
+    expect(pickAnchor(["hello", "hi"])).toBe("hello");
+  });
+  test("handles an empty list", () => {
+    expect(pickAnchor([])).toBeUndefined();
   });
 });

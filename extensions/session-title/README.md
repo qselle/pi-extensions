@@ -20,7 +20,12 @@ after    Clickable file paths
 3. **Rarely again.** Refreshed only every 5 user turns, and the model is told to
    repeat the existing title unless the objective genuinely changed.
 4. **Never after you rename.** `/name` or `/title set` stops automatic titling for
-   that session for good.
+   that session for good. Each title it sets is recorded in the session, so after a
+   restart it can still tell its own title from one you chose.
+
+Loading into an existing session (resume or `/reload`) recovers your prompts from
+the session, so `/title now` works immediately. A session that already has a name
+is not retitled on resume; it waits for the refresh interval.
 
 The same policy names side chats: each chat is titled from its own questions after
 its first answer.
@@ -75,6 +80,12 @@ At most 5 words and 48 characters. Quotes, markdown, `Title:` prefixes, trailing
 punctuation, and extra lines are stripped from the model's answer, and generic
 results (`untitled`, `chat`, `session`, `test`) are rejected rather than applied —
 so a bad answer leaves the previous title alone instead of degrading it.
+
+Two rules keep a bad title from sticking. A title that is a fragment (one short
+word) is **not** shown to the model as continuity evidence, so it gets replaced
+instead of echoed forever. And a leading greeting is skipped when choosing the
+anchor request, since sessions that open with "hello" would otherwise be titled
+from it.
 
 ## Exports for other extensions
 

@@ -82,7 +82,31 @@ export const TITLE_SYSTEM_PROMPT = [
   "Name the durable objective, not the latest detail. A sub-task discussed for several turns stays subordinate.",
   "Prefer concrete nouns from the work itself over generic words like task, help, session, or code.",
   "When a current title is given and the objective has not changed, repeat that title exactly.",
+  "Replace the current title when it is vague, truncated, a fragment, or does not describe the work in the requests below.",
 ].join("\n");
+
+/**
+ * Whether a title is worth showing the model as continuity evidence. A fragment
+ * like "tig" would otherwise be repeated forever, since the model is asked to
+ * preserve an unchanged objective.
+ */
+export function isCredibleTitle(title: string | undefined): boolean {
+  const normalized = normalizeTitle(title);
+  if (!normalized) return false;
+  const words = normalized.split(" ").filter(Boolean);
+  return words.length > 1 || normalized.length >= 8;
+}
+
+/**
+ * The first request that actually says something. Sessions often open with
+ * "hello", which is worthless as evidence of the objective.
+ */
+export function pickAnchor(texts: readonly string[]): string | undefined {
+  for (const text of texts) {
+    if (provisionalTitle(text)) return text;
+  }
+  return texts[0];
+}
 
 function clip(text: string, limit: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -96,7 +120,8 @@ function clip(text: string, limit: number): string {
  */
 export function buildTitlePrompt(context: TitleContext): string {
   const parts: string[] = [];
-  if (context.currentTitle) parts.push(`current_title: ${clip(context.currentTitle, MAX_TITLE_CHARS)}`);
+  // A non-credible title is withheld so the model replaces it instead of echoing it.
+  if (isCredibleTitle(context.currentTitle)) parts.push(`current_title: ${clip(context.currentTitle!, MAX_TITLE_CHARS)}`);
   if (context.anchor) parts.push(`first_request: ${clip(context.anchor, MAX_ANCHOR_CHARS)}`);
 
   const recent = context.recent.slice(-MAX_RECENT_TURNS).filter((text) => text.trim().length > 0);

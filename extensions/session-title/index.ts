@@ -17,6 +17,7 @@ import {
   DEFAULT_REFRESH_EVERY,
   buildTitlePrompt,
   normalizeTitle,
+  pickAnchor,
   provisionalTitle,
   shouldGenerate,
   type RefreshState,
@@ -24,7 +25,14 @@ import {
 import { requestTitle, type TitleResult } from "./request.ts";
 
 const CONFIG_FILE = "session-title.json";
+const ENTRY_TYPE = "session-title";
 const MAX_TRACKED_PROMPTS = 8;
+
+interface TitleRecord {
+  title: string;
+  /** True when the user set it by hand. */
+  manual?: boolean;
+}
 
 export interface SessionTitleConfig {
   enabled: boolean;
@@ -89,28 +97,39 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   const hydrate = (ctx: ExtensionContext) => {
     reset();
     const texts: string[] = [];
+    let record: TitleRecord | undefined;
     for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
-      const message = (entry as any)?.message;
-      if ((entry as any)?.type !== "message" || message?.role !== "user") continue;
+      const any = entry as any;
+      if (any?.type === "custom" && any.customType === ENTRY_TYPE && typeof any.data?.title === "string") {
+        record = any.data as TitleRecord;
+        continue;
+      }
+      const message = any?.message;
+      if (any?.type !== "message" || message?.role !== "user") continue;
       const text = userText(message.content);
       if (text) texts.push(text);
     }
     state.userTurns = texts.length;
-    anchor = texts[0];
+    anchor = pickAnchor(texts);
     recent = texts.slice(-MAX_TRACKED_PROMPTS);
+    ownTitle = record?.title;
+    // A name we did not write, or one the user set by hand, is theirs to keep.
+    if (record?.manual || (currentTitle && record && currentTitle !== record.title)) state.manual = true;
     // An existing name is left alone until the refresh interval passes, so a
     // resume never silently spends on a retitle.
     if (currentTitle && texts.length > 0) state.titledAtTurn = texts.length;
   };
 
-  const apply = (title: string) => {
+  const apply = (title: string, manual = false) => {
     currentTitle = title;
     ownTitle = title;
     pi.setSessionName(title);
+    // Persisted so a restart can tell our own title from a manual /name.
+    pi.appendEntry(ENTRY_TYPE, { title, manual } satisfies TitleRecord);
   };
 
   const generate = async (ctx: ExtensionContext): Promise<TitleResult> => {
-    const prompt = buildTitlePrompt({ anchor, recent, currentTitle });
+    const prompt = buildTitlePrompt({ anchor, recent: recent.filter((text) => text !== anchor), currentTitle });
     const result = await run({
       ctx: ctx as never,
       prompt,
@@ -132,7 +151,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     if (!prompt) return undefined;
 
     state.userTurns += 1;
-    anchor ??= prompt;
+    // Prefer the first request that actually describes work over a greeting.
+    if (!anchor || !provisionalTitle(anchor)) anchor = prompt;
     recent.push(prompt);
     if (recent.length > MAX_TRACKED_PROMPTS) recent = recent.slice(-MAX_TRACKED_PROMPTS);
 
@@ -184,7 +204,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
           return;
         }
         state.manual = true;
-        apply(title);
+        apply(title, true);
         ctx.ui.notify(`Title set to “${title}”. Automatic titling is off for this session.`, "info");
         return;
       }
