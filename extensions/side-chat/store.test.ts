@@ -228,3 +228,27 @@ test("history is capped to maxTurns, preserving alternation", async () => {
 function usage(input: number, output: number) {
   return { input, output, cacheRead: 0, cacheWrite: 0, cost: 0.01 };
 }
+
+test("fires onAnswer after an answer is committed", async () => {
+  const answers: { id: string; title: string; turns: number }[] = [];
+  const store = new SideChatStore({
+    runModel: async () => ({ text: "an answer", usage: undefined }),
+    hooks: { onAnswer: (chat) => answers.push({ id: chat.id, title: chat.title, turns: chat.turns.length }) },
+  });
+  const chat = store.create({ model: MODEL, systemPrompt: "sp", contextMode: "none", title: "provisional" });
+  store.send(chat.id, "why does this fail?");
+  await flush();
+  expect(answers).toEqual([{ id: chat.id, title: "provisional", turns: 2 }]);
+});
+
+test("does not fire onAnswer when generation fails", async () => {
+  let fired = 0;
+  const store = new SideChatStore({
+    runModel: async () => { throw new Error("boom"); },
+    hooks: { onAnswer: () => { fired += 1; } },
+  });
+  const chat = store.create({ model: MODEL, systemPrompt: "sp", contextMode: "none" });
+  store.send(chat.id, "q");
+  await flush();
+  expect(fired).toBe(0);
+});

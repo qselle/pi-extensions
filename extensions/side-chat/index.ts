@@ -8,6 +8,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
 import {
+  provisionalTitle,
+} from "../session-title/engine.ts";
+import { titleConversation, type ConversationTitleState } from "../session-title/conversation.ts";
+import { loadConfig as loadTitleConfig } from "../session-title/index.ts";
+import { requestTitle } from "../session-title/request.ts";
+import {
   metaRecord,
   restoreSideChats,
   SIDE_META_ENTRY,
@@ -22,7 +28,7 @@ import {
   toApiMessages,
 } from "./prompts.ts";
 import { errorMessage, SideChatStore, type SideRunResult } from "./store.ts";
-import { modelLabel, type SideChat, type SideContextMode, type SideModelRef } from "./types.ts";
+import { DEFAULT_SIDE_CHAT_TITLE, modelLabel, type SideChat, type SideContextMode, type SideModelRef } from "./types.ts";
 import { formatSideUsage, normalizeSideUsage } from "./usage.ts";
 import {
   renderPromotedMessage,
@@ -44,6 +50,9 @@ const PROMOTE_LIMIT = 8 * 1024;
 export interface SideChatExtensionOptions {
   registerCard?: typeof registerOverlayCard;
   contextMode?: SideContextMode;
+  /** Injectable for tests. */
+  titleConfig?: { enabled?: boolean; model?: string; refreshEvery?: number };
+  requestTitle?: typeof requestTitle;
 }
 
 export default function registerSideChat(pi: ExtensionAPI, options: SideChatExtensionOptions = {}): SideChatStore {
@@ -89,6 +98,26 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     activeContext.ui.setStatus(USAGE_STATUS_KEY, text ? activeContext.ui.theme.fg("dim", text) : undefined);
   };
 
+  const titleConfig = { ...loadTitleConfig(), ...options.titleConfig };
+  const runTitleRequest = options.requestTitle ?? requestTitle;
+  const titleState = new Map<string, ConversationTitleState>();
+
+  /** Names a side chat from its own user turns, on the same cheap-model path as session titles. */
+  const titleChat = async (chat: SideChat): Promise<void> => {
+    const ctx = activeContext;
+    if (!ctx || titleConfig.enabled === false) return;
+    const state = titleState.get(chat.id) ?? {};
+    titleState.set(chat.id, state);
+    await titleConversation({
+      userTexts: chat.turns.filter((turn) => turn.role === "user").map((turn) => turn.text),
+      currentTitle: chat.title === DEFAULT_SIDE_CHAT_TITLE ? undefined : chat.title,
+      state,
+      refreshEvery: titleConfig.refreshEvery,
+      request: (prompt) => runTitleRequest({ ctx: ctx as never, prompt, override: titleConfig.model }),
+      apply: (title) => store.rename(chat.id, title),
+    });
+  };
+
   const store = new SideChatStore({
     runModel,
     hooks: {
@@ -97,6 +126,7 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
         workspaceRefresh?.();
         syncUsage();
       },
+      onAnswer: (chat) => void titleChat(chat).catch(() => undefined),
       persistMeta: (chat) => pi.appendEntry(SIDE_META_ENTRY, metaRecord(chat)),
       persistState: (chat) => pi.appendEntry(SIDE_STATE_ENTRY, stateRecord(chat)),
       persistDelete: (chat) => pi.appendEntry(SIDE_STATE_ENTRY, stateRecord(chat, true)),
@@ -147,7 +177,7 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
       systemPrompt: preamble.systemPrompt,
       contextMode,
       contextTruncated: preamble.contextTruncated,
-      title: seedQuestion ? deriveTitle(seedQuestion) : undefined,
+      title: seedQuestion ? (provisionalTitle(seedQuestion) ?? deriveTitle(seedQuestion)) : undefined,
     });
   };
 
