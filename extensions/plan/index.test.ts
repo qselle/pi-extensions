@@ -8,6 +8,7 @@ mock.module("typebox", () => ({
   Type: {
     Object: (properties: unknown) => ({ type: "object", properties }),
     String: (options?: unknown) => ({ type: "string", ...options as object }),
+    Boolean: (options?: unknown) => ({ type: "boolean", ...options as object }),
     Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...options as object }),
     Optional: (schema: unknown) => schema,
     Integer: (options?: unknown) => ({ type: "integer", ...options as object }),
