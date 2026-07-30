@@ -27,6 +27,7 @@ Use `pi config` to enable or disable individual extensions.
 | [`overlay-stack`](extensions/overlay-stack/) | Persistent top-right workflow cards (`Ctrl+Shift+O`) |
 | [`plan`](extensions/plan/) | Tactical execution plans with an independent progress card |
 | [`questions`](extensions/questions/) | Claude-style questions with first-reply-wins terminal and optional Telegram input |
+| [`session-search`](extensions/session-search/) | Full-text search across saved sessions with resume, fork, copy, and editor actions |
 | [`session-title`](extensions/session-title/) | Automatic session names from a cheap model, and the same titling for side chats |
 | [`side-chat`](extensions/side-chat/) | Persistent, multi-turn side conversations you can spawn, follow up, and navigate during a long-running job |
 | [`subagents`](extensions/subagents/) | Persistent isolated child agents for delegated and parallel work |
