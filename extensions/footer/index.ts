@@ -47,7 +47,7 @@ function sumUsage(ctx: ExtensionContext): UsageTotals {
 	let input = 0;
 	let output = 0;
 	let cost = 0;
-	for (const entry of ctx.sessionManager.getBranch() as any[]) {
+	for (const entry of ctx.sessionManager.getBranch()) {
 		const usage =
 			entry?.type === "message" && entry.message?.role === "assistant"
 				? (entry.message as AssistantMessage).usage

@@ -38,4 +38,4 @@ The card is registered with [`overlay-stack`](../overlay-stack/) rather than own
 
 - **Runtime:** Pi's extension and TUI APIs.
 - **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
-- **Third-party packages:** None.
+- **Third-party packages:** `typebox` for the tool schema.
