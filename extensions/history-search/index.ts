@@ -2,58 +2,14 @@ import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
-  type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { extractHistory, initialHistoryQuery } from "./history.ts";
 import { HistoryPicker } from "./picker.ts";
 
 const SHORTCUT = "ctrl+r";
 const OVERLAY_MODAL_EVENT = "workflow-overlay:modal";
 type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
-
-class HistorySearchEditor extends CustomEditor {
-  private readonly delegate: ReturnType<EditorFactory> | undefined;
-
-  constructor(
-    tui: TUI,
-    theme: EditorTheme,
-    keybindings: KeybindingsManager,
-    private readonly openSearch: () => void,
-    previousFactory?: EditorFactory,
-  ) {
-    super(tui, theme, keybindings);
-    this.delegate = previousFactory
-      ? (() => {
-          try {
-            return previousFactory(tui, theme, keybindings);
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined;
-
-    // Preserve wrappers such as accent-color that lock the editor border.
-    if (this.delegate?.borderColor !== undefined) {
-      Object.defineProperty(this, "borderColor", {
-        configurable: true,
-        enumerable: true,
-        get: () => this.delegate?.borderColor,
-        set: (value) => {
-          if (this.delegate) this.delegate.borderColor = value;
-        },
-      });
-    }
-  }
-
-  override handleInput(data: string): void {
-    if (matchesKey(data, SHORTCUT)) {
-      this.openSearch();
-      return;
-    }
-    super.handleInput(data);
-  }
-}
 
 export default function historySearchExtension(pi: ExtensionAPI) {
   let recentInputs: string[] = [];
@@ -117,19 +73,22 @@ export default function historySearchExtension(pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
 
     previousFactory = ctx.ui.getEditorComponent();
-    installedFactory = (tui, theme, keybindings) =>
-      new HistorySearchEditor(
-        tui,
-        theme,
-        keybindings,
-        () => {
+    installedFactory = (tui, theme, keybindings) => {
+      const editor = previousFactory?.(tui, theme, keybindings)
+        ?? new CustomEditor(tui, theme, keybindings);
+      const handleInput = editor.handleInput.bind(editor);
+      editor.handleInput = (data: string) => {
+        if (matchesKey(data, SHORTCUT)) {
           void openHistorySearch(ctx).catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
             ctx.ui.notify(`History search failed: ${message}`, "error");
           });
-        },
-        previousFactory,
-      );
+          return;
+        }
+        handleInput(data);
+      };
+      return editor;
+    };
     ctx.ui.setEditorComponent(installedFactory);
   });
 

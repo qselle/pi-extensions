@@ -28,8 +28,11 @@ export function isPlainRule(bare: string): boolean {
 export function transformEditorLines(lines: string[], prompt: string): string[] {
 	if (lines.length === 0) return [prompt];
 	const out = [...lines];
-	const gutter = out.findIndex((l) => l.startsWith("  "));
-	const at = gutter >= 0 ? gutter : out.findIndex((l) => !isPlainRule(stripAnsi(l)) && l.trim().length > 0);
+	const isCompanionLine = (line: string) => /[\u2800-\u28ff]/u.test(stripAnsi(line));
+	const gutter = out.findIndex((line) => !isCompanionLine(line) && line.startsWith("  "));
+	const at = gutter >= 0
+		? gutter
+		: out.findIndex((line) => !isCompanionLine(line) && !isPlainRule(stripAnsi(line)) && line.trim().length > 0);
 	if (at >= 0) {
 		out[at] = out[at]!.startsWith("  ") ? prompt + out[at]!.slice(2) : prompt + out[at]!;
 	}

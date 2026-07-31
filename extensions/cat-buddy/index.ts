@@ -1,8 +1,13 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  CustomEditor,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   sliceByColumn,
   truncateToWidth,
-  type Component,
+  visibleWidth,
+  type EditorComponent,
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
@@ -23,20 +28,26 @@ import {
   type CatAction,
 } from "./panel.js";
 
-const WIDGET_KEY = "cat-buddy";
+type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
 
-class CatSprite implements Component {
+class CatSprite {
   private frameIndex = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private disposed = false;
 
   constructor(
     private readonly tui: TUI,
-    private readonly theme: Theme,
     private mode: AnimationMode,
     private working: boolean,
+    private visible: boolean,
   ) {
     this.schedulePolicy(mode === "smart" && working);
+  }
+
+  setVisible(visible: boolean): void {
+    if (this.visible === visible) return;
+    this.visible = visible;
+    this.tui.requestRender();
   }
 
   setBehavior(mode: AnimationMode, working: boolean): void {
@@ -50,28 +61,35 @@ class CatSprite implements Component {
     this.schedulePolicy(mode === "smart" && (becameWorking || working));
   }
 
-  render(width: number): string[] {
-    if (width < CAT_WIDTH) return [];
-    const padding = " ".repeat(Math.max(0, width - CAT_WIDTH - 2));
-    const borderLine = this.theme.fg("borderMuted", "─".repeat(CAT_WIDTH));
-    const pose = getCatPose(this.frameIndex);
-    return pose.map((line, index) => {
-      let rendered: string;
-      if (index !== pose.length - 1) {
-        rendered = this.theme.fg("text", line);
-      } else {
-        const leadingWidth = line.length - line.trimStart().length;
-        const trailingWidth = Math.max(0, CAT_WIDTH - line.length);
-        const leadingBorder = sliceByColumn(borderLine, 0, leadingWidth, true);
-        const trailingBorder = sliceByColumn(borderLine, 0, trailingWidth, true);
-        rendered = leadingBorder + this.theme.fg("text", line.slice(leadingWidth)) + trailingBorder;
-      }
-      return padding + truncateToWidth(rendered, CAT_WIDTH, "");
-    });
-  }
+  renderEditor(editor: EditorComponent, render: (width: number) => string[], width: number): string[] {
+    const base = render(width);
+    const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
+    if (!this.visible || width < 34 || rows < 10 || base.length === 0) return base;
 
-  invalidate(): void {
-    // Theme methods are applied during render, so there is no themed cache.
+    const color = editor.borderColor ?? ((value: string) => value);
+    const padding = " ".repeat(Math.max(0, width - CAT_WIDTH - 2));
+    const pose = getCatPose(this.frameIndex);
+    const topRows = pose.slice(0, -1).map((line) =>
+      padding + truncateToWidth(color(line), CAT_WIDTH, "")
+    );
+
+    const border = base[0]!;
+    const borderSegment = sliceByColumn(border, width - CAT_WIDTH - 2, CAT_WIDTH, true);
+    const bottom = pose.at(-1)!;
+    const leadingWidth = bottom.length - bottom.trimStart().length;
+    const trailingWidth = Math.max(0, CAT_WIDTH - bottom.length);
+    const leadingBorder = sliceByColumn(borderSegment, 0, leadingWidth, true);
+    const trailingBorder = sliceByColumn(borderSegment, CAT_WIDTH - trailingWidth, trailingWidth, true);
+    const spriteBorder = leadingBorder + color(bottom.slice(leadingWidth)) + trailingBorder;
+    const left = sliceByColumn(border, 0, width - CAT_WIDTH - 2, true);
+    const right = sliceByColumn(border, width - 2, 2, true);
+    const mergedBorder = left + spriteBorder + right;
+
+    // The editor remains the focused component. Two companion rows are added,
+    // while its feet replace a segment of the existing top border.
+    return [...topRows, visibleWidth(mergedBorder) <= width
+      ? mergedBorder
+      : truncateToWidth(mergedBorder, width, ""), ...base.slice(1)];
   }
 
   dispose(): void {
@@ -140,6 +158,8 @@ class CatSprite implements Component {
 
 export default function (pi: ExtensionAPI) {
   let host: CatSprite | undefined;
+  let previousFactory: EditorFactory | undefined;
+  let installedFactory: EditorFactory | undefined;
   let mode: AnimationMode = "smart";
   let visible = true;
   let working = false;
@@ -147,11 +167,18 @@ export default function (pi: ExtensionAPI) {
   const syncAnimation = () => host?.setBehavior(mode, working);
 
   const mount = (ctx: ExtensionContext) => {
-    if (ctx.mode !== "tui" || !visible) return;
-    ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
-      host = new CatSprite(tui, theme, mode, working);
-      return host;
-    }, { placement: "aboveEditor" });
+    if (ctx.mode !== "tui") return;
+    previousFactory = ctx.ui.getEditorComponent();
+    installedFactory = (tui, theme, keybindings) => {
+      host?.dispose();
+      const editor = previousFactory?.(tui, theme, keybindings)
+        ?? new CustomEditor(tui, theme, keybindings);
+      const render = editor.render.bind(editor);
+      host = new CatSprite(tui, mode, working, visible);
+      editor.render = (width: number) => host?.renderEditor(editor, render, width) ?? render(width);
+      return editor;
+    };
+    ctx.ui.setEditorComponent(installedFactory);
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -174,12 +201,7 @@ export default function (pi: ExtensionAPI) {
   const applyAction = (action: CatAction, ctx: ExtensionContext) => {
     if (action.type === "visibility") {
       visible = action.visible;
-      if (visible) {
-        mount(ctx);
-      } else {
-        ctx.ui.setWidget(WIDGET_KEY, undefined);
-        host = undefined;
-      }
+      host?.setVisible(visible);
     } else {
       mode = action.mode;
       syncAnimation();
@@ -237,7 +259,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    ctx.ui.setWidget(WIDGET_KEY, undefined);
+    host?.dispose();
     host = undefined;
+    if (ctx.mode === "tui" && ctx.ui.getEditorComponent() === installedFactory) {
+      ctx.ui.setEditorComponent(previousFactory);
+    }
+    previousFactory = undefined;
+    installedFactory = undefined;
   });
 }
