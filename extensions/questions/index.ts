@@ -139,7 +139,7 @@ export default function questionsExtension(
               ctx.ui.notify(safeTelegramQuestionError(error), "warning");
             },
           });
-          if (telegramReply && outcome.source !== "telegram") {
+          if (telegramReply && (!("source" in outcome) || outcome.source !== "telegram")) {
             void telegramReply.mirror(outcome).catch((error) => {
               if (telegramWarningShown) return;
               telegramWarningShown = true;

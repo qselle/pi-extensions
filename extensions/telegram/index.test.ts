@@ -114,7 +114,7 @@ test("sets up, reports, disables, and re-enables Telegram without reload", async
       fetch: (async (_url, init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return success();
-      }) as typeof fetch,
+      }),
     })).toBeUndefined();
     await pi.emit("session_start", {}, ctx);
 
@@ -166,7 +166,7 @@ test("registers the shared service, delivers goal events, and exposes explicit t
     fetch: (async (_url, init) => {
       bodies.push(JSON.parse(String(init?.body)));
       return success();
-    }) as typeof fetch,
+    }),
   })!;
   await pi.emit("session_start", {}, ctx);
   expect(getTelegramService()).toBe(runtime.service);
@@ -201,7 +201,7 @@ test("loads dedicated config once per extension lifecycle", async () => {
       fetch: (async (_url, init) => {
         bodies.push(JSON.parse(String(init?.body)));
         return success();
-      }) as typeof fetch,
+      }),
     })!;
     return { pi, runtime };
   };
@@ -239,7 +239,7 @@ test("waits for pending goal delivery during session shutdown", async () => {
   const runtime = telegramExtension(pi as any, {
     env: validEnv,
     configFile: false,
-    fetch: (async () => new Promise<Response>((resolve) => { resolveResponse = resolve; })) as typeof fetch,
+    fetch: (async () => new Promise<Response>((resolve) => { resolveResponse = resolve; })),
   })!;
   await pi.emit("session_start", {}, ctx);
   pi.events.emit(GOAL_COMPLETED_EVENT, completion());

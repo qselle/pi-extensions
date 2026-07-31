@@ -16,7 +16,7 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
 	bellSequence,
 	isDuplicate,
@@ -58,18 +58,33 @@ function saveEnabled(enabled: boolean): void {
 }
 
 /** Flatten a message's content into plain text. */
-function textOf(message: any): string {
-	const c = message?.content;
+function textOf(message: unknown): string {
+	const c = message && typeof message === "object"
+		? (message as { content?: unknown }).content
+		: undefined;
 	if (typeof c === "string") return c;
 	if (!Array.isArray(c)) return "";
 	return c
-		.filter((p: any) => p?.type === "text")
-		.map((p: any) => p.text ?? "")
+		.filter((part): part is { type: "text"; text?: string } =>
+			Boolean(part && typeof part === "object" && (part as { type?: unknown }).type === "text"))
+		.map((part) => part.text ?? "")
 		.join(" ");
 }
 
+function failureText(result: unknown): string | undefined {
+	if (!result || typeof result !== "object") return undefined;
+	const content = (result as { content?: unknown }).content;
+	if (!Array.isArray(content)) return undefined;
+	for (const part of content) {
+		if (!part || typeof part !== "object") continue;
+		const candidate = part as { type?: unknown; text?: unknown };
+		if (candidate.type === "text" && typeof candidate.text === "string") return candidate.text;
+	}
+	return undefined;
+}
+
 const projectOf = (cwd: unknown, fallback: string): string =>
-	String(cwd ?? "").split("/").filter(Boolean).pop() || fallback;
+	basename(String(cwd ?? "").trim()) || fallback;
 
 export default function notifyExtension(pi: ExtensionAPI): void {
 	let cfg = loadConfig();
@@ -124,7 +139,7 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("notify", {
 		description: "Toggle native desktop notifications for agent activity",
-		handler: async (args: string, ctx: any) => {
+		handler: async (args, ctx) => {
 			const a = String(args ?? "").trim().toLowerCase();
 			if (a === "test") {
 				deliver(`${project}: test`, "Notification test — click to focus this window.");
@@ -147,13 +162,13 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("session_start", (_event: any, ctx: any) => {
-		project = projectOf(ctx?.cwd, "pi");
+	pi.on("session_start", (_event, ctx) => {
+		project = projectOf(ctx.cwd, "pi");
 		finalResponse = "";
 		lastFailure = undefined;
 		notifiedThisRun = false;
 		focused = true;
-		focusAware = ctx?.mode === "tui" && supportsFocusReporting(process.env, !!process.stdout.isTTY);
+		focusAware = ctx.mode === "tui" && supportsFocusReporting(process.env, !!process.stdout.isTTY);
 		unsubscribe?.();
 		unsubscribe = undefined;
 		if (focusAware) {
@@ -192,29 +207,28 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 		notifiedThisRun = false;
 	});
 
-	pi.on("tool_execution_start", (event: any, ctx: any) => {
-		if (event?.toolName !== "questionnaire") return;
-		send(`${projectOf(ctx?.cwd, project)}: input needed`, "The agent is waiting for your answer.");
+	pi.on("tool_execution_start", (event, ctx) => {
+		if (event.toolName !== "questionnaire") return;
+		send(`${projectOf(ctx.cwd, project)}: input needed`, "The agent is waiting for your answer.");
 	});
 
-	pi.on("tool_execution_end", (event: any) => {
-		if (event?.isError) {
-			const text = event?.result?.content?.find?.((p: any) => p?.type === "text")?.text;
-			lastFailure = preview(text || `${event?.toolName ?? "tool"} failed`, 120);
+	pi.on("tool_execution_end", (event) => {
+		if (event.isError) {
+			lastFailure = preview(failureText(event.result) || `${event.toolName} failed`, 120);
 		} else {
 			lastFailure = undefined; // a later success clears the prior failure (recovered)
 		}
 	});
 
-	pi.on("agent_end", (event: any) => {
-		const assistant = [...(event?.messages ?? [])].reverse().find((m: any) => m?.role === "assistant");
+	pi.on("agent_end", (event) => {
+		const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
 		if (assistant) finalResponse = preview(textOf(assistant));
 	});
 
-	pi.on("agent_settled", (_event: any, ctx: any) => {
+	pi.on("agent_settled", (_event, ctx) => {
 		if (notifiedThisRun || goalActive) return;
 		notifiedThisRun = true;
-		project = projectOf(ctx?.cwd, project);
+		project = projectOf(ctx.cwd, project);
 		if (lastFailure) send(`${project}: tool failed`, lastFailure);
 		else send(`${project}: done`, finalResponse || "Turn complete.");
 	});

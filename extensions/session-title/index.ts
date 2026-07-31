@@ -61,9 +61,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     last = undefined;
     // Recover prompts so a resumed or reloaded session can still be titled.
     for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
-      const message = (entry as any)?.message;
-      if ((entry as any)?.type !== "message" || message?.role !== "user") continue;
-      const text = userText(message.content);
+      if (entry.type !== "message" || entry.message.role !== "user") continue;
+      const text = userText(entry.message.content);
       if (text) prompts.push(text);
     }
     if (prompts.length > MAX_TRACKED_PROMPTS) prompts = prompts.slice(-MAX_TRACKED_PROMPTS);
@@ -83,7 +82,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   pi.on("session_tree", (_event, ctx) => load(ctx));
 
   pi.on("before_agent_start", (event) => {
-    const prompt = typeof (event as any)?.prompt === "string" ? (event as any).prompt.trim() : "";
+    const prompt = event.prompt.trim();
     if (!prompt) return undefined;
     prompts.push(prompt);
     if (prompts.length > MAX_TRACKED_PROMPTS) prompts = prompts.slice(-MAX_TRACKED_PROMPTS);

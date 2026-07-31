@@ -62,7 +62,7 @@ export type AgentRuntimeFactory = (request: SpawnRequest, signal?: AbortSignal) 
 export interface CoordinatorHooks {
   onChange?(): void;
   onCompletion?(agent: AgentSnapshot): void | Promise<void>;
-  onUsage?(message: any, agent: AgentSnapshot): void;
+  onUsage?(message: unknown, agent: AgentSnapshot): void;
 }
 
 export interface CoordinatorOptions {
@@ -391,18 +391,19 @@ export class SubagentCoordinator {
       this.changed();
       return;
     }
-    if (event.type === "message_end" && (event as any).message?.role === "assistant") {
-      const message = (event as any).message;
+    if (event.type === "message_end") {
+      const message = asRecord(event.message);
+      if (message?.role !== "assistant") return;
       const text = assistantText(message);
       if (text) agent.output = boundedText(text, MAX_RESULT_BYTES);
       agent.usage.turns += 1;
-      const usage = message.usage;
+      const usage = asRecord(message.usage);
       if (usage) {
         agent.usage.input += positive(usage.input);
         agent.usage.output += positive(usage.output);
         agent.usage.cacheRead += positive(usage.cacheRead);
         agent.usage.cacheWrite += positive(usage.cacheWrite);
-        agent.usage.cost += positive(usage.cost?.total);
+        agent.usage.cost += positive(asRecord(usage.cost)?.total);
       }
       if (typeof message.provider === "string" && typeof message.model === "string") {
         agent.model = `${message.provider}/${message.model}`;
@@ -636,13 +637,21 @@ function deferred(): Deferred {
   return { promise, resolve };
 }
 
-function assistantText(message: any): string {
-  if (!Array.isArray(message?.content)) return "";
-  return sanitize(message.content
-    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
-    .map((part: any) => part.text)
+function assistantText(message: unknown): string {
+  const content = asRecord(message)?.content;
+  if (!Array.isArray(content)) return "";
+  return sanitize(content
+    .map(asRecord)
+    .filter((part): part is Record<string, unknown> => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
     .join("\n")
     .trim());
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object"
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function sanitize(text: string): string {

@@ -100,7 +100,7 @@ export function createTelegramQuestionReply(
   return {
     source,
     async mirror(outcome) {
-      if (outcome.source === "telegram") return;
+      if ("source" in outcome && outcome.source === "telegram") return;
       const opened = handle ?? await handleReady;
       if (!opened) return;
       if (outcome.status === "answered") {

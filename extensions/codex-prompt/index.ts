@@ -67,7 +67,7 @@ export default function codexPromptExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("codex-prompt", {
 		description: "Toggle the Codex-style › input prompt (reload to apply)",
-		handler: async (args: string, ctx: any) => {
+		handler: async (args, ctx) => {
 			const arg = String(args ?? "").trim().toLowerCase();
 			if (arg === "on" || arg === "off") {
 				writeEnabled(arg === "on");

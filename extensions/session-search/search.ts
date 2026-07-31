@@ -174,20 +174,21 @@ export async function scanSession(
     unreadable = true;
   }
 
-  const matched = best && terms.every((term) => foundTerms.has(term));
+  let result: SessionSearchResult | undefined;
+  if (best && terms.every((term) => foundTerms.has(term))) {
+    result = {
+      session,
+      score: totalScore,
+      snippet: snippetAround(best.text, query),
+      entryId: best.entryId,
+      entryLabel: best.label,
+      truncated: readResult.truncated,
+      malformedLines: readResult.malformedLines,
+      oversizedLines: readResult.oversizedLines,
+    };
+  }
   return {
-    result: matched
-      ? {
-          session,
-          score: totalScore,
-          snippet: snippetAround(best.text, query),
-          entryId: best.entryId,
-          entryLabel: best.label,
-          truncated: readResult.truncated,
-          malformedLines: readResult.malformedLines,
-          oversizedLines: readResult.oversizedLines,
-        }
-      : undefined,
+    result,
     unreadable,
     truncated: readResult.truncated,
     malformedLines: readResult.malformedLines,

@@ -65,7 +65,7 @@ export default function turnSeparatorExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("message_start", (event) => {
-		if ((event as any)?.message?.role !== "assistant") return;
+		if (event.message.role !== "assistant") return;
 		if (workStart != null) {
 			const seconds = Math.round((Date.now() - workStart) / 1000);
 			const data: SeparatorEntry = { seconds, stats: hasStats(stats) ? stats : undefined };
@@ -77,12 +77,12 @@ export default function turnSeparatorExtension(pi: ExtensionAPI): void {
 
 	pi.on("message_update", (event) => {
 		if (firstTokenAt != null) return;
-		const type = (event as any)?.assistantMessageEvent?.type;
+		const type = event.assistantMessageEvent.type;
 		if (type === "text_delta" || type === "thinking_delta") firstTokenAt = Date.now();
 	});
 
 	pi.on("message_end", (event) => {
-		const message = (event as any)?.message;
+		const message = event.message;
 		if (message?.role !== "assistant") return;
 		const endedAt = Date.now();
 		stats = addUsage(stats, message.usage);

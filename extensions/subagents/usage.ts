@@ -21,15 +21,17 @@ export function emptySubagentUsage(): SubagentUsageTotals {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 }
 
-export function usageRecord(message: any, agent: { id: string; name: string }): SubagentUsageRecord | undefined {
-  if (!message?.usage) return undefined;
+export function usageRecord(message: unknown, agent: { id: string; name: string }): SubagentUsageRecord | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as Record<string, unknown>;
+  if (!record.usage) return undefined;
   return {
     version: 1,
     agentId: agent.id,
     agentName: agent.name,
-    provider: typeof message.provider === "string" ? message.provider : undefined,
-    model: typeof message.model === "string" ? message.model : undefined,
-    usage: normalizeUsage(message.usage),
+    provider: typeof record.provider === "string" ? record.provider : undefined,
+    model: typeof record.model === "string" ? record.model : undefined,
+    usage: normalizeUsage(record.usage),
   };
 }
 

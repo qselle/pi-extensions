@@ -18,13 +18,23 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+async function captureApiError(promise: Promise<unknown>): Promise<TelegramApiError> {
+  try {
+    await promise;
+    throw new Error("Expected Telegram API call to fail");
+  } catch (error) {
+    if (!(error instanceof TelegramApiError)) throw error;
+    return error;
+  }
+}
+
 test("posts messages through the shared API client", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const api = new TelegramApiClient(config, {
     fetch: (async (url, init) => {
       requests.push({ url: String(url), init });
       return jsonResponse({ ok: true, result: { message_id: 17 } });
-    }) as typeof fetch,
+    }),
   });
 
   expect(await api.sendMessage("Goal complete", {
@@ -51,7 +61,7 @@ test("renders inline choices and exposes callback/control helpers", async () => 
       const body = JSON.parse(String(init?.body));
       requests.push({ method, body });
       return jsonResponse({ ok: true, result: method === "sendMessage" ? { message_id: 21 } : true });
-    }) as typeof fetch,
+    }),
   });
 
   const longLabel = "x".repeat(80);
@@ -115,30 +125,30 @@ test("retries only bounded explicit sendMessage rate limits", async () => {
       return calls === 1
         ? jsonResponse({ ok: false, parameters: { retry_after: 2 } }, 429)
         : jsonResponse({ ok: true, result: { message_id: 18 } });
-    }) as typeof fetch,
+    }),
     sleep: async (milliseconds) => { delays.push(milliseconds); },
   });
   expect((await api.sendMessage("test")).messageId).toBe(18);
   expect(delays).toEqual([2_000]);
 
   const limited = new TelegramApiClient(config, {
-    fetch: (async () => jsonResponse({ ok: false, parameters: { retry_after: 30 } }, 429)) as typeof fetch,
+    fetch: (async () => jsonResponse({ ok: false, parameters: { retry_after: 30 } }, 429)),
   });
   await expect(limited.sendMessage("test")).rejects.toMatchObject({ code: "rate_limited", status: 429 });
 });
 
 test("sanitizes server and network failures", async () => {
   const rejected = new TelegramApiClient(config, {
-    fetch: (async () => jsonResponse({ ok: false, description: `leaked ${TOKEN}` }, 500)) as typeof fetch,
+    fetch: (async () => jsonResponse({ ok: false, description: `leaked ${TOKEN}` }, 500)),
   });
-  const serverError = await rejected.sendMessage("test").catch((error) => error as TelegramApiError);
+  const serverError = await captureApiError(rejected.sendMessage("test"));
   expect(serverError).toMatchObject({ code: "rejected", status: 500 });
   expect(serverError.message).not.toContain(TOKEN);
 
   const offline = new TelegramApiClient(config, {
-    fetch: (async () => { throw new Error(`URL includes ${TOKEN}`); }) as typeof fetch,
+    fetch: (async () => { throw new Error(`URL includes ${TOKEN}`); }),
   });
-  const networkError = await offline.sendMessage("test").catch((error) => error as TelegramApiError);
+  const networkError = await captureApiError(offline.sendMessage("test"));
   expect(networkError.code).toBe("network");
   expect(networkError.message).not.toContain(TOKEN);
 });
@@ -148,7 +158,7 @@ test("times out stalled requests, including response bodies", async () => {
     timeoutMs: 5,
     fetch: ((_: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-    })) as typeof fetch,
+    })),
   });
   await expect(stalled.sendMessage("test")).rejects.toMatchObject({ code: "timeout" });
 
@@ -158,19 +168,19 @@ test("times out stalled requests, including response bodies", async () => {
       start(controller) {
         init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
       },
-    }), { status: 200 })) as typeof fetch,
+    }), { status: 200 })),
   });
   await expect(stalledBody.sendMessage("test")).rejects.toMatchObject({ code: "timeout" });
 });
 
 test("rejects invalid and oversized Telegram responses", async () => {
   const invalid = new TelegramApiClient(config, {
-    fetch: (async () => new Response("not json", { status: 200 })) as typeof fetch,
+    fetch: (async () => new Response("not json", { status: 200 })),
   });
   await expect(invalid.sendMessage("test")).rejects.toMatchObject({ code: "response" });
 
   const oversized = new TelegramApiClient(config, {
-    fetch: (async () => new Response("x".repeat(70_000), { status: 200 })) as typeof fetch,
+    fetch: (async () => new Response("x".repeat(70_000), { status: 200 })),
   });
   await expect(oversized.sendMessage("test")).rejects.toMatchObject({ code: "response" });
 });

@@ -95,7 +95,7 @@ identical invocation is served from cache; a genuine new edit always re-runs.
 - **One run per edited file.** Three edits under the same check in one turn run it three times. That is deliberate: coalescing would risk reporting a result that predates the later edits. Fine for a fast test command, noticeable for a slow one — scope `match` narrowly, or raise `timeoutMs` and accept the cost.
 - **Shell-dependent.** Commands run through `$SHELL -c` (POSIX) or `cmd.exe /c` (Windows). Paths are quoted for the respective shell.
 - **Not a linter of record.** It reports the exit code of whatever you configure; it does not parse or rank diagnostics.
-- **This repo has no `tsconfig.json`**, so a bare `tsc --noEmit` reports false positives such as `Cannot find name 'process'`. Prefer `bun test {dir}` here.
+- **Repository checks:** This repository has a strict `tsconfig.json`. Run `bun run check` for type-checking plus the complete test suite, or keep per-edit checks focused with `bun test {dir}`.
 
 ## Dependencies
 

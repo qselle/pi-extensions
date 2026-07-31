@@ -6,8 +6,10 @@ const MAX_RETRY_AFTER_SECONDS = 5;
 const MAX_INLINE_BUTTON_CHARS = 64;
 const MAX_CALLBACK_NOTICE_CHARS = 200;
 
+export type TelegramFetch = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+
 export interface TelegramApiOptions {
-  fetch?: typeof fetch;
+  fetch?: TelegramFetch;
   sleep?: (milliseconds: number) => Promise<void>;
   timeoutMs?: number;
 }
@@ -46,7 +48,7 @@ export class TelegramApiError extends Error {
 }
 
 export class TelegramApiClient {
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: TelegramFetch;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly defaultTimeoutMs: number;
 

@@ -135,7 +135,7 @@ export function readTelegramConfig(
   const chatId = env.PI_TELEGRAM_CHAT_ID?.trim() || file.chatId?.trim();
   const envThreadId = env.PI_TELEGRAM_THREAD_ID?.trim();
   const rawThreadId: string | number | undefined = envThreadId || file.threadId;
-  const details = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
+  const rawDetails = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
   const envQuestionDelay = env.PI_TELEGRAM_QUESTION_DELAY_MINUTES?.trim();
   const rawQuestionDelay: string | number = envQuestionDelay
     || (file.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES);
@@ -166,9 +166,10 @@ export function readTelegramConfig(
       return { status: "invalid", message: "The Telegram thread ID must be a positive integer." };
     }
   }
-  if (details !== "minimal" && details !== "summary" && details !== "full") {
+  if (rawDetails !== "minimal" && rawDetails !== "summary" && rawDetails !== "full") {
     return { status: "invalid", message: "Telegram goal details must be minimal, summary, or full." };
   }
+  const details: TelegramGoalDetails = rawDetails;
   const questionDelayMinutes = typeof rawQuestionDelay === "number" ? rawQuestionDelay : Number(rawQuestionDelay);
   if (!Number.isFinite(questionDelayMinutes) || questionDelayMinutes <= 0 || questionDelayMinutes > MAX_QUESTION_DELAY_MINUTES) {
     return {

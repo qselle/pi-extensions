@@ -134,7 +134,7 @@ describe("registration and search flow", () => {
       },
       search: async (_sessions, query, options) => {
         searchedQuery = query;
-        options.onProgress?.(1, 1);
+        options?.onProgress?.(1, 1);
         return {
           ...summary(),
           unreadableSessions: 1,
