@@ -9,11 +9,11 @@ orange `─` rules.
 ──────────────────────────────────
 ```
 
-Subclasses pi's `CustomEditor` and overrides **only** `render`: the first content
-line's 2-space gutter becomes a `›` prompt (in the editor's border color). The
-editor's `─` rules are kept, so the line count and cursor stay correct and
-`cat-buddy` can still find the editor. All input handling — keybindings, history,
-autocomplete, paste, multiline — is inherited unchanged.
+Decorates the current editor's **render** method: the first content line's
+2-space gutter becomes a `›` prompt (in the editor's border color). The editor's
+`─` rules are kept, so the line count and cursor stay correct and `cat-buddy`
+can share the editor. All input handling — keybindings, history, autocomplete,
+paste, multiline — remains on the wrapped editor unchanged.
 
 ## Safety
 
@@ -35,6 +35,6 @@ autocomplete, paste, multiline — is inherited unchanged.
 
 ## Dependencies
 
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API (`ctx.ui.setEditorComponent`, `CustomEditor`).
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API (`ctx.ui.getEditorComponent`, `ctx.ui.setEditorComponent`, `CustomEditor`).
 - **Depends on extensions:** None.
 - **Used by extensions:** None.

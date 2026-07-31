@@ -226,6 +226,8 @@ test("cancelling preserves the existing editor draft and shutdown restores the p
   await pi.emit("session_start", { reason: "startup" }, ctx);
   const installedFactory = currentFactory;
   const editor = installedFactory({ requestRender() {} }, theme, keybindings);
+  editor.handleInput("x");
+  expect(editor.getText()).toBe("x");
   editor.handleInput("\x12");
   await Promise.resolve();
   await Promise.resolve();

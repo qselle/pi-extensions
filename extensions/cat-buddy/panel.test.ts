@@ -96,7 +96,6 @@ test("wraps navigation and closes without changing state", () => {
 
 test("registers Ctrl+Shift+C to toggle cat visibility", () => {
   const shortcuts = new Map<string, any>();
-  const widgets: unknown[] = [];
   const notifications: string[] = [];
   const pi = {
     on() {},
@@ -107,13 +106,11 @@ test("registers Ctrl+Shift+C to toggle cat visibility", () => {
   const ctx = {
     mode: "rpc",
     ui: {
-      setWidget: (...args: unknown[]) => widgets.push(args),
       notify: (message: string) => notifications.push(message),
     },
   };
 
   shortcuts.get("ctrl+shift+c").handler(ctx);
-  expect((widgets.at(-1) as unknown[])[1]).toBeUndefined();
   expect(notifications.at(-1)).toContain("hidden");
   shortcuts.get("ctrl+shift+c").handler(ctx);
   expect(notifications.at(-1)).toContain("visible");

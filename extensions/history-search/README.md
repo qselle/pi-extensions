@@ -46,7 +46,7 @@ A short single-line editor draft seeds the initial query. Multiline or long draf
 
 Pi also uses `Ctrl+R` to rename a session *inside* the `/resume` session picker. This extension follows the contextual approach used by the upstream history-search extension: it intercepts `Ctrl+R` in a custom main editor instead of registering a global extension shortcut. As a result, history search wins in the normal editor, rename still wins inside `/resume`, and Pi does not report a shortcut conflict.
 
-The editor wrapper preserves the border color of an editor installed before it (for example, `accent-color`) and restores that editor when the extension shuts down or reloads.
+The extension decorates the editor installed before it instead of replacing that editor. Rendering, input modes, border styling, autocomplete, and other custom behavior therefore remain intact, and the prior editor is restored when the extension shuts down or reloads.
 
 ## Why the `fzf` executable is not used
 
@@ -57,4 +57,4 @@ An installed `fzf` binary is not needed. Launching it interactively would compet
 - **Runtime:** Pi's public extension, session, editor, keybinding, and TUI APIs.
 - **Third-party packages or executables:** None.
 - **Mode:** Interactive TUI only; RPC, print, and JSON modes cannot display the picker.
-- **Custom editors:** This extension installs its own `CustomEditor` wrapper. It preserves a predecessor's border-color behavior, but other custom input modes may depend on extension load order. `/history-search` remains available regardless.
+- **Custom editors:** The extension decorates the current editor's input handler and composes with the other editor decorators in this package.
