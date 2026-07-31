@@ -1,33 +1,11 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
+import catExtension from "./index.ts";
+import { CatPanel, parseCatCommand } from "./panel.ts";
 
-mock.module("@earendil-works/pi-tui", () => ({
-  Input: class Input {
-    private value = "";
-    focused = false;
-    getValue() { return this.value; }
-    setValue(value: string) { this.value = value; }
-    handleInput(data: string) {
-      if (data === "backspace") this.value = this.value.slice(0, -1);
-      else if (data === "ctrl+u") this.value = "";
-      else if (data.length === 1 && data >= " ") this.value += data;
-    }
-    render(width: number) { return [this.value.slice(0, width)]; }
-    invalidate() {}
-  },
-  Text: class Text {
-    constructor(public text: string) {}
-    render() { return [this.text]; }
-    invalidate() {}
-  },
-  matchesKey: (data: string, key: string) => data === key,
-  truncateToWidth: (value: string, width: number) => value.length <= width ? value : `${value.slice(0, Math.max(0, width - 1))}…`,
-  visibleWidth: (value: string) => value.length,
-  wrapTextWithAnsi: (value: string) => [value],
-  sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
-}));
-
-const { CatPanel, parseCatCommand } = await import("./panel.ts");
-const { default: catExtension } = await import("./index.ts");
+const ENTER = "\r";
+const ESCAPE = "\x1b";
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -68,15 +46,15 @@ test("selects visibility and animation options from the keyboard", () => {
     () => visibilityClosed++,
     (action: unknown) => visibilityActions.push(action),
   );
-  visibilityPanel.handleInput("enter");
+  visibilityPanel.handleInput(ENTER);
   expect(visibilityActions).toEqual([{ type: "visibility", visible: false }]);
   expect(visibilityClosed).toBe(1);
 
   const modeActions: unknown[] = [];
   const modePanel = new CatPanel(false, "smart", theme, () => {}, (action: unknown) => modeActions.push(action));
-  modePanel.handleInput("down");
-  modePanel.handleInput("down");
-  modePanel.handleInput("enter");
+  modePanel.handleInput(DOWN);
+  modePanel.handleInput(DOWN);
+  modePanel.handleInput(ENTER);
   expect(modeActions).toEqual([{ type: "mode", mode: "always" }]);
 });
 
@@ -84,12 +62,12 @@ test("wraps navigation and closes without changing state", () => {
   const actions: unknown[] = [];
   let closed = 0;
   const panel = new CatPanel(true, "static", theme, () => closed++, (action: unknown) => actions.push(action));
-  panel.handleInput("up");
-  panel.handleInput("enter");
+  panel.handleInput(UP);
+  panel.handleInput(ENTER);
   expect(actions).toEqual([{ type: "mode", mode: "static" }]);
 
   const escapePanel = new CatPanel(true, "smart", theme, () => closed++, (action: unknown) => actions.push(action));
-  escapePanel.handleInput("escape");
+  escapePanel.handleInput(ESCAPE);
   expect(closed).toBe(2);
   expect(actions).toHaveLength(1);
 });
