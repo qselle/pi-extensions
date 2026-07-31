@@ -149,7 +149,7 @@ class CatSprite {
   private resetFrame(): void {
     if (this.frameIndex === 0) return;
     this.frameIndex = 0;
-    this.tui.requestRender();
+    if (this.visible && this.eligible) this.tui.requestRender();
   }
 
   private setEligible(eligible: boolean): void {

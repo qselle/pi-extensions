@@ -91,7 +91,7 @@ test("docks on the current editor through Pi's public editor lifecycle", async (
   expect(currentFactory).toBe(previousFactory);
 });
 
-test("stops animation while hidden and restarts it when shown", async () => {
+test("pauses smart animation while hidden without background redraws", async () => {
   jest.useFakeTimers();
 
   const pi = new MockPi();
@@ -140,6 +140,18 @@ test("stops animation while hidden and restarts it when shown", async () => {
   const rendersAfterShow = renders;
   jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
   expect(renders).toBe(rendersAfterShow + 1);
+  expect(editor.render(40)).toEqual(neutralPose);
+  expect(jest.getTimerCount()).toBe(1);
+
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 2);
+  expect(editor.render(40)).not.toEqual(neutralPose);
+  await pi.commands.get("cat").handler("hide", ctx);
+  const rendersBeforeSettlement = renders;
+  await pi.emit("agent_settled", {}, ctx);
+  expect(renders).toBe(rendersBeforeSettlement);
+  expect(jest.getTimerCount()).toBe(0);
+
+  await pi.commands.get("cat").handler("show", ctx);
   expect(editor.render(40)).toEqual(neutralPose);
   expect(jest.getTimerCount()).toBe(1);
 
