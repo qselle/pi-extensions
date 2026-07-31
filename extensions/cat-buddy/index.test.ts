@@ -27,16 +27,29 @@ class MockPi {
   }
 }
 
-test("uses Pi's public above-editor widget lifecycle and supports visibility controls", async () => {
+test("docks on the current editor through Pi's public editor lifecycle", async () => {
   const pi = new MockPi();
-  const widgets: Array<{ key: string; content: unknown; options?: unknown }> = [];
   const notices: string[] = [];
+  let colorCalls = 0;
+  const baseLines = ["─".repeat(40), "  prompt", "─".repeat(40)];
+  const baseEditor = {
+    render: () => baseLines,
+    handleInput() {},
+    invalidate() {},
+    getText: () => "",
+    setText() {},
+    borderColor: (value: string) => {
+      colorCalls += 1;
+      return value;
+    },
+  };
+  const previousFactory = () => baseEditor;
+  let currentFactory: any = previousFactory;
   const ctx = {
     mode: "tui",
     ui: {
-      setWidget: (key: string, content: unknown, options?: unknown) => {
-        widgets.push({ key, content, options });
-      },
+      getEditorComponent: () => currentFactory,
+      setEditorComponent: (factory: any) => { currentFactory = factory; },
       notify: (message: string) => notices.push(message),
     },
   };
@@ -46,23 +59,26 @@ test("uses Pi's public above-editor widget lifecycle and supports visibility con
   expect(pi.shortcuts.has("ctrl+shift+c")).toBe(true);
 
   await pi.emit("session_start", {}, ctx);
-  expect(widgets.at(-1)).toMatchObject({
-    key: "cat-buddy",
-    content: expect.any(Function),
-    options: { placement: "aboveEditor" },
-  });
+  expect(currentFactory).not.toBe(previousFactory);
+  const editor = currentFactory(
+    { terminal: { rows: 24 }, requestRender() {} },
+    { fg: (_color: string, value: string) => value },
+    {},
+  );
+  const docked = editor.render(40);
+  expect(docked).toHaveLength(baseLines.length + 2);
+  expect(docked[0]).toContain("⡠");
+  expect(colorCalls).toBeGreaterThan(0);
+  expect(docked[2]).toContain("⠈⠉");
+  expect(docked[3]).toBe("  prompt");
 
   await pi.commands.get("cat").handler("hide", ctx);
-  expect(widgets.at(-1)).toEqual({
-    key: "cat-buddy",
-    content: undefined,
-    options: undefined,
-  });
+  expect(editor.render(40)).toEqual(baseLines);
   expect(notices.at(-1)).toContain("hidden");
 
   await pi.commands.get("cat").handler("show", ctx);
-  expect(widgets.at(-1)?.content).toBeInstanceOf(Function);
+  expect(editor.render(40)).toHaveLength(baseLines.length + 2);
 
   await pi.emit("session_shutdown", {}, ctx);
-  expect(widgets.at(-1)?.content).toBeUndefined();
+  expect(currentFactory).toBe(previousFactory);
 });

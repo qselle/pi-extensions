@@ -35,4 +35,14 @@ describe("transformEditorLines", () => {
 		const lines = ["──────", "  /mod", "──────", "  /model", "  /models"];
 		expect(transformEditorLines(lines, "› ")).toEqual(["──────", "› /mod", "──────", "  /model", "  /models"]);
 	});
+	test("ignores cat companion rows when locating the editor content", () => {
+		const lines = ["          ⡠⡪", "          ⢇⡣", "────────⠈⠉", "  hello", "──────────"];
+		expect(transformEditorLines(lines, "› ")).toEqual([
+			"          ⡠⡪",
+			"          ⢇⡣",
+			"────────⠈⠉",
+			"› hello",
+			"──────────",
+		]);
+	});
 });
