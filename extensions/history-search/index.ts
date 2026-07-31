@@ -1,6 +1,5 @@
 import {
   CustomEditor,
-  type EditorFactory,
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
@@ -11,6 +10,7 @@ import { HistoryPicker } from "./picker.ts";
 
 const SHORTCUT = "ctrl+r";
 const OVERLAY_MODAL_EVENT = "workflow-overlay:modal";
+type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
 
 class HistorySearchEditor extends CustomEditor {
   private readonly delegate: ReturnType<EditorFactory> | undefined;

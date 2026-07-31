@@ -60,8 +60,7 @@ current working directory. The generated filename combines a readable basename a
 hash of the absolute project root, so identically named repositories remain isolated
 and no project path is interpreted as a storage path.
 
-Mutations use a read-modify-atomic-rename flow and Pi's shared file-mutation queue when
-the host exports it; compatible older hosts use the extension's per-file in-process queue.
+Mutations use a read-modify-atomic-rename flow and a per-file in-process queue.
 Existing symlinked memory directories/files are rejected rather than followed. Malformed or
 unsupported files fail closed and are never silently overwritten.
 
@@ -255,9 +254,8 @@ piece of retrieved context stays observable and under user control.
 
 ## Dependencies and platform limitations
 
-- **Runtime:** Pi's public extension API, `typebox`, and Node.js standard-library modules
-  supplied by the host.
-- **Third-party runtime packages:** None.
+- **Runtime:** Pi's public extension API and Node.js standard-library modules supplied by the host.
+- **Third-party runtime packages:** `typebox` for the tool schema.
 - **Network/services:** None; no embeddings, telemetry, or remote database.
 - **Platforms:** The implementation is OS-neutral and uses no external command. It is tested
   on the repository's Bun test runner. Atomic replacement relies on same-directory filesystem

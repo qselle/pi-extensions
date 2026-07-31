@@ -197,8 +197,8 @@ test("does not open Telegram when the terminal wins during the configured delay"
   const [question] = normalizeQuestions([{ id: "wait", question: "Wait?" }]);
   const reply = createTelegramQuestionReply(service, question, 0, 1, { delayMs: 60_000 });
   const controller = new AbortController();
-  const result = reply.source.run(controller.signal).catch((error) => error as Error);
+  const result = reply.source.run(controller.signal);
   controller.abort();
-  expect((await result).name).toBe("AbortError");
+  await expect(result).rejects.toHaveProperty("name", "AbortError");
   expect(opened).toBe(false);
 });

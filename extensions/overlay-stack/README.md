@@ -31,7 +31,7 @@ On narrow or short terminals, cards hide responsively. If all cards cannot fit w
 
 The registry is process-global because Pi may evaluate a package entry point and a sibling relative import as separate Jiti module instances. Cards own their state and rendering; the stack owns only composition. This keeps goal validation, plan execution state, subagent orchestration, and file-change tracking independent.
 
-The workflow stack uses only Pi's public overlay API; unlike the cat's editor-placement compatibility shim, it does not patch private compositor behavior.
+The workflow stack uses only Pi's public overlay API.
 
 ## Dependencies
 

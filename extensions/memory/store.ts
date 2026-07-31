@@ -48,7 +48,7 @@ export interface MemoryStoreOptions {
 
 const localMutationTails = new Map<string, Promise<void>>();
 
-/** In-process fallback queue. The extension injects Pi's shared file queue at runtime. */
+/** Serialize mutations to the same store within this Pi process. */
 export async function queueLocalMutation<T>(path: string, work: () => Promise<T>): Promise<T> {
   const previous = localMutationTails.get(path) ?? Promise.resolve();
   let release!: () => void;

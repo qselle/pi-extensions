@@ -12,6 +12,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+import { basename } from "node:path";
 import { inhibitCommand } from "./inhibit.ts";
 
 interface Deps {
@@ -63,14 +64,14 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 
 	pi.registerCommand("prevent-sleep", {
 		description: "Keep the computer awake while the agent is working",
-		handler: async (args: string, ctx: any) => {
+		handler: async (args, ctx) => {
 			const a = String(args ?? "").trim().toLowerCase();
 			if (a === "on" || a === "off") {
 				enabled = a === "on";
 				sync();
 				ctx.ui.notify(`Prevent-sleep ${enabled ? "enabled" : "disabled"}.`, "info");
 			} else {
-				const tool = command.cmd.split("/").pop();
+				const tool = basename(command.cmd);
 				ctx.ui.notify(
 					`Prevent-sleep is ${enabled ? "on" : "off"} — currently ${inhibitor ? `holding the wake lock (${tool}, agent working)` : "idle"}.`,
 					"info",
