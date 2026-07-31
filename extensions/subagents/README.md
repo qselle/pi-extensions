@@ -118,7 +118,7 @@ Per-call limits:
 ## Dependencies and limitations
 
 - **Runtime:** Pi’s public extension, session, model, tool, TUI, and RPC APIs.
-- **Third-party packages:** None; Pi-provided packages are supplied by the host.
+- **Third-party packages:** `typebox` for the tool schema; Pi-provided packages are supplied by the host.
 - **External services:** The configured model provider used by each child and by `summary` context generation.
 - **Platforms:** macOS, Linux, and Windows are supported. Process-tree termination uses Unix process groups or Windows `taskkill`.
 - **Persistence:** Child conversations are intentionally temporary and live only for the current parent runtime. Completion messages and usage records remain in the parent session; the latest 500 transcript entries remain inspectable in memory after close until that runtime ends.

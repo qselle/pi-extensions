@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
-import * as CodingAgent from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -61,7 +60,10 @@ export interface MemoryActionDetails {
   result?: unknown;
 }
 
-export type MemoryCommandInput = MemoryActionInput | { action: "enable" | "disable" };
+export type MemoryCommandInput =
+  | MemoryActionInput
+  | { action: "enable" }
+  | { action: "disable" };
 
 export interface MemoryExtensionOptions {
   agentDir?: string;
@@ -81,16 +83,10 @@ export default function memoryExtension(pi: ExtensionAPI, options: MemoryExtensi
   const loadConfig = options.loadConfiguration ?? loadMemoryConfig;
   const root = join(agentDir, "memory");
 
-  const hostMutationQueue = (CodingAgent as unknown as {
-    withFileMutationQueue?: <T>(path: string, work: () => Promise<T>) => Promise<T>;
-  }).withFileMutationQueue;
   const createStore = options.createStore ?? ((ctx: ExtensionContext, storeRoot: string) => new MemoryStore({
     root: storeRoot,
     cwd: ctx.cwd,
     sessionId: ctx.sessionManager?.getSessionId?.(),
-    // Pi 0.82+ exports the shared queue at runtime. Older compatible hosts do
-    // not, so MemoryStore falls back to its own equivalent per-file queue.
-    mutationQueue: hostMutationQueue,
   }));
 
   const run = async (

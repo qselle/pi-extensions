@@ -24,13 +24,12 @@ export type QuestionPromptResult =
 
 class MaskedInput extends Input {
   override render(width: number): string[] {
-    const runtime = this as unknown as { value: string };
-    const value = runtime.value;
-    runtime.value = "•".repeat(value.length);
+    const value = this.getValue();
+    this.setValue("•".repeat(value.length));
     try {
       return super.render(width);
     } finally {
-      runtime.value = value;
+      this.setValue(value);
     }
   }
 }

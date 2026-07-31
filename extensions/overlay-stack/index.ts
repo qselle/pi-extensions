@@ -237,7 +237,7 @@ export default function overlayStackExtension(pi: ExtensionAPI): void {
       const items = values.filter((value) => value.startsWith(prefix.toLowerCase())).map((value) => ({ value, label: value }));
       return items.length > 0 ? items : null;
     },
-    handler: (args, ctx) => {
+    handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "toggle";
       if (action === "toggle") toggle(ctx);
       else if (action === "show") setUserHidden(false, ctx);

@@ -66,7 +66,7 @@ test("routes only exact prompt replies through one central polling cursor", asyn
         { update_id: 11, message: { message_id: 71, text: "invalid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
         { update_id: 12, message: { message_id: 72, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
       ]);
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt({ text: "Question", parse: parser });
@@ -107,7 +107,7 @@ test("shares one long poll across concurrent prompts", async () => {
       activePolls++;
       maxActivePolls = Math.max(maxActivePolls, activePolls);
       return pollResponse.finally(() => { activePolls--; });
-    }) as typeof fetch,
+    }),
   });
 
   const first = await service.openPrompt({ text: "First", parse: parser });
@@ -178,7 +178,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
           },
         },
       ]);
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt<string>({
@@ -235,7 +235,7 @@ test("keeps direct freeform replies available for choice prompts", async () => {
           reply_to_message: { message_id: 85 },
         },
       }]);
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt<string>({
@@ -273,7 +273,7 @@ test("keeps direct reply cancellation available for choice prompts", async () =>
           reply_to_message: { message_id: 90 },
         },
       }]);
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt<string>({
@@ -305,7 +305,7 @@ test("clears choice controls when a pending prompt is aborted", async () => {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
       });
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt<string>({
@@ -340,7 +340,7 @@ test("mirrors a terminal winner back to Telegram and closes remote waiting", asy
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
       });
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt({
@@ -373,7 +373,7 @@ test("sends passive cards without polling and edits the original card on termina
       if (method === "sendMessage") return response({ message_id: 301 });
       if (method === "editMessageText") return response(true);
       throw new Error(`unexpected ${method}`);
-    }) as typeof fetch,
+    }),
   });
 
   expect(service.questionDelayMs).toBe(15_000);
@@ -439,7 +439,7 @@ test("edits an interactive card in place when Telegram wins", async () => {
           reply_to_message: { message_id: 311 },
         },
       }]);
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt({
@@ -478,7 +478,7 @@ test("marks interactive and passive cards closed during shutdown", async () => {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
       });
-    }) as typeof fetch,
+    }),
   });
   const render = (resolution: { status: string }) => resolution.status === "closed"
     ? "<b>Question closed</b>"
@@ -531,7 +531,7 @@ test("marks a card closed when Telegram polling fails", async () => {
         status: 500,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch,
+    }),
   });
 
   const prompt = await service.openPrompt({

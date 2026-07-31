@@ -9,6 +9,7 @@ import {
   countChangedLines,
   normalizeTrackedPath,
   restoreFileChanges,
+  type StoredFileChanges,
 } from "./changes.ts";
 
 const countFixtureChanges = (_path: string, before: string, after: string) => {
@@ -90,12 +91,12 @@ test("restores only the latest valid summary on the active branch", () => {
     version: FILE_CHANGES_ENTRY_VERSION,
     files: [{ path: "older.ts", kind: "modified", additions: 1, removals: 1 }],
     completedAt: 10,
-  };
+  } satisfies StoredFileChanges;
   const latest = {
     version: FILE_CHANGES_ENTRY_VERSION,
     files: [{ path: "new.ts", kind: "created", additions: 4, removals: 0 }],
     completedAt: 20,
-  };
+  } satisfies StoredFileChanges;
   const restored = restoreFileChanges([
     { type: "custom", customType: FILE_CHANGES_ENTRY_TYPE, data: older },
     { type: "custom", customType: FILE_CHANGES_ENTRY_TYPE, data: { ...latest, files: [{ path: "", kind: "created", additions: 1, removals: 0 }] } },

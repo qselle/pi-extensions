@@ -50,4 +50,4 @@ The optional [`telegram`](../telegram/) hub consumes this event without coupling
 
 - **Runtime:** Pi's extension and TUI APIs.
 - **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
-- **Third-party packages:** None.
+- **Third-party packages:** `typebox` for tool schemas.

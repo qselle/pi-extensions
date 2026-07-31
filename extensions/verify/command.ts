@@ -41,7 +41,7 @@ export function applyTemplate(
 export function shellInvocation(
   command: string,
   platform: string = process.platform,
-  env: { SHELL?: string } = process.env,
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): { command: string; args: string[] } {
   if (platform === "win32") return { command: "cmd.exe", args: ["/c", command] };
   return { command: env.SHELL || "/bin/sh", args: ["-c", command] };

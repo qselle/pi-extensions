@@ -85,7 +85,7 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
       const matches = values.filter((value) => value.startsWith(prefix.trim().toLowerCase()));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
     },
-    handler: (args, ctx) => {
+    handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "toggle";
       if (action === "toggle") setEnabled(!enabled, ctx);
       else if (action === "show") setEnabled(true, ctx);

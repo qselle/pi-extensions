@@ -1,6 +1,6 @@
 # cat-buddy
 
-A small animated cat that sits on Pi's input bar without taking extra space or covering text.
+A small animated cat that sits just above Pi's input bar.
 
 ```text
   ⡠⡪⠕⢀⣀⢰⠑⠔⢱
@@ -25,10 +25,10 @@ Ctrl+Shift+C         Toggle cat visibility
 
 The panel supports arrow keys or `j`/`k`, Enter to select, and Escape to close.
 
-The cat is an editor-relative, non-capturing overlay and follows the input bar as it moves. Pi does not expose public transcript scroll state to extensions; animated modes request renders and some terminals may jump back to the bottom. Use `/cat static` when stable scrollback is more important than animation.
+The cat is a right-aligned `aboveEditor` widget, using Pi's public extension API. Animated modes request renders and some terminals may jump back to the bottom. Use `/cat static` when stable scrollback is more important than animation.
 
 ## Dependencies and limitations
 
 - **Runtime:** Pi's extension and TUI APIs.
 - **Third-party packages:** None.
-- **Compatibility:** Editor-relative placement observes Pi's private overlay compositor and fails closed if that implementation changes. The extension is terminal-independent but requires overlay support and enough free space beside the editor.
+- **Compatibility:** The extension is terminal-independent and hides when the editor is narrower than the cat.
