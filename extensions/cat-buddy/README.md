@@ -1,6 +1,6 @@
 # cat-buddy
 
-A small animated cat that sits just above Pi's input bar.
+A small animated cat that sits on Pi's input bar.
 
 ```text
   ⡠⡪⠕⢀⣀⢰⠑⠔⢱
@@ -8,7 +8,7 @@ A small animated cat that sits just above Pi's input bar.
 ───⠈⠉⠒⠒⠓⠒⠚⠚──
 ```
 
-Smart mode is enabled by default: the cat moves occasionally and reacts while Pi works. It hides whenever it would overlap content and can be toggled without opening its panel.
+Smart mode is enabled by default: the cat moves occasionally and reacts while Pi works. It hides on terminals that are too small and can be toggled without opening its panel.
 
 ## Commands
 
@@ -25,10 +25,12 @@ Ctrl+Shift+C         Toggle cat visibility
 
 The panel supports arrow keys or `j`/`k`, Enter to select, and Escape to close.
 
-The cat is a right-aligned `aboveEditor` widget, using Pi's public extension API. Animated modes request renders and some terminals may jump back to the bottom. Use `/cat static` when stable scrollback is more important than animation.
+The cat decorates the current editor through Pi's public editor API. Its first two rows sit above the editor and its feet replace the matching part of the top border, so it remains attached when the editor moves or grows. The cat uses the editor's accent color and the decorator preserves other custom-editor behavior, including `codex-prompt` and `history-search`.
+
+Animated modes request renders and some terminals may jump back to the bottom. Use `/cat static` when stable scrollback is more important than animation.
 
 ## Dependencies and limitations
 
 - **Runtime:** Pi's extension and TUI APIs.
 - **Third-party packages:** None.
-- **Compatibility:** The extension is terminal-independent and hides when the editor is narrower than the cat.
+- **Compatibility:** The extension is terminal-independent and hides below 34 columns or 10 rows.
