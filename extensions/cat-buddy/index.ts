@@ -105,7 +105,7 @@ class CatSprite {
     if (this.mode === "always" || (this.mode === "working" && this.working)) {
       this.scheduleContinuousFrame();
     } else if (this.mode === "smart") {
-      if (startSmartImmediately) this.scheduleSmartFrame();
+      if (startSmartImmediately || this.frameIndex > 0) this.scheduleSmartFrame();
       else this.scheduleSmartCycle();
     }
   }

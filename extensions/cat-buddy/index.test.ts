@@ -120,10 +120,13 @@ test("stops animation while hidden and restarts it when shown", async () => {
     { fg: (_color: string, value: string) => value },
     {},
   );
-  editor.render(40);
+  const neutralPose = editor.render(40);
 
-  await pi.commands.get("cat").handler("always", ctx);
+  await pi.emit("agent_start", {}, ctx);
   expect(jest.getTimerCount()).toBe(1);
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  const interruptedPose = editor.render(40);
+  expect(interruptedPose).not.toEqual(neutralPose);
 
   await pi.commands.get("cat").handler("hide", ctx);
   expect(jest.getTimerCount()).toBe(0);
@@ -131,15 +134,13 @@ test("stops animation while hidden and restarts it when shown", async () => {
   jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 3);
   expect(renders).toBe(rendersAfterHide);
 
-  await pi.commands.get("cat").handler("smart", ctx);
-  await pi.commands.get("cat").handler("always", ctx);
-  expect(jest.getTimerCount()).toBe(0);
-
   await pi.commands.get("cat").handler("show", ctx);
   expect(jest.getTimerCount()).toBe(1);
+  expect(editor.render(40)).toEqual(interruptedPose);
   const rendersAfterShow = renders;
   jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
   expect(renders).toBe(rendersAfterShow + 1);
+  expect(editor.render(40)).toEqual(neutralPose);
   expect(jest.getTimerCount()).toBe(1);
 
   await pi.emit("session_shutdown", {}, ctx);
@@ -177,18 +178,29 @@ test("pauses animation while the terminal cannot display the cat", async () => {
     { fg: (_color: string, value: string) => value },
     {},
   );
-  await pi.commands.get("cat").handler("always", ctx);
 
   expect(editor.render(30)).toEqual(baseLines);
   expect(jest.getTimerCount()).toBe(0);
 
-  expect(editor.render(40)).toHaveLength(baseLines.length + 2);
+  const neutralPose = editor.render(40);
   expect(jest.getTimerCount()).toBe(1);
+  await pi.emit("agent_start", {}, ctx);
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  const interruptedPose = editor.render(40);
+  expect(interruptedPose).not.toEqual(neutralPose);
+
   expect(editor.render(30)).toEqual(baseLines);
   expect(jest.getTimerCount()).toBe(0);
   const rendersWhileNarrow = renders;
   jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 3);
   expect(renders).toBe(rendersWhileNarrow);
+
+  expect(editor.render(40)).toEqual(interruptedPose);
+  expect(jest.getTimerCount()).toBe(1);
+  const rendersAfterWidthRestore = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  expect(renders).toBe(rendersAfterWidthRestore + 1);
+  expect(editor.render(40)).toEqual(neutralPose);
 
   terminal.rows = 9;
   expect(editor.render(40)).toEqual(baseLines);
