@@ -34,19 +34,20 @@ class CatSprite {
   private frameIndex = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private disposed = false;
+  private eligible = false;
 
   constructor(
     private readonly tui: TUI,
     private mode: AnimationMode,
     private working: boolean,
     private visible: boolean,
-  ) {
-    this.schedulePolicy(mode === "smart" && working);
-  }
+  ) {}
 
   setVisible(visible: boolean): void {
     if (this.visible === visible) return;
     this.visible = visible;
+    if (visible) this.schedulePolicy();
+    else this.cancelTimer();
     this.tui.requestRender();
   }
 
@@ -64,7 +65,8 @@ class CatSprite {
   renderEditor(editor: EditorComponent, render: (width: number) => string[], width: number): string[] {
     const base = render(width);
     const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
-    if (!this.visible || width < 34 || rows < 10 || base.length === 0) return base;
+    this.setEligible(width >= 34 && rows >= 10 && base.length > 0);
+    if (!this.visible || !this.eligible) return base;
 
     const color = editor.borderColor ?? ((value: string) => value);
     const padding = " ".repeat(Math.max(0, width - CAT_WIDTH - 2));
@@ -98,7 +100,7 @@ class CatSprite {
   }
 
   private schedulePolicy(startSmartImmediately = false): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.visible || !this.eligible) return;
 
     if (this.mode === "always" || (this.mode === "working" && this.working)) {
       this.scheduleContinuousFrame();
@@ -148,6 +150,13 @@ class CatSprite {
     if (this.frameIndex === 0) return;
     this.frameIndex = 0;
     this.tui.requestRender();
+  }
+
+  private setEligible(eligible: boolean): void {
+    if (this.eligible === eligible) return;
+    this.eligible = eligible;
+    if (eligible) this.schedulePolicy();
+    else this.cancelTimer();
   }
 
   private cancelTimer(): void {

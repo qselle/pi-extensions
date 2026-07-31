@@ -165,3 +165,34 @@ test("shows live edits, persists the last run, and restores branch-local state",
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test("tracks changes without invalidating the overlay while hidden", async () => {
+  const pi = new MockPi();
+  let invalidations = 0;
+  let unregisters = 0;
+  fileChangesExtension(pi as any, {
+    registerCard: () => ({
+      invalidate: () => { invalidations += 1; },
+      unregister: () => { unregisters += 1; },
+    }),
+  });
+  const ctx = {
+    cwd: process.cwd(),
+    sessionManager: { getBranch: () => [] },
+    ui: { notify() {} },
+  };
+
+  await pi.emit("session_start", {}, ctx);
+  expect(invalidations).toBe(1);
+  await pi.commands.get("file-changes").handler("hide", ctx);
+  expect(invalidations).toBe(2);
+
+  await pi.emit("before_agent_start", {}, ctx);
+  await pi.emit("agent_settled", {}, ctx);
+  expect(invalidations).toBe(2);
+
+  await pi.commands.get("file-changes").handler("show", ctx);
+  expect(invalidations).toBe(3);
+  await pi.emit("session_shutdown", {}, ctx);
+  expect(unregisters).toBe(1);
+});
