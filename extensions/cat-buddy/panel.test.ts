@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import catExtension from "./index.ts";
 import { CatPanel, parseCatCommand } from "./panel.ts";
 
@@ -30,7 +31,7 @@ test("renders the cat control panel within narrow and wide widths", () => {
   for (const width of [20, 40, 52, 80]) {
     const lines = panel.render(width);
     expect(lines.length).toBe(12);
-    expect(lines.every((line: string) => line.length <= width)).toBe(true);
+    expect(lines.every((line: string) => visibleWidth(line) <= width)).toBe(true);
   }
   expect(panel.render(80).join("\n")).toContain("Occasional movement");
   expect(panel.render(40).join("\n")).not.toContain("Occasional movement");
