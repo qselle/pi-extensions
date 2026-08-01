@@ -3,10 +3,12 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import catExtension from "./index.ts";
 import { CatPanel, parseCatCommand } from "./panel.ts";
 
-const ENTER = "\r";
-const ESCAPE = "\x1b";
-const UP = "\x1b[A";
-const DOWN = "\x1b[B";
+// Exercise the panel's built-in fallback controls so these tests do not depend
+// on process-global pi-tui mocks installed by concurrently loaded test files.
+const SELECT = " ";
+const CLOSE = "q";
+const PREVIOUS = "k";
+const NEXT = "j";
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -47,15 +49,15 @@ test("selects visibility and animation options from the keyboard", () => {
     () => visibilityClosed++,
     (action: unknown) => visibilityActions.push(action),
   );
-  visibilityPanel.handleInput(ENTER);
+  visibilityPanel.handleInput(SELECT);
   expect(visibilityActions).toEqual([{ type: "visibility", visible: false }]);
   expect(visibilityClosed).toBe(1);
 
   const modeActions: unknown[] = [];
   const modePanel = new CatPanel(false, "smart", theme, () => {}, (action: unknown) => modeActions.push(action));
-  modePanel.handleInput(DOWN);
-  modePanel.handleInput(DOWN);
-  modePanel.handleInput(ENTER);
+  modePanel.handleInput(NEXT);
+  modePanel.handleInput(NEXT);
+  modePanel.handleInput(SELECT);
   expect(modeActions).toEqual([{ type: "mode", mode: "always" }]);
 });
 
@@ -63,12 +65,12 @@ test("wraps navigation and closes without changing state", () => {
   const actions: unknown[] = [];
   let closed = 0;
   const panel = new CatPanel(true, "static", theme, () => closed++, (action: unknown) => actions.push(action));
-  panel.handleInput(UP);
-  panel.handleInput(ENTER);
+  panel.handleInput(PREVIOUS);
+  panel.handleInput(SELECT);
   expect(actions).toEqual([{ type: "mode", mode: "static" }]);
 
   const escapePanel = new CatPanel(true, "smart", theme, () => closed++, (action: unknown) => actions.push(action));
-  escapePanel.handleInput(ESCAPE);
+  escapePanel.handleInput(CLOSE);
   expect(closed).toBe(2);
   expect(actions).toHaveLength(1);
 });
