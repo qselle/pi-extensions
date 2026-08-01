@@ -22,14 +22,21 @@ const CARD_ID = "file-changes";
 const countContentChanges = (path: string, before: string, after: string) =>
   countChangedLines(generateUnifiedPatch(path, before, after, 0));
 
-export default function fileChangesExtension(pi: ExtensionAPI): void {
+export interface FileChangesExtensionOptions {
+  registerCard?: typeof registerOverlayCard;
+}
+
+export default function fileChangesExtension(
+  pi: ExtensionAPI,
+  options: FileChangesExtensionOptions = {},
+): void {
   let enabled = true;
   let activeRun: FileChangeRun | undefined;
   let display: FileChangesDisplay = { phase: "last", files: [] };
   // Needed to resolve stored display paths for clickable links.
   let sessionCwd = process.cwd();
 
-  const card = registerOverlayCard({
+  const card = (options.registerCard ?? registerOverlayCard)({
     id: CARD_ID,
     order: 20,
     width: 58,
@@ -41,7 +48,9 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
     renderBody: (width, maxHeight, theme) => renderFileChangesBody(display, width, maxHeight, theme, sessionCwd),
   });
 
-  const invalidate = () => card.invalidate();
+  const invalidate = (force = false) => {
+    if (enabled || force) card.invalidate();
+  };
   const beginRun = () => {
     if (activeRun) return;
     activeRun = new FileChangeRun(countContentChanges);
@@ -74,7 +83,7 @@ export default function fileChangesExtension(pi: ExtensionAPI): void {
   };
   const setEnabled = (next: boolean, ctx: ExtensionContext) => {
     enabled = next;
-    invalidate();
+    invalidate(true);
     ctx.ui.notify(`Changed-files card ${enabled ? "shown" : "hidden"}.`, "info");
   };
 
