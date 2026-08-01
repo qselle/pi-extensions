@@ -24,7 +24,7 @@ A passive card that summarizes files changed by Pi's built-in `edit` and `write`
 Ctrl+Shift+O               Toggle the complete workflow overlay
 ```
 
-Visibility resets when extensions reload. There is no separate configuration file.
+Visibility resets when extensions reload. Tracking continues while the card is hidden, without requesting redraws for its state changes, so showing it reveals the latest summary. There is no separate configuration file.
 
 ## Tracking model
 

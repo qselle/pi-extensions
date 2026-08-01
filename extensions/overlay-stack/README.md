@@ -23,7 +23,7 @@ Pi does not expose public transcript scroll state, and native terminal scrollbac
 Ctrl+Shift+O             Toggle the stack
 ```
 
-The stack hides temporarily while the goal panel, plan panel, history search, or subagent transcript is open and restores afterward unless the user hid it manually. Manual visibility resets for a new session or extension reload.
+The stack hides temporarily while the goal panel, plan panel, history search, or subagent transcript is open and restores afterward unless the user hid it manually. While hidden, card state keeps updating without requesting terminal redraws; showing the stack renders the latest state. Manual visibility resets for a new session or extension reload.
 
 On narrow or short terminals, cards hide responsively. If all cards cannot fit within 80% of terminal height, lower-priority cards are omitted rather than covering the editor.
 

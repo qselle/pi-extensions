@@ -86,6 +86,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   let widget: any;
   let overlay: any;
   let options: any;
+  let renders = 0;
   const hidden: boolean[] = [];
   const notifications: string[] = [];
   const ctx = {
@@ -106,7 +107,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
       options = overlayOptions;
       return { setHidden: (value: boolean) => hidden.push(value), hide: () => hidden.push(true) };
     },
-    requestRender() {},
+    requestRender() { renders += 1; },
   };
   widget(tui, theme);
 
@@ -133,8 +134,13 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   await pi.commands.get("overlay").handler("hide", ctx);
   expect(hidden.at(-1)).toBe(true);
   expect(notifications.at(-1)).toContain("hidden");
+  const rendersAfterHide = renders;
+  goal.invalidate();
+  plan.invalidate();
+  expect(renders).toBe(rendersAfterHide);
   await pi.commands.get("overlay").handler("show", ctx);
   expect(hidden.at(-1)).toBe(false);
+  expect(renders).toBe(rendersAfterHide + 1);
 
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
   goal.unregister();

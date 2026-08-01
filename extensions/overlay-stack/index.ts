@@ -160,6 +160,7 @@ class OverlayStackHost implements Component {
   private readonly handle: OverlayHandle;
   private readonly stopListening: () => void;
   private disposed = false;
+  private hidden = false;
 
   constructor(private readonly tui: TUI, theme: Theme) {
     this.view = new OverlayStackView(theme);
@@ -190,13 +191,15 @@ class OverlayStackHost implements Component {
   }
 
   setHidden(hidden: boolean): void {
+    if (this.hidden === hidden) return;
+    this.hidden = hidden;
     this.handle.setHidden(hidden);
     this.tui.requestRender();
   }
 
   refresh(): void {
     this.view.invalidate();
-    this.tui.requestRender();
+    if (!this.hidden) this.tui.requestRender();
   }
 
   dispose(): void {

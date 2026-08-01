@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import catBuddyExtension from "./index.ts";
+import { CAT_FRAME_DURATION_MS } from "./frames.ts";
 
 type Handler = (event: unknown, ctx: any) => unknown;
 
@@ -26,6 +27,13 @@ class MockPi {
     for (const handler of this.handlers.get(name) ?? []) await handler(event, ctx);
   }
 }
+
+afterEach(() => {
+  if (jest.isFakeTimers()) {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
+});
 
 test("docks on the current editor through Pi's public editor lifecycle", async () => {
   const pi = new MockPi();
@@ -81,4 +89,141 @@ test("docks on the current editor through Pi's public editor lifecycle", async (
 
   await pi.emit("session_shutdown", {}, ctx);
   expect(currentFactory).toBe(previousFactory);
+});
+
+test("pauses smart animation while hidden without background redraws", async () => {
+  jest.useFakeTimers();
+
+  const pi = new MockPi();
+  let renders = 0;
+  const baseEditor = {
+    render: () => ["─".repeat(40), "  prompt", "─".repeat(40)],
+    handleInput() {},
+    invalidate() {},
+    getText: () => "",
+    setText() {},
+  };
+  let currentFactory: any = () => baseEditor;
+  const ctx = {
+    mode: "tui",
+    ui: {
+      getEditorComponent: () => currentFactory,
+      setEditorComponent: (factory: any) => { currentFactory = factory; },
+      notify() {},
+    },
+  };
+
+  catBuddyExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  const editor = currentFactory(
+    { terminal: { rows: 24 }, requestRender: () => { renders += 1; } },
+    { fg: (_color: string, value: string) => value },
+    {},
+  );
+  const neutralPose = editor.render(40);
+
+  await pi.emit("agent_start", {}, ctx);
+  expect(jest.getTimerCount()).toBe(1);
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  const interruptedPose = editor.render(40);
+  expect(interruptedPose).not.toEqual(neutralPose);
+
+  await pi.commands.get("cat").handler("hide", ctx);
+  expect(jest.getTimerCount()).toBe(0);
+  const rendersAfterHide = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 3);
+  expect(renders).toBe(rendersAfterHide);
+
+  await pi.commands.get("cat").handler("show", ctx);
+  expect(jest.getTimerCount()).toBe(1);
+  expect(editor.render(40)).toEqual(interruptedPose);
+  const rendersAfterShow = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  expect(renders).toBe(rendersAfterShow + 1);
+  expect(editor.render(40)).toEqual(neutralPose);
+  expect(jest.getTimerCount()).toBe(1);
+
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 2);
+  expect(editor.render(40)).not.toEqual(neutralPose);
+  await pi.commands.get("cat").handler("hide", ctx);
+  const rendersBeforeSettlement = renders;
+  await pi.emit("agent_settled", {}, ctx);
+  expect(renders).toBe(rendersBeforeSettlement);
+  expect(jest.getTimerCount()).toBe(0);
+
+  await pi.commands.get("cat").handler("show", ctx);
+  expect(editor.render(40)).toEqual(neutralPose);
+  expect(jest.getTimerCount()).toBe(1);
+
+  await pi.emit("session_shutdown", {}, ctx);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("pauses animation while the terminal cannot display the cat", async () => {
+  jest.useFakeTimers();
+
+  const pi = new MockPi();
+  let renders = 0;
+  const terminal = { rows: 24 };
+  const baseLines = ["─".repeat(40), "  prompt", "─".repeat(40)];
+  const baseEditor = {
+    render: () => baseLines,
+    handleInput() {},
+    invalidate() {},
+    getText: () => "",
+    setText() {},
+  };
+  let currentFactory: any = () => baseEditor;
+  const ctx = {
+    mode: "tui",
+    ui: {
+      getEditorComponent: () => currentFactory,
+      setEditorComponent: (factory: any) => { currentFactory = factory; },
+      notify() {},
+    },
+  };
+
+  catBuddyExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  const editor = currentFactory(
+    { terminal, requestRender: () => { renders += 1; } },
+    { fg: (_color: string, value: string) => value },
+    {},
+  );
+
+  expect(editor.render(30)).toEqual(baseLines);
+  expect(jest.getTimerCount()).toBe(0);
+
+  const neutralPose = editor.render(40);
+  expect(jest.getTimerCount()).toBe(1);
+  await pi.emit("agent_start", {}, ctx);
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  const interruptedPose = editor.render(40);
+  expect(interruptedPose).not.toEqual(neutralPose);
+
+  expect(editor.render(30)).toEqual(baseLines);
+  expect(jest.getTimerCount()).toBe(0);
+  const rendersWhileNarrow = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS * 3);
+  expect(renders).toBe(rendersWhileNarrow);
+
+  expect(editor.render(40)).toEqual(interruptedPose);
+  expect(jest.getTimerCount()).toBe(1);
+  const rendersAfterWidthRestore = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  expect(renders).toBe(rendersAfterWidthRestore + 1);
+  expect(editor.render(40)).toEqual(neutralPose);
+
+  terminal.rows = 9;
+  expect(editor.render(40)).toEqual(baseLines);
+  expect(jest.getTimerCount()).toBe(0);
+  terminal.rows = 24;
+  expect(editor.render(40)).toHaveLength(baseLines.length + 2);
+  expect(jest.getTimerCount()).toBe(1);
+
+  const rendersAfterResize = renders;
+  jest.advanceTimersByTime(CAT_FRAME_DURATION_MS);
+  expect(renders).toBe(rendersAfterResize + 1);
+
+  await pi.emit("session_shutdown", {}, ctx);
 });
