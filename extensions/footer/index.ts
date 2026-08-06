@@ -10,11 +10,14 @@
  *
  * Event-driven only: renders on the TUI's normal cycle plus agent start/settle
  * (so Ready/Working flips promptly). No timer, so idle sessions cost no battery.
+ * Branch totals are cached and only rescanned when usage changes, so a frame
+ * never walks the session. The footer is handed back to pi on
+ * `session_shutdown`, because its factory closes over the session context and
+ * that context is stale after session replacement.
  * Public APIs only: setFooter, getContextUsage, getThinkingLevel, sessionManager.
  */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import {
@@ -23,8 +26,8 @@ import {
 	formatCwd,
 	modelLabel,
 	type CellId,
-	type UsageTotals,
 } from "./format.ts";
+import { UsageTotalsCache } from "./usage.ts";
 
 type FgColor = Parameters<Theme["fg"]>[0];
 
@@ -42,26 +45,7 @@ const CELL_COLOR: Record<CellId, FgColor> = {
 	cost: "success",
 };
 
-/** Cumulative token/cost totals for the active branch, including child + compaction usage. */
-function sumUsage(ctx: ExtensionContext): UsageTotals {
-	let input = 0;
-	let output = 0;
-	let cost = 0;
-	for (const entry of ctx.sessionManager.getBranch()) {
-		const usage =
-			entry?.type === "message" && entry.message?.role === "assistant"
-				? (entry.message as AssistantMessage).usage
-				: entry?.type === "branch_summary" || entry?.type === "compaction"
-					? entry.usage
-					: undefined;
-		if (!usage) continue;
-		input += usage.input ?? 0;
-		output += usage.output ?? 0;
-		cost += usage.cost?.total ?? 0;
-	}
-	return { input, output, cost };
-}
-
+/** Cumulative token/cost totals for the active branch, including tool, child, and compaction usage. */
 function currentEffort(pi: ExtensionAPI): string | undefined {
 	try {
 		return pi.getThinkingLevel?.();
@@ -72,20 +56,25 @@ function currentEffort(pi: ExtensionAPI): string | undefined {
 
 export default function footerExtension(pi: ExtensionAPI): void {
 	let tuiRef: { requestRender: () => void } | undefined;
+	const totals = new UsageTotalsCache();
 
 	pi.on("session_start", (_event, ctx) => {
+		totals.invalidate();
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setFooter((tui, theme) => {
 			tuiRef = tui;
 			return {
 				invalidate() {},
+				dispose() {
+					if (tuiRef === tui) tuiRef = undefined;
+				},
 				render(width: number): string[] {
 					const cells = buildCells({
 						model: modelLabel(ctx.model?.id, currentEffort(pi)),
 						dir: formatCwd(ctx.cwd, homedir()),
 						status: ctx.isIdle() ? "Ready" : "Working",
 						usage: ctx.getContextUsage(),
-						totals: sumUsage(ctx),
+						totals: totals.get(() => ctx.sessionManager.getBranch()),
 					});
 					const kept = fitCells(cells, width, 3, visibleWidth);
 					const sep = theme.fg("dim", " · ");
@@ -93,6 +82,23 @@ export default function footerExtension(pi: ExtensionAPI): void {
 				},
 			};
 		});
+	});
+
+	// Recorded usage and branch rewrites are the only things that move the totals.
+	const invalidateTotals = () => {
+		totals.invalidate();
+	};
+	pi.on("message_end", invalidateTotals);
+	pi.on("session_compact", invalidateTotals);
+	pi.on("session_tree", invalidateTotals);
+
+	// The factory above closes over this session's ctx. After /new, /resume,
+	// /fork, or /reload that ctx is stale and rendering with it would throw, so
+	// restore pi's built-in footer before the runtime is torn down.
+	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
+		tuiRef = undefined;
+		totals.invalidate();
 	});
 
 	// Flip Ready/Working promptly without a polling timer.

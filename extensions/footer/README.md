@@ -19,6 +19,17 @@ Order matches Codex, left to right:
 
 - **No timers.** Renders on the TUI's normal cycle plus agent start/settle (so
   `Ready`/`Working` flips promptly). An idle session does no rendering work.
+- **Constant-time frames.** Branch totals are scanned once and cached, then
+  invalidated on `message_end`, `session_compact`, and `session_tree`, so a
+  keystroke never walks the session.
+- **Complete spend.** Totals count assistant usage, tool-result usage (nested
+  model calls from tools such as [`subagents`](../subagents/) and
+  [`side-chat`](../side-chat/)), and the usage recorded on branch summaries and
+  compactions — matching what pi's own footer accounts for.
+- **Session-replacement safe.** The footer factory closes over the session
+  context, so `session_shutdown` restores pi's built-in footer and drops the TUI
+  reference. Nothing renders through a context that `/new`, `/resume`, `/fork`,
+  or `/reload` has already invalidated.
 - **Compaction-safe.** Token/percent fields show `?` until the next response.
 - **Responsive.** Fields drop from the tail on narrow terminals — `cost`, then
   `out`, `in`, `used`, `window`, `dir`, `status` — so the line never wraps. The
@@ -31,4 +42,6 @@ uses `accent`, and the rest stays `muted`.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API (`ctx.ui.setFooter`, `ctx.getContextUsage`, `ctx.isIdle`, `pi.getThinkingLevel`, `ctx.sessionManager`, `ctx.model`).
 - **Depends on extensions:** None.
-- **Used by extensions:** None.
+- **Used by extensions:** [`turn-separator`](../turn-separator/) reuses the cell layout helpers from `format.ts`.
+- **Third-party packages:** None.
+- **Platforms:** Cross-platform; the footer only renders in TUI mode.
