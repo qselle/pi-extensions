@@ -9,7 +9,7 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyText } from "@earendil-works/pi-coding-agent";
 import { boundedText, isActive, type AgentSnapshot } from "./coordinator.ts";
 import { collapsedResult, headlineSuffix, hiddenLinesMarker } from "./preview.ts";
 
@@ -188,8 +188,17 @@ function resultLines(agent: AgentSnapshot, theme: Theme, indent: string): string
   const label = `${indent}${theme.fg(agent.status === "failed" ? "error" : "success", "result ")}`;
   const continuation = " ".repeat(visibleWidth(label));
   const rows = lines.map((line) => theme.fg("text", line));
-  if (hidden > 0) rows.unshift(theme.fg("dim", hiddenLinesMarker(hidden)));
+  if (hidden > 0) rows.unshift(theme.fg("dim", hiddenLinesMarker(hidden, expandKeyLabel())));
   return rows.map((row, index) => `${index === 0 ? label : continuation}${row}`);
+}
+
+/** The user's configured tool-expand key, falling back to pi's default. */
+function expandKeyLabel(): string {
+  try {
+    return keyText("app.tools.expand") || "Ctrl+O";
+  } catch {
+    return "Ctrl+O";
+  }
 }
 
 function statusSymbol(status: AgentSnapshot["status"]): string {

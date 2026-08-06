@@ -48,8 +48,8 @@ export function collapsedResult(output: string, rows = COLLAPSED_RESULT_ROWS): C
   return { lines: kept, hidden: lines.length - kept.length };
 }
 
-export function hiddenLinesMarker(hidden: number): string {
-  return `… +${hidden} earlier ${hidden === 1 ? "line" : "lines"} (Ctrl+O for full output)`;
+export function hiddenLinesMarker(hidden: number, expandKey: string): string {
+  return `… +${hidden} earlier ${hidden === 1 ? "line" : "lines"} (${expandKey} for full output)`;
 }
 
 export function compactLine(text: string, limit: number): string {

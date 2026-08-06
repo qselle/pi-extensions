@@ -17,6 +17,10 @@ The picker runs entirely inside Pi. It does not launch another terminal program 
 
 The same picker is available with `/history-search [initial query]`.
 
+The keys above are Pi's defaults. Navigation, confirmation, and cancellation are
+routed through Pi's `tui.select.*` keybindings, and the picker footer names
+whatever keys you have bound to them.
+
 ## Matching
 
 Matching is case-insensitive and allows non-contiguous subsequences. Ranking favors, in order:

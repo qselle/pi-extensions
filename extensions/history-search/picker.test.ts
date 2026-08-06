@@ -34,6 +34,7 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
   // any sibling suite imports from Pi — including the config helpers.
   CONFIG_DIR_NAME: ".pi",
   getAgentDir: () => join(tmpdir(), "pi-agent-mock"),
+  keyText: (id: string) => (id === "app.tools.expand" ? "ctrl+o" : ""),
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",
@@ -89,6 +90,17 @@ const keybindings = {
       "tui.select.pageDown": ["pageDown"],
     };
     return keys[id]?.includes(data) ?? false;
+  },
+  getKeys(id: string) {
+    const keys: Record<string, string[]> = {
+      "tui.select.cancel": ["escape", "ctrl+c"],
+      "tui.select.confirm": ["enter"],
+      "tui.select.up": ["up"],
+      "tui.select.down": ["down"],
+      "tui.select.pageUp": ["pageUp"],
+      "tui.select.pageDown": ["pageDown"],
+    };
+    return keys[id] ?? [];
   },
 } as any;
 

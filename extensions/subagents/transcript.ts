@@ -8,6 +8,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { AgentTranscript } from "./coordinator.ts";
+import { keyLabel } from "./keys.ts";
 
 // pi-tui's `Key` value export isn't reliably importable across runtimes; its
 // values are plain key-id strings that matchesKey accepts.
@@ -79,8 +80,11 @@ export class LiveTranscriptViewer implements Component {
     );
     const visible = body.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, safeWidth, ""));
     while (visible.length < bodyHeight) visible.push("");
+    const scroll = `${keyLabel(this.keybindings, "tui.select.up", "↑")}${keyLabel(this.keybindings, "tui.select.down", "↓")}`
+      + `/${keyLabel(this.keybindings, "tui.select.pageUp", "PgUp")}/${keyLabel(this.keybindings, "tui.select.pageDown", "PgDn")}`;
+    const close = `q/${keyLabel(this.keybindings, "tui.select.cancel", "Esc")}`;
     const footer = truncateToWidth(
-      this.theme.fg("dim", `↑↓/PgUp/PgDn scroll · Home/End follow · q/Esc close · ${percent}%`),
+      this.theme.fg("dim", `${scroll} scroll · Home/End follow · ${close} close · ${percent}%`),
       safeWidth,
       "",
     );
