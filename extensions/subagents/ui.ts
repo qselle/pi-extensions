@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { boundedText, isActive, type AgentSnapshot } from "./coordinator.ts";
+import { collapsedResult, headlineSuffix, hiddenLinesMarker } from "./preview.ts";
 
 const MAX_OVERLAY_AGENTS = 3;
 const AGENT_ROWS = 3;
@@ -69,8 +70,7 @@ export function renderSubagentResult(
   const visible = details.agents.filter((agent) => !hidden.has(agent.id));
   if (details.action === "wait" && visible.length === 0) return new Container();
   const container = new Container();
-  const suffix = details.interrupted ? " · interrupted" : details.timedOut ? " · timed out" : "";
-  container.addChild(new Text(theme.fg("toolTitle", theme.bold(`${details.action}${suffix}`)), 0, 0));
+  container.addChild(new Text(theme.fg("toolTitle", theme.bold(`${details.action}${headlineSuffix(details)}`)), 0, 0));
   for (const agent of visible) {
     container.addChild(new Text(agentHeader(agent, theme), 0, 0));
     container.addChild(new Text(`${theme.fg("muted", "  task  ")}${theme.fg("dim", compact(agent.task, 180))}`, 0, 0));
@@ -79,7 +79,7 @@ export function renderSubagentResult(
       if (options.expanded) {
         container.addChild(new Markdown(agent.output, 2, 0, getMarkdownTheme()));
       } else {
-        container.addChild(new Text(`${theme.fg(agent.status === "failed" ? "error" : "success", "  result ")}${compact(agent.output, 180)}`, 0, 0));
+        container.addChild(new Text(resultLines(agent, theme, "  ").join("\n"), 0, 0));
       }
     }
     const usage = usageText(agent);
@@ -99,7 +99,7 @@ export function renderCompletionMessage(agent: AgentSnapshot, expanded: boolean,
   if (agent.error) container.addChild(new Text(`${theme.fg("error", "error  ")}${theme.fg("error", compact(agent.error, 240))}`, 0, 0));
   if (agent.output) {
     if (expanded) container.addChild(new Markdown(agent.output, 0, 0, getMarkdownTheme()));
-    else container.addChild(new Text(`${theme.fg(agent.status === "failed" ? "error" : "success", "result ")}${compact(agent.output, 200)}`, 0, 0));
+    else container.addChild(new Text(resultLines(agent, theme, "").join("\n"), 0, 0));
   }
   const usage = usageText(agent);
   if (usage) container.addChild(new Text(`${theme.fg("muted", "usage  ")}${theme.fg("dim", usage)}`, 0, 0));
@@ -179,6 +179,17 @@ function overlayAgent(agent: AgentSnapshot, width: number, theme: Theme): string
 
 function agentHeader(agent: AgentSnapshot, theme: Theme): string {
   return `${theme.fg(statusColor(agent.status), statusSymbol(agent.status))} ${theme.bold(agent.name)} · ${theme.fg("muted", `${agent.contextMode} · ${agent.status}`)}`;
+}
+
+/** Renders the collapsed tail preview under an aligned `result` label. */
+function resultLines(agent: AgentSnapshot, theme: Theme, indent: string): string[] {
+  const { lines, hidden } = collapsedResult(agent.output ?? "");
+  if (lines.length === 0) return [];
+  const label = `${indent}${theme.fg(agent.status === "failed" ? "error" : "success", "result ")}`;
+  const continuation = " ".repeat(visibleWidth(label));
+  const rows = lines.map((line) => theme.fg("text", line));
+  if (hidden > 0) rows.unshift(theme.fg("dim", hiddenLinesMarker(hidden)));
+  return rows.map((row, index) => `${index === 0 ? label : continuation}${row}`);
 }
 
 function statusSymbol(status: AgentSnapshot["status"]): string {
