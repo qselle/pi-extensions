@@ -15,6 +15,7 @@ import {
   type QuestionnaireDetails,
 } from "./model.ts";
 import { firstReplyWins } from "./race.ts";
+import { findSecretHandles, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
 import { createTelegramQuestionReply, safeTelegramQuestionError } from "./telegram.ts";
 import { createTerminalReplySource } from "./ui.ts";
 
@@ -40,7 +41,7 @@ const parameters = {
             description: "Optional choices. A freeform Other choice is appended by default.",
           },
           allow_other: { type: "boolean", description: "Allow a final freeform Other choice (default true)" },
-          secret: { type: "boolean", description: "Mask locally and omit the answer from Pi's transcript" },
+          secret: { type: "boolean", description: "Mask locally, keep the value out of the transcript, and return a reusable handle instead" },
         },
         required: ["id", "question"],
       },
@@ -82,7 +83,7 @@ function recap(details: QuestionnaireDetails, theme: any): string {
     const source = answer?.source === "telegram" ? theme.fg("muted", " · Telegram") : "";
     lines.push(`  ${hasAnswer(answer) ? theme.fg("success", "✓") : theme.fg("warning", "○")} ${question.question}${source}`);
     if (hasAnswer(answer)) {
-      lines.push(`    ${theme.fg("dim", "answer:")} ${theme.fg("accent", question.secret ? "••••••" : answer?.answer ?? "")}`);
+      lines.push(`    ${theme.fg("dim", "answer:")} ${theme.fg("accent", question.secret ? "••••••" : answer?.answer ?? "")}${answer?.handle ? ` ${theme.fg("dim", answer.handle)}` : ""}`);
     }
   }
   return lines.join("\n");
@@ -93,14 +94,29 @@ export default function questionsExtension(
   options: QuestionsExtensionOptions = {},
 ): void {
   const child = options.isSubagentChild ?? process.env.PI_SUBAGENT_CHILD === "1";
+  const secrets = new SecretVault();
+
+  pi.on("tool_call", (event) => {
+    if (secrets.size === 0 && findSecretHandles(event.input).size === 0) return;
+    const { unknown } = secrets.reveal(event.input);
+    if (unknown.length === 0) return;
+    return {
+      block: true,
+      reason: `${unknown.length === 1 ? "A secret handle is" : "Secret handles are"} no longer valid in this session. Ask for the secret again with a questionnaire secret question instead of guessing the value.`,
+    };
+  });
+  pi.on("session_tree", () => secrets.clear());
+  pi.on("session_shutdown", () => secrets.clear());
+
   pi.registerTool({
     name: "questionnaire",
     label: "Questions",
-    description: "Ask one or more structured questions. Each question offers terminal and configured Telegram input; the first reply wins.",
+    description: "Ask one or more structured questions. Each question offers terminal and configured Telegram input; the first reply wins. Secret answers come back as opaque handles that must be copied verbatim into later tool arguments.",
     promptSnippet: "Ask one or more structured questions with terminal and Telegram first-reply-wins input",
     promptGuidelines: [
       "Use questionnaire when user input is required to choose among meaningful alternatives instead of guessing.",
       "Keep questionnaire choices concise and distinct; freeform Other input is available by default.",
+      "Pass a secret answer handle through unchanged; never retype, split, or paraphrase the hidden value.",
     ],
     parameters,
     executionMode: "sequential",
@@ -163,6 +179,7 @@ export default function questionsExtension(
             ? {
               id: question.id,
               question: question.question,
+              handle: secrets.issue(question.id, outcome.answer ?? ""),
               provided: true,
               secret: true,
               source: outcome.source,
@@ -181,8 +198,9 @@ export default function questionsExtension(
       const details: QuestionnaireDetails = { questions: displayedQuestions, answers, interrupted };
       const response = answers
         .filter(hasAnswer)
-        .map((answer) => `${answer.id}: ${answer.secret ? "[secret provided]" : answer.answer}${answer.source === "telegram" ? " [via Telegram]" : ""}`)
+        .map((answer) => `${answer.id}: ${answer.secret ? answer.handle ?? "[secret provided]" : answer.answer}${answer.source === "telegram" ? " [via Telegram]" : ""}`)
         .join("\n");
+      const handled = answers.some((answer) => answer.handle);
       const unavailable = interrupted
         && answers.length === 1
         && !answers[0].source
@@ -193,7 +211,7 @@ export default function questionsExtension(
           : "No reply channel is available. Open Pi in TUI mode or configure Telegram."
         : "Questionnaire interrupted";
       return {
-        content: [{ type: "text", text: interrupted ? `${response}\n${suffix}`.trim() : response }],
+        content: [{ type: "text", text: [interrupted ? `${response}\n${suffix}`.trim() : response, handled ? SECRET_HANDLE_HINT : ""].filter(Boolean).join("\n\n") }],
         details,
       };
     },

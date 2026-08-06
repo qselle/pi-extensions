@@ -79,7 +79,13 @@ In non-interactive Pi modes, Telegram can be the only reply channel for non-secr
 
 ## Secret questions
 
-Set `secret: true` to mask terminal input and omit the value from Pi's transcript. Pi stores only `[secret provided]`.
+Set `secret: true` to mask terminal input and keep the value out of Pi's transcript. Instead of the answer, the tool result returns an opaque handle such as `[[secret:api-token#3f9c1a20]]`.
+
+- The real value is held only in memory for the current session branch and is never persisted, logged, or rendered.
+- Copy a handle verbatim into a later tool argument (for example a `bash` command or a request header). The extension swaps every known handle for its value while that tool call executes, so the transcript keeps only the handle.
+- Handles are dropped when the session shuts down or the conversation switches branches. A stale handle blocks the tool call with an instruction to ask for the secret again instead of inventing a value.
+- Handles resolve only in the Pi process that collected them, so a child agent cannot dereference a parent handle.
+- A revealed value can still leak through a command's own output. Prefer commands that do not echo their arguments or results.
 
 Secret questions are terminal-only. If Telegram is enabled, it receives a passive redacted card saying that secure input is waiting; the question text, choices, and answer are never sent, and no Telegram polling starts for that card. Completion edits the card to `Answered securely in Pi` without exposing the value.
 
