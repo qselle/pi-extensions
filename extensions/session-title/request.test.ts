@@ -52,6 +52,33 @@ describe("requestTitle", () => {
     expect(seen.options.apiKey).toBe("k");
   });
 
+  test("forwards provider headers unchanged, including null deletion markers", async () => {
+    const base = context();
+    let seen: any;
+    await requestTitle({
+      ctx: {
+        ...base,
+        modelRegistry: {
+          ...base.modelRegistry,
+          // Pi 0.84 returns ProviderHeaders, where null deletes a default header.
+          getApiKeyAndHeaders: async () => ({
+            ok: true,
+            apiKey: "k",
+            headers: { "x-keep": "1", "x-drop": null },
+            env: {},
+          }),
+        },
+      },
+      prompt: "p",
+      completion: (async (_model: any, _request: any, options: any) => {
+        seen = options;
+        return { content: [{ type: "text", text: "A title" }] };
+      }) as never,
+    });
+
+    expect(seen.headers).toEqual({ "x-keep": "1", "x-drop": null });
+  });
+
   test("uses the cheap model rather than the session model when available", async () => {
     let used: any;
     await requestTitle({
