@@ -11,9 +11,12 @@ class MockPi {
     emit: (name: string, payload: unknown) => { this.emitted.push({ name, payload }); },
   };
 
+  handlers = new Map<string, (event: any) => unknown>();
+
   registerTool(tool: any) { this.tool = tool; }
   getSessionName() { return this.sessionName; }
-  on() {}
+  on(name: string, handler: (event: any) => unknown) { this.handlers.set(name, handler); }
+  fire(name: string, event: any) { return this.handlers.get(name)?.(event); }
 }
 
 const theme = {
@@ -244,4 +247,62 @@ test("reports a useful interruption when neither terminal nor Telegram is availa
 
   expect(result.content[0].text).toContain("No reply channel is available");
   expect(result.details.interrupted).toBe(true);
+});
+
+function secretTerminalContext(secret: string) {
+  return {
+    mode: "tui",
+    cwd: "/work/project",
+    ui: {
+      theme,
+      setTitle: () => undefined,
+      notify: () => undefined,
+      custom: (factory: any) => new Promise((resolve) => {
+        const component = factory({ requestRender: () => undefined }, theme, keybindings, resolve);
+        queueMicrotask(() => {
+          component.handleInput("\r");
+          for (const character of secret) component.handleInput(character);
+          component.handleInput("\r");
+        });
+      }),
+    },
+  } as any;
+}
+
+test("returns a handle for a secret answer and keeps the value out of the result", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { telegramService: null });
+
+  const result = await pi.tool.execute("call", {
+    questions: [{ id: "api token", question: "Token?", secret: true }],
+  }, new AbortController().signal, undefined, secretTerminalContext("actual-secret"));
+
+  const handle = result.details.answers[0].handle as string;
+  expect(handle).toMatch(/^\[\[secret:api-token#[0-9a-f]{8}\]\]$/);
+  expect(result.content[0].text).toContain(`api token: ${handle}`);
+  expect(JSON.stringify(result)).not.toContain("actual-secret");
+});
+
+test("substitutes issued handles into later tool calls and blocks stale ones", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { telegramService: null });
+  const result = await pi.tool.execute("call", {
+    questions: [{ id: "token", question: "Token?", secret: true }],
+  }, new AbortController().signal, undefined, secretTerminalContext("actual-secret"));
+  const handle = result.details.answers[0].handle as string;
+
+  const call = { toolName: "bash", input: { command: `curl -H "Auth: ${handle}" https://api.test` } };
+  expect(pi.fire("tool_call", call)).toBeUndefined();
+  expect(call.input.command).toBe('curl -H "Auth: actual-secret" https://api.test');
+
+  const untouched = { toolName: "bash", input: { command: "echo hello" } };
+  expect(pi.fire("tool_call", untouched)).toBeUndefined();
+  expect(untouched.input.command).toBe("echo hello");
+
+  pi.fire("session_tree", {});
+  const stale = { toolName: "bash", input: { command: `echo ${handle}` } };
+  const blocked = pi.fire("tool_call", stale) as { block: boolean; reason: string };
+  expect(blocked.block).toBe(true);
+  expect(blocked.reason).toContain("no longer valid");
+  expect(stale.input.command).toBe(`echo ${handle}`);
 });
