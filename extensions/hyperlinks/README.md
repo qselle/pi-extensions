@@ -101,6 +101,12 @@ Optional `$PI_CODING_AGENT_DIR/hyperlinks.json` (defaults to
 
 Invalid values and unreadable files fall back to `auto`.
 
+The mode is process-global state shared with the extensions that render links, so
+it is applied when the session starts and handed back on `session_shutdown`.
+That way a mode configured for one project does not linger after `/resume` enters
+a project that configures none. Setting the mode with `/hyperlinks` takes
+ownership, and shutdown leaves that choice untouched.
+
 ## Dependencies and limitations
 
 - **Runtime:** Pi's public extension and command APIs.
