@@ -8,8 +8,8 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   MAX_SEARCH_RESULTS,
   type MemoryScope,
@@ -35,7 +35,7 @@ export function defaultMemoryConfig(): MemoryConfig {
 }
 
 export function agentDirectory(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  return getAgentDir();
 }
 
 export function parseMemoryConfig(raw: unknown): MemoryConfig {

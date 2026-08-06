@@ -11,11 +11,13 @@ import { join } from "node:path";
 import {
   CONFIG_FILE,
   DEFAULT_SEARCH_RESULTS,
+  agentDirectory,
   defaultMemoryConfig,
   loadMemoryConfig,
   parseMemoryConfig,
   setMemoryEnabled,
 } from "./config.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { MAX_SEARCH_RESULTS } from "./types.ts";
 
 describe("memory config", () => {
@@ -89,4 +91,8 @@ describe("memory config", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+test("resolves the agent directory through Pi rather than hardcoding .pi", () => {
+  expect(agentDirectory()).toBe(getAgentDir());
 });

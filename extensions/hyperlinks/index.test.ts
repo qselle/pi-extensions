@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import hyperlinksExtension, { loadMode } from "./index.ts";
+import hyperlinksExtension, { agentDirectory, loadMode } from "./index.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getHyperlinkMode, setHyperlinkMode } from "./link.ts";
 
 afterEach(() => setHyperlinkMode("auto"));
@@ -139,4 +140,8 @@ describe("/open-path", () => {
     expect(notifications[0]?.message).not.toContain("\x1b]8;;");
     expect(notifications[0]?.message).toContain("file://");
   });
+});
+
+test("resolves the agent directory through Pi rather than hardcoding .pi", () => {
+  expect(agentDirectory()).toBe(getAgentDir());
 });

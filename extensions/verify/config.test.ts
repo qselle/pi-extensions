@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_SPILL_TOKEN_LIMIT,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  agentDirectory,
   emptyConfig,
   globToRegExp,
   loadConfig,
@@ -198,5 +201,27 @@ describe("loadConfig", () => {
       readConfig: reader({ "/repo/.pi/verify.json": { checks: "nope" }, "/agent/verify.json": global }),
     });
     expect(config.source).toBe("global");
+  });
+});
+
+describe("config directory resolution", () => {
+  test("resolves the agent directory through Pi rather than hardcoding .pi", () => {
+    expect(agentDirectory()).toBe(getAgentDir());
+  });
+
+  test("reads the project config from Pi's configured directory name", () => {
+    const requested: string[] = [];
+    loadConfig({
+      cwd: "/repo",
+      agentDir: "/agent",
+      projectTrusted: true,
+      readConfig: (path: string) => {
+        requested.push(path);
+        return undefined;
+      },
+    });
+
+    expect(requested).toContain(join("/repo", CONFIG_DIR_NAME, "verify.json"));
+    expect(requested).toContain(join("/agent", "verify.json"));
   });
 });
