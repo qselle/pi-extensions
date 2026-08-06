@@ -254,3 +254,41 @@ test("cancelling preserves the existing editor draft and shutdown restores the p
   await pi.emit("session_shutdown", { reason: "reload" }, ctx);
   expect(currentFactory).toBe(previousFactory);
 });
+
+test("the visible window follows the terminal, not the size at construction", () => {
+  const many = Array.from({ length: 20 }, (_, index) => ({
+    text: `alpha ${index}`,
+    source: "message" as const,
+    recency: index,
+  }));
+  // Pi can resize the terminal or swap between its regular and fullscreen
+  // renderers while the picker is open.
+  const tui = { terminal: { rows: 24 }, requestRender() {} } as any;
+  const picker = new HistoryPicker(many, "", theme, keybindings, tui, () => {});
+  const resultRows = () => picker.render(60).filter((line: string) => /alpha \d+/.test(line)).length;
+
+  expect(resultRows()).toBe(10);
+
+  tui.terminal.rows = 14;
+  expect(resultRows()).toBe(3);
+
+  tui.terminal.rows = 40;
+  expect(resultRows()).toBe(10);
+});
+
+test("paging steps by the current window size", () => {
+  const many = Array.from({ length: 20 }, (_, index) => ({
+    text: `beta ${index}`,
+    source: "message" as const,
+    recency: index,
+  }));
+  const tui = { terminal: { rows: 14 }, requestRender() {} } as any;
+  const picker = new HistoryPicker(many, "", theme, keybindings, tui, () => {});
+
+  picker.handleInput("pageDown");
+  expect(picker.getSelectedIndex()).toBe(3);
+
+  tui.terminal.rows = 24;
+  picker.handleInput("pageDown");
+  expect(picker.getSelectedIndex()).toBe(13);
+});
