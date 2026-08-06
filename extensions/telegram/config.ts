@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } fr
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 
 export type TelegramGoalDetails = "minimal" | "summary" | "full";
 
@@ -62,7 +63,7 @@ export function defaultTelegramConfigPath(
   const agentDir = env.PI_CODING_AGENT_DIR?.trim();
   const directory = agentDir
     ? resolveUserPath(agentDir, homeDir, cwd)
-    : join(homeDir, ".pi", "agent");
+    : join(homeDir, CONFIG_DIR_NAME, "agent");
   return join(directory, TELEGRAM_CONFIG_FILENAME);
 }
 

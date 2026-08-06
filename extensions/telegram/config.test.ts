@@ -18,6 +18,7 @@ import {
   readTelegramConfig,
   saveTelegramConfig,
 } from "./config.ts";
+import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
 const OTHER_TOKEN = "987654321:abcdefghijklmnopqrstuvwxyz_ABCDEFGHI";
@@ -303,4 +304,9 @@ test("rejects symlinks, broad Unix permissions, and foreign ownership", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("builds the default config path from Pi's configured directory name", () => {
+  expect(defaultTelegramConfigPath({}, "/home/test", "/work"))
+    .toBe(join("/home/test", CONFIG_DIR_NAME, "agent", "telegram.json"));
 });

@@ -10,9 +10,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildTitlePrompt, normalizeTitle, provisionalTitle } from "./engine.ts";
 import { requestTitle, type TitleResult } from "./request.ts";
 
@@ -26,7 +25,7 @@ export interface SessionTitleConfig {
 }
 
 export function agentDirectory(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  return getAgentDir();
 }
 
 export function loadConfig(directory = agentDirectory()): SessionTitleConfig {

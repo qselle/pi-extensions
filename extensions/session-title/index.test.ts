@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sessionTitleExtension, { loadConfig, statusText, type SessionTitleConfig } from "./index.ts";
+import sessionTitleExtension, { agentDirectory, loadConfig, statusText, type SessionTitleConfig } from "./index.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { TitleResult } from "./request.ts";
 
 const config = (overrides: Partial<SessionTitleConfig> = {}): SessionTitleConfig => ({ enabled: true, ...overrides });
@@ -246,4 +247,8 @@ describe("statusText", () => {
   test("surfaces the last error", () => {
     expect(statusText(config(), undefined, 1, { error: "no credentials" })).toContain("last error: no credentials");
   });
+});
+
+test("resolves the agent directory through Pi rather than hardcoding .pi", () => {
+  expect(agentDirectory()).toBe(getAgentDir());
 });

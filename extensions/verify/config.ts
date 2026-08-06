@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 10 * 60_000;
@@ -31,7 +31,7 @@ export function emptyConfig(): VerifyConfig {
 }
 
 export function agentDirectory(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  return getAgentDir();
 }
 
 /**
@@ -140,7 +140,7 @@ export interface LoadConfigOptions {
  */
 export function loadConfig(options: LoadConfigOptions): VerifyConfig {
   const read = options.readConfig ?? readJson;
-  const projectPath = join(options.cwd, ".pi", "verify.json");
+  const projectPath = join(options.cwd, CONFIG_DIR_NAME, "verify.json");
   const globalPath = join(options.agentDir ?? agentDirectory(), "verify.json");
 
   const projectRaw = read(projectPath);
