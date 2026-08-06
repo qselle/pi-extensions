@@ -26,7 +26,11 @@ export interface TitleRequestContext {
       ok: boolean;
       error?: string;
       apiKey?: string;
-      headers?: Record<string, string>;
+      /**
+       * Pi's `ProviderHeaders`: a `null` value is a deletion marker for a default
+       * header, so it must be forwarded to pi-ai unchanged rather than filtered.
+       */
+      headers?: Record<string, string | null>;
       env?: Record<string, string>;
     }>;
   };
