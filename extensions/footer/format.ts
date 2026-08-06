@@ -87,6 +87,8 @@ export interface FooterInput {
 	/** Pre-composed model + effort label, e.g. "claude-opus-4-8 max". */
 	model: string;
 	dir: string;
+	/** Git branch from pi's footer data provider; folded into the dir cell like pi's own footer. */
+	branch?: string | null;
 	status: string;
 	usage: ContextUsageLike | undefined;
 	totals: UsageTotals;
@@ -94,16 +96,17 @@ export interface FooterInput {
 
 /**
  * The single Codex-style footer line, in display order:
- *   model effort · dir · status · Context X% left · Context Y% used · W window · U used · I in · O out · $cost
+ *   model effort · dir (branch) · status · Context X% left · Context Y% used · W window · U used · I in · O out · $cost
  * Drop priority increases toward the tail so model + "% left" survive longest.
  */
 export function buildCells(input: FooterInput): Cell[] {
-	const { model, dir, status, usage, totals } = input;
+	const { model, dir, branch, status, usage, totals } = input;
 	const usedPercent = usage?.percent ?? null;
 	const leftPercent = usedPercent == null ? null : Math.max(0, 100 - usedPercent);
+	const location = dir && branch ? `${dir} (${branch})` : dir;
 	const cells: Cell[] = [
 		{ id: "model", text: model, priority: 0 },
-		{ id: "dir", text: dir, priority: 4 },
+		{ id: "dir", text: location, priority: 4 },
 		{ id: "status", text: status, priority: 3 },
 		{ id: "left", text: `Context ${formatPercent(leftPercent)} left`, priority: 1 },
 		{ id: "used", text: `Context ${formatPercent(usedPercent)} used`, priority: 2 },
@@ -143,4 +146,31 @@ export function fitCells<T extends { text: string; priority: number }>(
 		kept.splice(idx, 1);
 	}
 	return kept;
+}
+
+/**
+ * Flatten one status text onto a single line.
+ *
+ * Mirrors pi's own footer sanitizer: newlines, tabs, and carriage returns become
+ * spaces, runs of spaces collapse, and the result is trimmed. Styling is left
+ * intact because extensions colour their own status text.
+ */
+export function sanitizeStatusText(text: string): string {
+	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+}
+
+/**
+ * The extension status line, built from `ctx.ui.setStatus()` entries.
+ *
+ * Sorted by key so the order is stable regardless of which extension reported
+ * first, matching pi's built-in footer. Returns "" when nothing is reported, in
+ * which case the caller omits the line entirely.
+ */
+export function statusLine(statuses: Iterable<readonly [string, string]> | undefined, separator = " · "): string {
+	if (!statuses) return "";
+	return [...statuses]
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([, text]) => sanitizeStatusText(text))
+		.filter((text) => text.length > 0)
+		.join(separator);
 }

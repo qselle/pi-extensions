@@ -14,6 +14,10 @@
  * never walks the session. The footer is handed back to pi on
  * `session_shutdown`, because its factory closes over the session context and
  * that context is stale after session replacement.
+ *
+ * The git branch and other extensions' `setStatus()` texts come from the
+ * `footerData` provider pi passes to the factory — replacing the built-in footer
+ * would otherwise hide both.
  * Public APIs only: setFooter, getContextUsage, getThinkingLevel, sessionManager.
  */
 
@@ -25,6 +29,7 @@ import {
 	fitCells,
 	formatCwd,
 	modelLabel,
+	statusLine,
 	type CellId,
 } from "./format.ts";
 import { UsageTotalsCache } from "./usage.ts";
@@ -61,24 +66,33 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		totals.invalidate();
 		if (ctx.mode !== "tui") return;
-		ctx.ui.setFooter((tui, theme) => {
+		ctx.ui.setFooter((tui, theme, footerData) => {
 			tuiRef = tui;
+			// Pi's provider watches .git, so a checkout refreshes the branch without polling.
+			const stopBranchWatch = footerData?.onBranchChange?.(() => tui.requestRender());
 			return {
 				invalidate() {},
 				dispose() {
+					stopBranchWatch?.();
 					if (tuiRef === tui) tuiRef = undefined;
 				},
 				render(width: number): string[] {
 					const cells = buildCells({
 						model: modelLabel(ctx.model?.id, currentEffort(pi)),
 						dir: formatCwd(ctx.cwd, homedir()),
+						branch: footerData?.getGitBranch?.(),
 						status: ctx.isIdle() ? "Ready" : "Working",
 						usage: ctx.getContextUsage(),
 						totals: totals.get(() => ctx.sessionManager.getBranch()),
 					});
 					const kept = fitCells(cells, width, 3, visibleWidth);
 					const sep = theme.fg("dim", " · ");
-					return [truncateToWidth(kept.map((c) => theme.fg(CELL_COLOR[c.id], c.text)).join(sep), width)];
+					const lines = [truncateToWidth(kept.map((c) => theme.fg(CELL_COLOR[c.id], c.text)).join(sep), width)];
+					// Extension statuses (ctx.ui.setStatus) get their own line, like pi's own
+					// footer: they are transient and must not cannibalise the Codex line.
+					const statuses = statusLine(footerData?.getExtensionStatuses?.(), sep);
+					if (statuses) lines.push(truncateToWidth(statuses, width, theme.fg("dim", "…")));
+					return lines;
 				},
 			};
 		});
