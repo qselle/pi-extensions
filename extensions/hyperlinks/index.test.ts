@@ -10,8 +10,16 @@ afterEach(() => setHyperlinkMode("auto"));
 
 class MockPi {
   commands = new Map<string, any>();
+  handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
-  on() {}
+  on(name: string, handler: (event: any, ctx: any) => unknown) {
+    const existing = this.handlers.get(name);
+    if (existing) existing.push(handler);
+    else this.handlers.set(name, [handler]);
+  }
+  fire(name: string, ctx: any = {}, event: any = {}) {
+    for (const handler of this.handlers.get(name) ?? []) handler(event, ctx);
+  }
 }
 
 function createCtx(cwd = "/repo") {
@@ -51,16 +59,48 @@ describe("registration", () => {
     expect([...pi.commands.keys()].sort()).toEqual(["hyperlinks", "open-path"]);
   });
 
-  test("applies the configured mode at load", () => {
+  test("applies the configured mode when the session starts", () => {
     const pi = new MockPi();
     hyperlinksExtension(pi as any, { configDirectory: configDir({ mode: "never" }) });
+    expect(getHyperlinkMode()).toBe("auto");
+
+    pi.fire("session_start");
     expect(getHyperlinkMode()).toBe("never");
+  });
+
+  test("hands the previous mode back on shutdown", () => {
+    setHyperlinkMode("always");
+    const pi = new MockPi();
+    hyperlinksExtension(pi as any, { configDirectory: configDir({ mode: "never" }) });
+
+    pi.fire("session_start");
+    expect(getHyperlinkMode()).toBe("never");
+
+    pi.fire("session_shutdown");
+    expect(getHyperlinkMode()).toBe("always");
+  });
+
+  test("keeps a mode chosen with /hyperlinks after shutdown", async () => {
+    const pi = new MockPi();
+    hyperlinksExtension(pi as any, { configDirectory: configDir({ mode: "never" }) });
+    pi.fire("session_start");
+
+    const { ctx } = createCtx();
+    await pi.commands.get("hyperlinks").handler("always", ctx);
+    pi.fire("session_shutdown");
+
+    expect(getHyperlinkMode()).toBe("always");
   });
 
   test("leaves the mode alone when unconfigured", () => {
     setHyperlinkMode("always");
     const pi = new MockPi();
     hyperlinksExtension(pi as any, { configDirectory: configDir() });
+
+    pi.fire("session_start");
+    expect(getHyperlinkMode()).toBe("always");
+
+    pi.fire("session_shutdown");
     expect(getHyperlinkMode()).toBe("always");
   });
 });

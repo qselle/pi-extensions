@@ -50,8 +50,29 @@ export default function hyperlinksExtension(
   pi: ExtensionAPI,
   options: HyperlinksExtensionOptions = {},
 ): void {
-  const configured = loadMode(options.configDirectory ?? agentDirectory());
-  if (configured) setHyperlinkMode(configured);
+  // The hyperlink mode is process-global state shared with the extensions that
+  // render links, so it is applied per session and handed back on shutdown
+  // rather than mutated once at load time. Otherwise a mode configured for one
+  // project would linger after /resume enters a project that configures none.
+  let appliedMode: HyperlinkMode | undefined;
+  let restoreMode: HyperlinkMode | undefined;
+
+  pi.on("session_start", () => {
+    const configured = loadMode(options.configDirectory ?? agentDirectory());
+    if (!configured) return;
+    restoreMode = getHyperlinkMode();
+    appliedMode = configured;
+    setHyperlinkMode(configured);
+  });
+
+  pi.on("session_shutdown", () => {
+    // Only undo our own change; /hyperlinks may have chosen something else since.
+    if (appliedMode !== undefined && restoreMode !== undefined && getHyperlinkMode() === appliedMode) {
+      setHyperlinkMode(restoreMode);
+    }
+    appliedMode = undefined;
+    restoreMode = undefined;
+  });
 
   pi.registerCommand("hyperlinks", {
     description: "Show or set clickable-path support: /hyperlinks [auto|always|never]",
@@ -65,6 +86,9 @@ export default function hyperlinksExtension(
       const requested = args.trim().toLowerCase();
       if (requested === "auto" || requested === "always" || requested === "never") {
         setHyperlinkMode(requested);
+        // The user now owns the mode; shutdown must not roll it back.
+        appliedMode = undefined;
+        restoreMode = undefined;
         ctx.ui.notify(`Hyperlinks set to ${requested} (active: ${hyperlinksEnabled()}).`, "info");
         return;
       }
