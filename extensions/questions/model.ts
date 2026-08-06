@@ -25,6 +25,8 @@ export interface QuestionAnswer {
   id: string;
   question: string;
   answer?: string;
+  /** Opaque stand-in returned for secret answers; safe to persist. */
+  handle?: string;
   provided?: boolean;
   cancelled?: boolean;
   secret?: boolean;
