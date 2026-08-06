@@ -9,6 +9,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { rankHistory, type HistoryItem, type RankedHistoryItem } from "./history.ts";
+import { keyLabel } from "./keys.ts";
 
 const MAX_VISIBLE_RESULTS = 10;
 
@@ -130,7 +131,10 @@ export class HistoryPicker implements Component, Focusable {
     }
 
     lines.push(this.middleBorder(safeWidth));
-    lines.push(this.frameLine(this.theme.fg("dim", " ↑↓/Ctrl+R navigate · Enter use · Esc cancel"), safeWidth));
+    const navigate = `${keyLabel(this.keybindings, "tui.select.up", "↑")}${keyLabel(this.keybindings, "tui.select.down", "↓")}/Ctrl+R`;
+    const use = keyLabel(this.keybindings, "tui.select.confirm", "Enter");
+    const cancel = keyLabel(this.keybindings, "tui.select.cancel", "Esc");
+    lines.push(this.frameLine(this.theme.fg("dim", ` ${navigate} navigate · ${use} use · ${cancel} cancel`), safeWidth));
     lines.push(this.bottomBorder(safeWidth));
     return lines.map((line) => truncateToWidth(line, safeWidth, ""));
   }

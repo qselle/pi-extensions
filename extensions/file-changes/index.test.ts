@@ -33,6 +33,7 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
   // any sibling suite imports from Pi — including the config helpers.
   CONFIG_DIR_NAME: ".pi",
   getAgentDir: () => join(tmpdir(), "pi-agent-mock"),
+  keyText: (id: string) => (id === "app.tools.expand" ? "ctrl+o" : ""),
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",
