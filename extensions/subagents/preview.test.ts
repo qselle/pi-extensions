@@ -44,8 +44,10 @@ test("collapsed results keep the tail of the output and report what is hidden", 
     lines: ["step two", "step three", "step four", "conclusion"],
     hidden: 2,
   });
-  expect(hiddenLinesMarker(2)).toBe("… +2 earlier lines (Ctrl+O for full output)");
-  expect(hiddenLinesMarker(1)).toBe("… +1 earlier line (Ctrl+O for full output)");
+  expect(hiddenLinesMarker(2, "Ctrl+O")).toBe("… +2 earlier lines (Ctrl+O for full output)");
+  expect(hiddenLinesMarker(1, "Ctrl+O")).toBe("… +1 earlier line (Ctrl+O for full output)");
+  // The hint names whatever key the user bound to app.tools.expand.
+  expect(hiddenLinesMarker(3, "Ctrl+E")).toBe("… +3 earlier lines (Ctrl+E for full output)");
 });
 
 test("short results are shown in full without hiding anything", () => {
