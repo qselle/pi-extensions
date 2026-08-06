@@ -17,7 +17,6 @@ export class HistoryPicker implements Component, Focusable {
   private readonly input = new Input();
   private matches: RankedHistoryItem[] = [];
   private selectedIndex = 0;
-  private readonly maxVisible: number;
   private _focused = false;
 
   constructor(
@@ -29,9 +28,19 @@ export class HistoryPicker implements Component, Focusable {
     private readonly done: (result: string | null) => void,
   ) {
     this.input.setValue(initialQuery);
-    const rows = (tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
-    this.maxVisible = Math.max(3, Math.min(MAX_VISIBLE_RESULTS, Math.floor(rows * 0.7) - 6));
     this.refresh();
+  }
+
+  /**
+   * Result rows that fit the current terminal.
+   *
+   * Read per use rather than cached at construction: the terminal can be
+   * resized while the picker is open, and pi can swap between its regular and
+   * fullscreen renderers at runtime.
+   */
+  private visibleCount(): number {
+    const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
+    return Math.max(3, Math.min(MAX_VISIBLE_RESULTS, Math.floor(rows * 0.7) - 6));
   }
 
   get focused(): boolean {
@@ -78,11 +87,11 @@ export class HistoryPicker implements Component, Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.select.pageUp")) {
-      this.moveSelection(-this.maxVisible);
+      this.moveSelection(-this.visibleCount());
       return;
     }
     if (this.keybindings.matches(data, "tui.select.pageDown")) {
-      this.moveSelection(this.maxVisible);
+      this.moveSelection(this.visibleCount());
       return;
     }
 
@@ -113,11 +122,12 @@ export class HistoryPicker implements Component, Focusable {
     if (this.matches.length === 0) {
       lines.push(this.frameLine(this.theme.fg("muted", "  No matching history"), safeWidth));
     } else {
+      const visible = this.visibleCount();
       const start = Math.max(
         0,
-        Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.matches.length - this.maxVisible),
+        Math.min(this.selectedIndex - Math.floor(visible / 2), this.matches.length - visible),
       );
-      const end = Math.min(start + this.maxVisible, this.matches.length);
+      const end = Math.min(start + visible, this.matches.length);
       for (let index = start; index < end; index++) {
         const match = this.matches[index]!;
         const selected = index === this.selectedIndex;
