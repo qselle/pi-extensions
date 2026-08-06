@@ -46,6 +46,11 @@ is shown once (in the headline), never duplicated.
 - **Execution is untouched.** Each tool spreads the exported
   `createXToolDefinition(cwd)`, so `execute`, `parameters`, and the result
   `details` shape are exactly pi's built-ins. Only rendering changes.
+- **Session-cwd bound.** The overrides register immediately at load and rebind on
+  every `session_start` to `ctx.cwd`, because pi resolves relative tool paths
+  against the session's working directory and `/resume` can enter a different
+  one. Registering by name replaces the previous definition, so rebinding is
+  idempotent and a repeated `session_start` for the same cwd is a no-op.
 - **Width-safe.** Every line is hard-fitted to the viewport and each component
   catches its own render errors, so a display bug degrades to one plain line
   rather than crashing the TUI.

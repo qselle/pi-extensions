@@ -305,7 +305,6 @@ function writeEnabled(on: boolean): void {
 
 export default function toolRenderExtension(pi: ExtensionAPI): void {
 	if (readEnabled()) {
-		const cwd = process.cwd();
 		const factories: Record<ToolName, (dir: string) => any> = {
 			read: createReadToolDefinition,
 			write: createWriteToolDefinition,
@@ -315,23 +314,38 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 			find: createFindToolDefinition,
 			ls: createLsToolDefinition,
 		};
-		for (const name of Object.keys(factories) as ToolName[]) {
-			try {
-				pi.registerTool({
-					...factories[name](cwd),
-					renderShell: "self",
-					renderCall: makeRenderCall(name),
-					renderResult: makeRenderResult(name),
-				});
-			} catch {
-				// Leave this tool as pi's built-in if the override can't be registered.
+		// Overrides replace execution as well as rendering, so they must resolve
+		// relative paths against the session's cwd. Registering by name replaces the
+		// previous definition, so rebinding on session_start is idempotent.
+		let boundCwd: string | undefined;
+		const registerOverrides = (cwd: string): void => {
+			if (boundCwd === cwd) return;
+			boundCwd = cwd;
+			for (const name of Object.keys(factories) as ToolName[]) {
+				try {
+					pi.registerTool({
+						...factories[name](cwd),
+						renderShell: "self",
+						renderCall: makeRenderCall(name),
+						renderResult: makeRenderResult(name),
+					});
+				} catch {
+					// Leave this tool as pi's built-in if the override can't be registered.
+				}
 			}
-		}
+		};
+
+		// Register immediately so the overrides exist before the first session event,
+		// then rebind to the authoritative session cwd (which /resume can change).
+		registerOverrides(process.cwd());
 
 		// Exploration grouping: track runs of read/grep/find/ls, broken by any
 		// other tool or a new assistant message.
 		resetExploration();
-		pi.on("session_start", () => resetExploration());
+		pi.on("session_start", (_event: any, ctx: any) => {
+			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd);
+			resetExploration();
+		});
 		pi.on("tool_execution_start", (event: any) => {
 			if (EXPLORATION_TOOLS.has(event?.toolName)) noteStart(event.toolCallId, event.toolName, event.args);
 			else closeGroup();
