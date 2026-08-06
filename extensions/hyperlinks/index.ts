@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   fileUri,
   getHyperlinkMode,
@@ -30,7 +29,7 @@ export {
 const CONFIG_FILE = "hyperlinks.json";
 
 export function agentDirectory(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+  return getAgentDir();
 }
 
 export function loadMode(directory = agentDirectory()): HyperlinkMode | undefined {

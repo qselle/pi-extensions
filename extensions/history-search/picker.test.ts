@@ -1,4 +1,6 @@
 import { expect, mock, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 class MockInput {
   private value = "";
@@ -28,6 +30,10 @@ class MockCustomEditor {
 }
 
 mock.module("@earendil-works/pi-coding-agent", () => ({
+  // Bun applies module mocks process-wide, so this shim must expose every symbol
+  // any sibling suite imports from Pi — including the config helpers.
+  CONFIG_DIR_NAME: ".pi",
+  getAgentDir: () => join(tmpdir(), "pi-agent-mock"),
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",
