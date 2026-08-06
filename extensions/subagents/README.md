@@ -73,7 +73,7 @@ Running children appear in the shared top-right workflow overlay with task, sele
 
 Transcripts read the child's real temporary Pi session while it runs. Up to 500 latest entries are retained in memory before cleanup so a closed child remains inspectable for the rest of the parent runtime. Inherited parent messages and the orchestration wrapper prompt are omitted from the viewer.
 
-Tool results and automatic completions support Pi’s collapsed/expanded rendering.
+Tool results and automatic completions support Pi’s collapsed/expanded rendering. A collapsed result shows the tail of the child's output — up to five rows, with a dim `… +N earlier lines` marker when more was produced — because a child agent states its conclusion last. `Ctrl+O` expands the full markdown result. A `wait` headline reports its outcome (`all settled`, `timed out`, `interrupted`) together with how many selected children are still running.
 
 ### Footer usage
 
