@@ -80,15 +80,26 @@ test("shows each row's share of the estimated total", () => {
   expect(lineFor(lines, "guidelines")).toContain("12 bullets");
 });
 
-test("reconciles the estimate against the provider count in footnotes", () => {
-  const lines = renderReport(report(), plain, 80);
+test("reconciles the estimate against pi's figure, naming the provider's components", () => {
+  const withComponents = renderReport(
+    report({ provider: { input: 15_110, output: 6_400, cacheRead: 600_000, cacheWrite: 26_923 } }),
+    plain,
+    100,
+  );
 
-  expect(lineFor(lines, "estimated total")).toContain("28,200");
-  expect(lineFor(lines, "provider reported")).toContain("27,900");
-  expect(lineFor(lines, "provider reported")).toContain("counts cached reuse");
+  expect(lineFor(withComponents, "estimated total")).toContain("28,200");
+  const providerLine = lineFor(withComponents, "provider last turn");
+  expect(providerLine).toContain("27,900");
+  // A 2x gap against the estimate is cache accounting, so name the parts.
+  expect(providerLine).toContain("15,110 fresh + 626,923 cached");
+  expect(providerLine).toContain("6,400 out");
+
+  // Without components, fall back to a plain explanation.
+  expect(lineFor(renderReport(report(), plain, 100), "provider last turn"))
+    .toContain("counts cached reuse");
 
   const withoutProvider = renderReport(report({ reported: undefined }), plain, 80);
-  expect(lineFor(withoutProvider, "provider reported")).toBe("");
+  expect(lineFor(withoutProvider, "provider last turn")).toBe("");
   expect(lineFor(withoutProvider, "estimated total")).toContain("28,200");
 });
 

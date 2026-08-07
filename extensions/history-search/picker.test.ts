@@ -37,6 +37,7 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
   keyText: (id: string) => (id === "app.tools.expand" ? "ctrl+o" : ""),
   estimateTokens: (message: unknown) => Math.ceil(JSON.stringify(message ?? "").length / 4),
   DEFAULT_COMPACTION_SETTINGS: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+  getLastAssistantUsage: () => undefined,
   CustomEditor: MockCustomEditor,
   generateUnifiedPatch: (_path: string, before: string, after: string) => [
     "--- before",

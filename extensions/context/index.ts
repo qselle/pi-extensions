@@ -11,9 +11,9 @@
  * provider's own count is shown alongside when pi has one.
  */
 
-import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, getLastAssistantUsage, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
-import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ToolLike } from "./analysis.ts";
+import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ProviderUsage, type ToolLike } from "./analysis.ts";
 import { renderReport, summaryLine, type ReportTheme } from "./render.ts";
 
 export const CONTEXT_REPORT_ENTRY = "context-report";
@@ -40,6 +40,16 @@ export const piEstimators: Estimators = {
     // Compaction and branch-summary entries carry their text as `summary`.
     return typeof candidate?.summary === "string" ? estimateText(candidate.summary) : 0;
   },
+};
+
+/** Reads the provider's usage components for the last response. */
+export type LastUsageReader = (entries: readonly unknown[]) => Partial<ProviderUsage> | undefined;
+
+const readPiLastUsage: LastUsageReader = (entries) => {
+  const usage = getLastAssistantUsage(entries as never);
+  return usage
+    ? { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite }
+    : undefined;
 };
 
 const PLAIN_THEME: ReportTheme = { fg: (_color, text) => text, bold: (text) => text };
@@ -85,6 +95,7 @@ export function collectReport(
   host: ContextHost,
   ctx: ContextCommandContext,
   estimate: Estimators = piEstimators,
+  readLastUsage: LastUsageReader = readPiLastUsage,
 ): ContextReport {
   const options = safeCall(() => ctx.getSystemPromptOptions?.()) ?? {};
   const usage = safeCall(() => ctx.getContextUsage?.());
@@ -99,6 +110,8 @@ export function collectReport(
     : allTools;
 
   const reported = typeof usage?.tokens === "number" && usage.tokens > 0 ? usage.tokens : undefined;
+  // The raw components explain any gap between pi's figure and the estimate.
+  const lastUsage = safeCall(() => readLastUsage(entries));
 
   // Absolute paths would push every number off the right edge of the table.
   const contextFiles = (options.contextFiles ?? []).map((file) => ({
@@ -119,6 +132,16 @@ export function collectReport(
     window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
     reserveTokens: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
     ...(reported !== undefined ? { reportedTokens: reported } : {}),
+    ...(lastUsage
+      ? {
+        providerUsage: {
+          input: lastUsage.input,
+          output: lastUsage.output,
+          cacheRead: lastUsage.cacheRead,
+          cacheWrite: lastUsage.cacheWrite,
+        },
+      }
+      : {}),
   }, estimate);
 }
 
@@ -138,10 +161,12 @@ class ReportCard {
 
 export interface ContextExtensionOptions {
   estimators?: Estimators;
+  readLastUsage?: LastUsageReader;
 }
 
 export default function contextExtension(pi: ExtensionAPI, options: ContextExtensionOptions = {}): void {
   const estimate = options.estimators ?? piEstimators;
+  const readLastUsage = options.readLastUsage ?? readPiLastUsage;
 
   // A custom entry rather than a message: the report is for you, not the model,
   // and must never enter the conversation it is measuring.
@@ -151,7 +176,7 @@ export default function contextExtension(pi: ExtensionAPI, options: ContextExten
   pi.registerCommand("context", {
     description: "Show where the context window is going",
     handler: async (_args: string, ctx: any) => {
-      const report = collectReport(pi as ContextHost, ctx as ContextCommandContext, estimate);
+      const report = collectReport(pi as ContextHost, ctx as ContextCommandContext, estimate, readLastUsage);
       if (ctx.mode === "tui") {
         pi.appendEntry(CONTEXT_REPORT_ENTRY, { report });
         return;
