@@ -125,12 +125,28 @@ function buildRows(report: ContextReport): Row[] {
     rows.push({
       kind: "footnote",
       indent: 0,
-      label: "provider reported",
+      label: "provider last turn",
       value: formatCount(report.reported),
-      detail: "prompt + response, counts cached reuse",
+      detail: providerDetail(report),
     });
   }
   return rows;
+}
+
+/**
+ * Explains pi's figure with the provider's own components.
+ *
+ * A large gap against the estimate is usually cache accounting, and naming the
+ * parts is more useful than asserting which side is right.
+ */
+function providerDetail(report: ContextReport): string {
+  const provider = report.provider;
+  if (!provider) return "prompt + response, counts cached reuse";
+  const cached = provider.cacheRead + provider.cacheWrite;
+  const prompt = cached > 0
+    ? `${formatCount(provider.input)} fresh + ${formatCount(cached)} cached`
+    : `${formatCount(provider.input)} prompt`;
+  return `${prompt} · ${formatCount(provider.output)} out`;
 }
 
 function pushSection(rows: Row[], label: string, section: Section, basis: number): void {

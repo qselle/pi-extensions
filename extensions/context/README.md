@@ -49,14 +49,20 @@ section longer than six rows summarises its tail as `… +N more`.
 
 ## Accuracy
 
-- Figures are **estimates** using the same chars/4 heuristic as pi's own
-  `estimateTokens`, so they agree with the compaction decisions that actually
-  affect a session — not with a provider's exact tokenizer.
-- The provider's own count is shown as `reported` when pi has one (it comes from
-  the last assistant response), and the share of the window prefers it over the
-  estimate.
-- `compaction at` is derived from the model window minus pi's
+The headline `Used A / B (C%)` is **pi's own figure** — `calculateContextTokens` over
+the last response — because that is what compaction actually reacts to. The table
+below it is an independent estimate, so the two are reconciled explicitly in the
+footer rather than competing in the header:
+
+- `estimated total` — the sum of the table, using the same chars/4 heuristic as
+  pi's `estimateTokens` (which counts text, thinking, and tool-call arguments).
+- `provider last turn` — pi's figure, annotated with the provider's own
+  components (`fresh + cached prompt · output`). A large gap between the two is
+  normally cache accounting, and naming the parts is more useful than asserting
+  which side is right.
+- `compacts at` is the model window minus pi's
   `DEFAULT_COMPACTION_SETTINGS.reserveTokens`.
+- Per-row shares are of the estimated total, since that is what the rows sum to.
 - Every accessor is read defensively: a host that omits or throws from
   `getSystemPrompt`, `getSystemPromptOptions`, `getContextUsage`, or
   `buildContextEntries` yields an empty report instead of an error.
