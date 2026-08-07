@@ -178,6 +178,25 @@ test("shortens absolute context-file paths to session-relative labels", () => {
   expect(labels.some((label) => label.startsWith("/work"))).toBe(false);
 });
 
+test("passes the provider's usage components through so a gap explains itself", () => {
+  const pi = new MockPi();
+  // Injected rather than read from pi, so the assertion holds regardless of the
+  // module mocks sibling suites install process-wide.
+  const readLastUsage = () => ({ input: 15_110, output: 6_400, cacheRead: 600_000, cacheWrite: 26_923 });
+
+  const report = collectReport(pi as any, commandContext(), estimators, readLastUsage);
+
+  expect(report.provider).toEqual({ input: 15_110, output: 6_400, cacheRead: 600_000, cacheWrite: 26_923 });
+});
+
+test("reports no provider components when pi has no usable usage yet", () => {
+  const pi = new MockPi();
+
+  const report = collectReport(pi as any, commandContext(), estimators, () => undefined);
+
+  expect(report.provider).toBeUndefined();
+});
+
 test("renders an empty report rather than throwing on a malformed entry", () => {
   const pi = new MockPi();
   contextExtension(pi as any, { estimators });

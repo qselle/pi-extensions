@@ -27,6 +27,13 @@ export interface Section {
   buckets: Bucket[];
 }
 
+export interface ProviderUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface ContextReport {
   /** Model context window, or 0 when unknown. */
   window: number;
@@ -36,6 +43,8 @@ export interface ContextReport {
   estimated: number;
   /** The provider's own count for the last response, when available. */
   reported?: number;
+  /** Raw components behind `reported`, so a divergence explains itself. */
+  provider?: ProviderUsage;
   system: Section;
   tools: Section;
   conversation: Section;
@@ -73,6 +82,8 @@ export interface AnalyzeInput {
   reserveTokens?: number;
   /** Provider-reported context tokens for the last response. */
   reportedTokens?: number;
+  /** Raw usage components from the last response, when available. */
+  providerUsage?: Partial<ProviderUsage>;
   largestCount?: number;
 }
 
@@ -92,6 +103,7 @@ export function analyzeContext(input: AnalyzeInput, estimate: Estimators): Conte
     compactAt,
     estimated: system.total + tools.total + conversation.total,
     reported: input.reportedTokens !== undefined ? positive(input.reportedTokens) : undefined,
+    ...(input.providerUsage ? { provider: normalizeUsage(input.providerUsage) } : {}),
     system,
     tools,
     conversation,
@@ -286,4 +298,13 @@ function safeJson(value: unknown): string {
 
 function positive(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeUsage(usage: Partial<ProviderUsage>): ProviderUsage {
+  return {
+    input: positive(usage.input),
+    output: positive(usage.output),
+    cacheRead: positive(usage.cacheRead),
+    cacheWrite: positive(usage.cacheWrite),
+  };
 }
