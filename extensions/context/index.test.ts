@@ -158,6 +158,26 @@ test("falls back to the branch when buildContextEntries is unavailable", () => {
   expect(report.conversation.total).toBe(42);
 });
 
+test("shortens absolute context-file paths to session-relative labels", () => {
+  const pi = new MockPi();
+  const ctx = commandContext({
+    cwd: "/work/project",
+    getSystemPromptOptions: () => ({
+      contextFiles: [
+        { path: "/work/project/AGENTS.md", content: "a".repeat(80) },
+        { path: "/work/project/docs/guide.md", content: "b".repeat(40) },
+      ],
+    }),
+  } as any);
+
+  const report = collectReport(pi as any, ctx, estimators);
+  const labels = report.system.buckets.map((bucket) => bucket.label);
+
+  expect(labels).toContain("AGENTS.md");
+  expect(labels).toContain("docs/guide.md");
+  expect(labels.some((label) => label.startsWith("/work"))).toBe(false);
+});
+
 test("renders an empty report rather than throwing on a malformed entry", () => {
   const pi = new MockPi();
   contextExtension(pi as any, { estimators });
