@@ -23,12 +23,15 @@ Each feature is optional and uses Pi's public extension API. Context and persist
 | [`goal`](extensions/goal/) | Persistent, self-continuing session goals |
 | [`history-search`](extensions/history-search/) | Native fuzzy prompt-history search (`Ctrl+R`) |
 | [`hyperlinks`](extensions/hyperlinks/) | Clickable file paths |
+| [`loop`](extensions/loop/) | Bounded fixed-cadence and model-paced prompt loops |
 | [`memory`](extensions/memory/) | Explicit global and project memory |
+| [`monitor`](extensions/monitor/) | Deterministic command monitoring with actionable model wakeups |
 | [`notify`](extensions/notify/) | Desktop notifications and terminal bell |
 | [`overlay-stack`](extensions/overlay-stack/) | Shared workflow-card stack |
 | [`plan`](extensions/plan/) | Tactical execution plans |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Sleep inhibition while Pi works |
 | [`questions`](extensions/questions/) | Terminal and optional Telegram questions |
+| [`schedule`](extensions/schedule/) | Persistent one-shot reminders and timezone-aware cron prompts |
 | [`session-search`](extensions/session-search/) | Full-text search across saved sessions |
 | [`session-title`](extensions/session-title/) | Automatic session titles |
 | [`side-chat`](extensions/side-chat/) | Persistent side conversations |
@@ -37,6 +40,9 @@ Each feature is optional and uses Pi's public extension API. Context and persist
 | [`tool-render`](extensions/tool-render/) | Compact tool-call rendering |
 | [`turn-separator`](extensions/turn-separator/) | Per-turn timing and usage separator |
 | [`verify`](extensions/verify/) | Checks project edits immediately |
+
+The design tradeoffs behind `loop`, `monitor`, and `schedule` are captured in the
+[automation comparison](docs/automation-study.md).
 
 ## Development
 
