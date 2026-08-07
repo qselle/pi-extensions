@@ -12,7 +12,8 @@
  */
 
 import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { analyzeContext, type ContextReport, type Estimators, type ToolLike } from "./analysis.ts";
+import { homedir } from "node:os";
+import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ToolLike } from "./analysis.ts";
 import { renderReport, summaryLine, type ReportTheme } from "./render.ts";
 
 export const CONTEXT_REPORT_ENTRY = "context-report";
@@ -55,6 +56,7 @@ interface SystemPromptOptionsLike {
 /** The slice of the command context this extension reads, kept narrow for tests. */
 export interface ContextCommandContext {
   mode?: string;
+  cwd?: string;
   ui: {
     notify(message: string, level?: string): void;
   };
@@ -98,13 +100,19 @@ export function collectReport(
 
   const reported = typeof usage?.tokens === "number" && usage.tokens > 0 ? usage.tokens : undefined;
 
+  // Absolute paths would push every number off the right edge of the table.
+  const contextFiles = (options.contextFiles ?? []).map((file) => ({
+    path: shortenPath(file?.path ?? "", ctx.cwd, safeCall(() => homedir())),
+    content: file?.content ?? "",
+  }));
+
   return analyzeContext({
     entries,
     systemPrompt: safeCall(() => ctx.getSystemPrompt?.()) ?? "",
     tools,
     promptGuidelines: options.promptGuidelines,
     toolSnippets: options.toolSnippets,
-    contextFiles: options.contextFiles,
+    contextFiles,
     skills: options.skills,
     appendSystemPrompt: options.appendSystemPrompt,
     customPrompt: options.customPrompt,

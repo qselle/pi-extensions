@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { analyzeContext, type AnalyzeInput, type Estimators } from "./analysis.ts";
+import { analyzeContext, shortenPath, type AnalyzeInput, type Estimators } from "./analysis.ts";
 
 /** Deterministic stand-ins for pi's estimators. */
 const estimate: Estimators = {
@@ -100,7 +100,20 @@ test("reports the heaviest individual entries", () => {
   });
 
   expect(report.largest.map((bucket) => bucket.tokens)).toEqual([900, 300]);
-  expect(report.largest[0]).toMatchObject({ label: "tool results", detail: "bash" });
+  // Position keeps otherwise identical rows apart.
+  expect(report.largest[0]).toMatchObject({ label: "tool results", detail: "bash #1" });
+  expect(report.largest[1]).toMatchObject({ label: "assistant replies", detail: "#2" });
+});
+
+test("shortens context-file labels so numbers stay on screen", () => {
+  const cwd = "/Users/me/project";
+  const home = "/Users/me";
+
+  expect(shortenPath(`${cwd}/AGENTS.md`, cwd, home)).toBe("AGENTS.md");
+  expect(shortenPath(`${cwd}/docs/guide.md`, cwd, home)).toBe("docs/guide.md");
+  expect(shortenPath(`${home}/notes/todo.md`, cwd, home)).toBe("~/notes/todo.md");
+  expect(shortenPath("/etc/pi/shared.md", cwd, home)).toBe("shared.md");
+  expect(shortenPath("", cwd, home)).toBe("context file");
 });
 
 test("totals the three regions and derives the compaction point", () => {
