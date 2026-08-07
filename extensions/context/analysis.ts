@@ -162,9 +162,9 @@ function conversationSection(entries: readonly unknown[], estimate: Estimators):
   const grouped = new Map<string, Bucket & { count: number }>();
   const individual: Bucket[] = [];
 
-  for (const entry of entries) {
+  entries.forEach((entry, index) => {
     const kind = classify(entry);
-    if (!kind) continue;
+    if (!kind) return;
     const tokens = Math.max(0, estimate.entry(entry));
     const existing = grouped.get(kind.id);
     if (existing) {
@@ -174,9 +174,11 @@ function conversationSection(entries: readonly unknown[], estimate: Estimators):
       grouped.set(kind.id, { id: kind.id, label: kind.label, tokens, count: 1 });
     }
     if (tokens > 0) {
-      individual.push({ id: kind.id, label: sanitizeLabel(kind.label), tokens, ...(kind.detail ? { detail: sanitizeLabel(kind.detail) } : {}) });
+      // Position keeps otherwise identical rows (three big bash results) apart.
+      const detail = [kind.detail, `#${index + 1}`].filter(Boolean).join(" ");
+      individual.push({ id: kind.id, label: sanitizeLabel(kind.label), tokens, detail: sanitizeLabel(detail) });
     }
-  }
+  });
 
   const buckets = [...grouped.values()].map(({ count, ...bucket }) => ({
     ...bucket,
@@ -245,6 +247,19 @@ export function sanitizeLabel(value: string): string {
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/ +/g, " ")
     .trim();
+}
+
+/**
+ * Readable label for a context file: relative to the session when possible, then
+ * home-relative, else just the file name. Absolute paths are long enough to push
+ * every number off the right edge of the table.
+ */
+export function shortenPath(path: string, cwd?: string, home?: string): string {
+  if (!path) return "context file";
+  if (cwd && path.startsWith(`${cwd}/`)) return path.slice(cwd.length + 1);
+  if (home && path.startsWith(`${home}/`)) return `~/${path.slice(home.length + 1)}`;
+  const parts = path.split("/").filter(Boolean);
+  return parts.at(-1) ?? path;
 }
 
 function sumTokens(buckets: readonly Bucket[]): number {
