@@ -76,15 +76,32 @@ test("measures only the tools whose schemas are actually sent", () => {
   expect(report.tools.buckets[0]!.tokens).toBeLessThan(40);
 });
 
-test("reads the window, provider count, and compaction reserve from pi", () => {
+test("reports no tool schemas when every registered tool is inactive", () => {
+  const pi = new MockPi();
+  pi.allTools = [{ name: "dormant", description: "x".repeat(400), parameters: { type: "object" } }];
+  pi.activeTools = [];
+
+  const report = collectReport(pi as any, commandContext(), estimators);
+
+  expect(report.tools).toEqual({ total: 0, buckets: [] });
+});
+
+test("falls back to all tools only when the active-tool accessor is unavailable", () => {
+  const host = {
+    getAllTools: () => [{ name: "legacy", description: "available" }],
+  };
+
+  const report = collectReport(host, commandContext(), estimators);
+
+  expect(report.tools.buckets.map((bucket) => bucket.label)).toEqual(["legacy"]);
+});
+
+test("reads the window and provider count from pi", () => {
   const pi = new MockPi();
   const report = collectReport(pi as any, commandContext(), estimators);
 
   expect(report.window).toBe(258_000);
   expect(report.reported).toBe(27_900);
-  // Derived from pi's own DEFAULT_COMPACTION_SETTINGS.reserveTokens.
-  expect(report.compactAt).toBeGreaterThan(0);
-  expect(report.compactAt).toBeLessThan(258_000);
   expect(report.system.total).toBe(100);
   expect(report.conversation.total).toBe(1_520);
   expect(report.estimated).toBe(report.system.total + report.tools.total + report.conversation.total);
@@ -92,7 +109,14 @@ test("reads the window, provider count, and compaction reserve from pi", () => {
 
 test("itemizes each extension's own injection by customType", () => {
   const pi = new MockPi();
-  const report = collectReport(pi as any, commandContext(), estimators);
+  const ctx = commandContext({
+    sessionManager: {
+      buildContextEntries: () => [
+        { type: "custom_message", tokens: 120, customType: "goal-context", content: "goal", display: false },
+      ],
+    },
+  });
+  const report = collectReport(pi as any, ctx, estimators);
 
   expect(report.conversation.buckets.map((bucket) => bucket.id)).toContain("custom:goal-context");
   expect(report.conversation.buckets.find((bucket) => bucket.id === "custom:goal-context")?.tokens).toBe(120);
@@ -114,6 +138,33 @@ test("appends a report entry in TUI mode and renders it at the given width", () 
   expect(lines[0]).toContain("Context");
   expect(lines.join("\n")).toContain("context: goal-context");
   for (const line of lines) expect(line.length).toBeLessThanOrEqual(80);
+});
+
+test("uses Pi's expanded render state to reveal every summarized row", () => {
+  const pi = new MockPi();
+  contextExtension(pi as any, { estimators });
+  const buckets = Array.from({ length: 8 }, (_, index) => ({
+    id: `tool:${index}`,
+    label: `tool-${index}`,
+    tokens: 10,
+  }));
+  const report = {
+    window: 0,
+    estimated: 80,
+    system: { total: 0, buckets: [] },
+    tools: { total: 80, buckets },
+    conversation: { total: 0, buckets: [] },
+    largest: [],
+  };
+  const renderer = pi.renderers.get(CONTEXT_REPORT_ENTRY);
+
+  const collapsed = renderer({ data: { report } }, { expanded: false }, theme).render(80).join("\n");
+  const expanded = renderer({ data: { report } }, { expanded: true }, theme).render(80).join("\n");
+
+  expect(collapsed).toContain("… +2 more");
+  expect(collapsed).not.toContain("tool-7");
+  expect(expanded).not.toContain("… +2 more");
+  expect(expanded).toContain("tool-7");
 });
 
 test("notifies instead of appending when there is no TUI", async () => {
@@ -144,7 +195,6 @@ test("survives a host that omits or throws from the accessors it reads", () => {
 
   expect(report.estimated).toBe(0);
   expect(report.window).toBe(0);
-  expect(report.compactAt).toBeUndefined();
 });
 
 test("falls back to the branch when buildContextEntries is unavailable", () => {

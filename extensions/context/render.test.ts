@@ -19,7 +19,6 @@ function section(total: number, buckets: Section["buckets"] = []): Section {
 function report(overrides: Partial<ContextReport> = {}): ContextReport {
   return {
     window: 258_000,
-    compactAt: 238_000,
     estimated: 28_200,
     reported: 27_900,
     system: section(6_100, [
@@ -51,13 +50,13 @@ test("groups digits so rows are directly comparable", () => {
 
 test("leads with the figure that actually drives compaction", () => {
   // pi's own count wins the headline; the estimate is reconciled in a footnote.
-  expect(summaryLine(report())).toBe("Used 27,900 / 258,000 (11%) · compacts at 238,000");
+  expect(summaryLine(report())).toBe("Used 27,900 / 258,000 (11%)");
 });
 
 test("falls back to the estimate and omits figures pi has not provided", () => {
   expect(summaryLine(report({ reported: undefined })))
-    .toBe("Used 28,200 / 258,000 (11%) · compacts at 238,000");
-  expect(summaryLine(report({ reported: undefined, window: 0, compactAt: undefined })))
+    .toBe("Used 28,200 / 258,000 (11%)");
+  expect(summaryLine(report({ reported: undefined, window: 0 })))
     .toBe("Used 28,200");
 });
 
@@ -80,7 +79,7 @@ test("shows each row's share of the estimated total", () => {
   expect(lineFor(lines, "guidelines")).toContain("12 bullets");
 });
 
-test("reconciles the estimate against pi's figure, naming the provider's components", () => {
+test("reconciles the estimate against Pi's figure, naming the provider's last-turn components", () => {
   const withComponents = renderReport(
     report({ provider: { input: 15_110, output: 6_400, cacheRead: 600_000, cacheWrite: 26_923 } }),
     plain,
@@ -88,18 +87,19 @@ test("reconciles the estimate against pi's figure, naming the provider's compone
   );
 
   expect(lineFor(withComponents, "estimated total")).toContain("28,200");
-  const providerLine = lineFor(withComponents, "provider last turn");
+  const providerLine = lineFor(withComponents, "pi context total");
   expect(providerLine).toContain("27,900");
   // A 2x gap against the estimate is cache accounting, so name the parts.
   expect(providerLine).toContain("15,110 fresh + 626,923 cached");
   expect(providerLine).toContain("6,400 out");
+  expect(providerLine).toContain("last turn:");
 
   // Without components, fall back to a plain explanation.
-  expect(lineFor(renderReport(report(), plain, 100), "provider last turn"))
-    .toContain("counts cached reuse");
+  expect(lineFor(renderReport(report(), plain, 100), "pi context total"))
+    .toContain("includes provider cache accounting");
 
   const withoutProvider = renderReport(report({ reported: undefined }), plain, 80);
-  expect(lineFor(withoutProvider, "provider last turn")).toBe("");
+  expect(lineFor(withoutProvider, "pi context total")).toBe("");
   expect(lineFor(withoutProvider, "estimated total")).toContain("28,200");
 });
 
@@ -120,7 +120,24 @@ test("summarises the tail when a section has more buckets than fit", () => {
 
   // The three hidden buckets carry 94 + 93 + 92 tokens.
   expect(lineFor(lines, "… +3 more")).toContain("279");
+  expect(lineFor(lines, "… +3 more")).toContain("expand to view");
   expect(lineFor(lines, "tool-6")).toBe("");
+
+  const expanded = renderReport(report({ tools: section(1_000, buckets) }), plain, 80, true);
+  expect(lineFor(expanded, "… +3 more")).toBe("");
+  expect(lineFor(expanded, "tool-6")).toContain("94");
+  expect(lineFor(expanded, "tool-8")).toContain("92");
+});
+
+test("expanded mode shows every retained largest entry", () => {
+  const largest = Array.from({ length: 5 }, (_, index) => ({
+    id: `entry-${index}`,
+    label: `entry-${index}`,
+    tokens: 500 - index,
+  }));
+
+  expect(lineFor(renderReport(report({ largest }), plain, 80), "entry-4")).toBe("");
+  expect(lineFor(renderReport(report({ largest }), plain, 80, true), "entry-4")).toContain("496");
 });
 
 test("drops empty regions entirely", () => {

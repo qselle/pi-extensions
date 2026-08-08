@@ -54,22 +54,17 @@ function sharePercent(tokens: number, total: number): string {
 /**
  * The authoritative usage line.
  *
- * Prefers pi's own figure, because that is what compaction reacts to; the
+ * Prefers Pi's own figure, because that is what compaction reacts to; the
  * estimate is reconciled underneath the table instead of competing up here.
  */
 export function summaryLine(report: ContextReport): string {
   const used = report.reported && report.reported > 0 ? report.reported : report.estimated;
-  const parts: string[] = [];
-  parts.push(report.window > 0
+  return report.window > 0
     ? `Used ${formatCount(used)} / ${formatCount(report.window)} (${sharePercent(used, report.window)})`
-    : `Used ${formatCount(used)}`);
-  if (report.compactAt !== undefined && report.compactAt > 0) {
-    parts.push(`compacts at ${formatCount(report.compactAt)}`);
-  }
-  return parts.join(" · ");
+    : `Used ${formatCount(used)}`;
 }
 
-export function renderReport(report: ContextReport, theme: ReportTheme, width: number): string[] {
+export function renderReport(report: ContextReport, theme: ReportTheme, width: number, expanded = false): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   if (safeWidth < MIN_WIDTH) return [clip(`Context ${summaryLine(report)}`, safeWidth)];
 
@@ -77,7 +72,7 @@ export function renderReport(report: ContextReport, theme: ReportTheme, width: n
     `${theme.fg("accent", "◆")} ${theme.bold("Context")}  ${theme.fg("muted", summaryLine(report))}`,
     safeWidth,
   );
-  const rows = buildRows(report);
+  const rows = buildRows(report, expanded);
   if (rows.length === 0) return [header];
 
   const labelWidth = Math.min(
@@ -99,7 +94,7 @@ export function renderReport(report: ContextReport, theme: ReportTheme, width: n
   return lines;
 }
 
-function buildRows(report: ContextReport): Row[] {
+function buildRows(report: ContextReport, expanded: boolean): Row[] {
   const rows: Row[] = [];
   const basis = report.estimated;
 
@@ -111,10 +106,10 @@ function buildRows(report: ContextReport): Row[] {
     ["system prompt", report.system],
   ];
   for (const [label, section] of sections.sort((a, b) => b[1].total - a[1].total)) {
-    pushSection(rows, label, section, basis);
+    pushSection(rows, label, section, basis, expanded);
   }
 
-  const largest = report.largest.slice(0, MAX_LARGEST_ROWS);
+  const largest = expanded ? report.largest : report.largest.slice(0, MAX_LARGEST_ROWS);
   if (largest.length > 0) {
     rows.push({ kind: "section", indent: 0, label: "largest entries", value: "" });
     for (const bucket of largest) rows.push(itemRow(bucket, 0));
@@ -125,7 +120,7 @@ function buildRows(report: ContextReport): Row[] {
     rows.push({
       kind: "footnote",
       indent: 0,
-      label: "provider last turn",
+      label: "pi context total",
       value: formatCount(report.reported),
       detail: providerDetail(report),
     });
@@ -141,15 +136,15 @@ function buildRows(report: ContextReport): Row[] {
  */
 function providerDetail(report: ContextReport): string {
   const provider = report.provider;
-  if (!provider) return "prompt + response, counts cached reuse";
+  if (!provider) return "includes provider cache accounting";
   const cached = provider.cacheRead + provider.cacheWrite;
   const prompt = cached > 0
     ? `${formatCount(provider.input)} fresh + ${formatCount(cached)} cached`
     : `${formatCount(provider.input)} prompt`;
-  return `${prompt} · ${formatCount(provider.output)} out`;
+  return `last turn: ${prompt} · ${formatCount(provider.output)} out`;
 }
 
-function pushSection(rows: Row[], label: string, section: Section, basis: number): void {
+function pushSection(rows: Row[], label: string, section: Section, basis: number, expanded: boolean): void {
   if (section.total <= 0) return;
   rows.push({
     kind: "section",
@@ -159,7 +154,7 @@ function pushSection(rows: Row[], label: string, section: Section, basis: number
     share: sharePercent(section.total, basis),
   });
 
-  const shown = section.buckets.slice(0, MAX_SECTION_ROWS);
+  const shown = expanded ? section.buckets : section.buckets.slice(0, MAX_SECTION_ROWS);
   for (const bucket of shown) rows.push(itemRow(bucket, basis));
 
   const hidden = section.buckets.length - shown.length;
@@ -171,6 +166,7 @@ function pushSection(rows: Row[], label: string, section: Section, basis: number
       label: `${ELLIPSIS} +${hidden} more`,
       value: formatCount(hiddenTokens),
       share: sharePercent(hiddenTokens, basis),
+      detail: "expand to view",
     });
   }
 }

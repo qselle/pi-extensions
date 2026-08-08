@@ -11,7 +11,7 @@
  * provider's own count is shown alongside when pi has one.
  */
 
-import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, getLastAssistantUsage, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, getLastAssistantUsage, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ProviderUsage, type ToolLike } from "./analysis.ts";
 import { renderReport, summaryLine, type ReportTheme } from "./render.ts";
@@ -29,10 +29,30 @@ function estimateText(value: string): number {
 export const piEstimators: Estimators = {
   text: estimateText,
   entry: (entry: unknown) => {
-    const candidate = entry as { type?: string; message?: unknown; summary?: unknown };
+    const candidate = entry as {
+      type?: string;
+      message?: unknown;
+      summary?: unknown;
+      customType?: string;
+      content?: unknown;
+      display?: boolean;
+    };
     if (candidate?.type === "message" && candidate.message) {
       try {
         return estimateTokens(candidate.message as never);
+      } catch {
+        return 0;
+      }
+    }
+    if (candidate?.type === "custom_message") {
+      try {
+        return estimateTokens({
+          role: "custom",
+          customType: candidate.customType ?? "unknown",
+          content: candidate.content ?? [],
+          display: candidate.display ?? false,
+          timestamp: 0,
+        } as never);
       } catch {
         return 0;
       }
@@ -55,10 +75,16 @@ const readPiLastUsage: LastUsageReader = (entries) => {
 const PLAIN_THEME: ReportTheme = { fg: (_color, text) => text, bold: (text) => text };
 
 interface SystemPromptOptionsLike {
+  selectedTools?: readonly string[];
   promptGuidelines?: readonly string[];
   toolSnippets?: Readonly<Record<string, string>>;
   contextFiles?: readonly { path?: string; content?: string }[];
-  skills?: readonly { name?: string; content?: string }[];
+  skills?: readonly {
+    name?: string;
+    description?: string;
+    filePath?: string;
+    disableModelInvocation?: boolean;
+  }[];
   appendSystemPrompt?: string;
   customPrompt?: string;
 }
@@ -104,10 +130,11 @@ export function collectReport(
     ?? [];
 
   const allTools = safeCall(() => host.getAllTools?.()) ?? [];
-  const activeNames = new Set(safeCall(() => host.getActiveTools?.()) ?? []);
-  const tools = activeNames.size > 0
-    ? allTools.filter((tool) => tool?.name !== undefined && activeNames.has(tool.name))
-    : allTools;
+  const activeToolNames = safeCall(() => host.getActiveTools?.());
+  const activeNames = new Set(activeToolNames ?? []);
+  const tools = activeToolNames === undefined
+    ? allTools
+    : allTools.filter((tool) => tool?.name !== undefined && activeNames.has(tool.name));
 
   const reported = typeof usage?.tokens === "number" && usage.tokens > 0 ? usage.tokens : undefined;
   // The raw components explain any gap between pi's figure and the estimate.
@@ -123,6 +150,7 @@ export function collectReport(
     entries,
     systemPrompt: safeCall(() => ctx.getSystemPrompt?.()) ?? "",
     tools,
+    selectedTools: options.selectedTools,
     promptGuidelines: options.promptGuidelines,
     toolSnippets: options.toolSnippets,
     contextFiles,
@@ -130,7 +158,6 @@ export function collectReport(
     appendSystemPrompt: options.appendSystemPrompt,
     customPrompt: options.customPrompt,
     window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
-    reserveTokens: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
     ...(reported !== undefined ? { reportedTokens: reported } : {}),
     ...(lastUsage
       ? {
@@ -150,10 +177,11 @@ class ReportCard {
   constructor(
     private readonly report: ContextReport,
     private readonly theme: ReportTheme,
+    private readonly expanded: boolean,
   ) {}
 
   render(width: number): string[] {
-    return renderReport(this.report, this.theme, width);
+    return renderReport(this.report, this.theme, width, this.expanded);
   }
 
   invalidate(): void {}
@@ -170,8 +198,8 @@ export default function contextExtension(pi: ExtensionAPI, options: ContextExten
 
   // A custom entry rather than a message: the report is for you, not the model,
   // and must never enter the conversation it is measuring.
-  pi.registerEntryRenderer(CONTEXT_REPORT_ENTRY, (entry: any, _renderOptions: any, theme: any) =>
-    new ReportCard(entry?.data?.report ?? emptyReport(), theme) as any);
+  pi.registerEntryRenderer(CONTEXT_REPORT_ENTRY, (entry: any, renderOptions: any, theme: any) =>
+    new ReportCard(entry?.data?.report ?? emptyReport(), theme, renderOptions?.expanded === true) as any);
 
   pi.registerCommand("context", {
     description: "Show where the context window is going",
@@ -181,7 +209,8 @@ export default function contextExtension(pi: ExtensionAPI, options: ContextExten
         pi.appendEntry(CONTEXT_REPORT_ENTRY, { report });
         return;
       }
-      ctx.ui.notify(renderReport(report, PLAIN_THEME, FALLBACK_WIDTH).join("\n"), "info");
+      // Headless modes have no expand shortcut, so do not hide any rows.
+      ctx.ui.notify(renderReport(report, PLAIN_THEME, FALLBACK_WIDTH, true).join("\n"), "info");
     },
   });
 }
