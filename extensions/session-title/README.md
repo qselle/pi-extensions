@@ -1,72 +1,34 @@
 # session-title
 
-Names a session once, then leaves it alone.
+Names a session from its user prompts without changing a title you set manually.
 
-`/resume` is useless when every session is an untitled wall of first-prompts.
+## Usage
 
+```text
+/title             Show title state, model, usage, and the last error
+/title now         Generate a new title now
+/title set <text>  Set a title directly
 ```
-before   untitled
-after    Clickable file paths
-```
 
-## How it works
+1. The first substantive prompt creates a local provisional title.
+2. After the turn settles, one bounded model request replaces it.
+3. Once the session has a title, the extension leaves it unchanged unless `/title now` is used.
 
-1. **Instant, free.** On your first prompt a title is derived locally — no model
-   call. `can you please fix the retry loop in fetch` becomes `fix retry loop fetch`.
-2. **Then a real one.** After the turn settles, one bounded request on a cheap
-   model replaces it.
-3. **Then never again.** A session with a name is not touched, so `/name` is safe
-   by construction and no title can drift or churn. `/title now` forces a redo.
-
-Side chats work the same way: the first question names the chat, the first answer
-replaces it with a generated title.
-
-Resuming or `/reload` recovers your prompts from the session, so titling still
-works and `/title now` is available immediately.
-
-## Cost
-
-The request holds **only user text** — the first substantive request plus the last
-few — never assistant output, tool results, diffs, or reasoning. It runs on its own
-routing id, so it never enters the main session's context or its prompt cache.
-
-Measured: 174 in / 4 out, **$0.000194** on Haiku, once per session.
-
-Model selection prefers the cheapest capable model available (`claude-haiku-4-5`,
-`gpt-4.1-mini`, `gemini-2.5-flash`, `nova-lite`, `nova-micro`) and falls back to the
-session model only if none is found.
-
-## Commands
-
-| Command | Effect |
-|---|---|
-| `/title` | Current title, state, model, tracked prompts, last cost or error |
-| `/title now` | Generate a title now, even if the session already has one |
-| `/title set <text>` | Name it yourself |
+The model request includes user text only, uses a separate routing ID, and prefers an available low-cost model before falling back to the session model. Titles are limited to five words and 48 characters. Generic or malformed results are ignored.
 
 ## Configuration
 
-Optional `$PI_CODING_AGENT_DIR/session-title.json`, shared with side-chat titling:
+Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 
 ```json
-{ "enabled": true, "model": "amazon-bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0" }
+{ "enabled": true, "model": "provider/model-id" }
 ```
 
-## Title rules
+The configuration is also used by [`side-chat`](../side-chat/) titles.
 
-At most 5 words and 48 characters. Quotes, markdown, `Title:` prefixes, trailing
-punctuation, and extra lines are stripped, and generic answers (`untitled`, `chat`,
-`hello`) are rejected — so a bad answer leaves the current name alone and the next
-settled turn tries again.
+## Dependencies and limitations
 
-A leading greeting is skipped when choosing the anchor request, since sessions that
-open with "hello" would otherwise be named from it. No existing title is ever sent
-to the model, so a bad title cannot perpetuate itself.
-
-## Dependencies
-
-- **Runtime:** Pi's extension API (`setSessionName`, `getSessionName`, `before_agent_start`, `agent_settled`) and `complete()` from `@earendil-works/pi-ai/compat`.
-- **Depends on extensions:** None.
-- **Used by extensions:** [`side-chat`](../side-chat/).
-- **Third-party packages:** None.
-- **External services:** the configured or auto-selected titling model.
+- Uses Pi's extension, session-name, model, and lifecycle APIs plus `complete()` from `@earendil-works/pi-ai/compat`.
+- No third-party packages.
+- Requires access to the selected model provider.
+- Cross-platform; title generation works outside the TUI.

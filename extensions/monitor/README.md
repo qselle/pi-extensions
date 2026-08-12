@@ -1,7 +1,8 @@
 # monitor
 
-Run an explicit shell command on a bounded cadence without spending model turns on unchanged
-results. The model wakes only when the selected observation policy becomes actionable.
+Runs an explicit shell command on a cadence and wakes Pi only when its result matches a policy.
+
+## Usage
 
 ```text
 /monitor 30s -- gh pr checks
@@ -9,45 +10,30 @@ results. The model wakes only when the selected observation policy becomes actio
 /monitor 5m --on success -- curl -fsS https://example.test/health
 /monitor 30s --on change --max-runs 40 -- ./scripts/status
 /monitor status
-/monitor pause <id>
-/monitor resume <id>
-/monitor stop <id>
+/monitor pause|resume|stop <id>
 /monitor stop all
 ```
 
-`change` is the default. Its first run establishes a silent baseline; a later change in exit
-status, timeout state, stdout, or stderr wakes Pi. `failure` and `success` wake on the first
-matching observation and again only when that matching result changes. `always` wakes on every
-run. Exact repeated failures therefore do not consume repeated model turns.
+Policies:
 
-## Safety and lifecycle
+- `change` (default): establish a silent baseline, then wake when status or output changes.
+- `failure` or `success`: wake on the first match and when the matching result changes.
+- `always`: wake after every run.
 
-- The shell command can be created only by an explicit `/monitor` command. Model tools can list
-  and stop monitors, but cannot create them or change their commands.
-- Output is treated as untrusted data and captured incrementally: at most 10 KB from each stream
-  is retained while complete streams are hashed for change detection. Older hidden alerts are
-  removed from subsequent model context.
-- Commands run only while a persistent TUI or RPC session is open, Pi is idle, and no user
-  messages are queued. Each run has a five-minute timeout.
-- Up to four active or paused monitors are retained. Intervals range from 10 seconds to one hour;
-  the default maximum is 100 runs, configurable up to 500; every monitor also expires after
-  twelve hours.
-- Interrupting an alert turn or encountering a provider error pauses its monitor for explicit
-  review and resume.
-- A wakeup authorizes handling the observation within the conversation's existing scope. It does
-  not grant permission to deploy, push, delete, publish, or contact external systems.
-
-The command is executed through `cmd.exe` on Windows and `/bin/sh -lc` elsewhere. That is useful
-for pipelines and redirects, but it also means the entered command has the user's full shell
-permissions. Do not put secrets directly in the command because session state retains it.
+Only `/monitor` can create or change a monitor command. `get_monitors` lists monitors and `monitor_stop` stops one.
 
 ## Dependencies and limitations
 
-- **Configuration:** none; command, interval, wake condition, and run bound are explicit.
-- **Runtime dependencies:** Pi's public extension API and `typebox`, supplied by the host.
-- **Third-party runtime packages:** none.
-- **Platform:** Windows and POSIX shells are supported as described above; command syntax itself
-  is shell-specific. Timeout and shutdown terminate the spawned POSIX process group or Windows
-  process tree.
-- **Durability:** transcript state survives reloads, but checks do not run while Pi is closed.
-  Use the separate `schedule` extension for durable calendar intent and reminders.
+- 4 active or paused monitors.
+- Intervals from 10 seconds to 1 hour.
+- 100 runs by default, up to 500, and a 12-hour lifetime.
+- 5-minute timeout per command.
+- Retains 10 KiB from each output stream while hashing complete output for change detection.
+- Runs only while a persistent session is open, idle, and has no queued user messages.
+
+The full command is stored in session state. Do not include secrets. Interruptions and provider errors pause the monitor. A wakeup does not grant permission for unrelated external or destructive actions.
+
+- Uses Pi's public extension API and host-provided `typebox`.
+- No third-party runtime packages.
+- Uses `/bin/sh -lc` on POSIX and `cmd.exe` on Windows; command syntax is shell-specific.
+- State survives reload, but monitoring stops when Pi closes.
