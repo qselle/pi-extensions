@@ -1,64 +1,26 @@
 # history-search
 
-Native fuzzy reverse search for Pi's prompt history. Press `Ctrl+R`, type any subsequence, select a previous input, and place it back in the editor for review or resubmission.
+Fuzzy reverse search for prompts and shell commands on the active session branch.
 
-The picker runs entirely inside Pi. It does not launch another terminal program or require runtime packages.
-
-## Controls
+## Usage
 
 | Key | Action |
 |---|---|
-| `Ctrl+R` | Open search; while open, move to the next match |
-| `↑` / `Ctrl+P` | Previous match |
-| `↓` / `Ctrl+N` | Next match |
-| `PageUp` / `PageDown` | Move by one result page |
-| `Enter` | Put the selected input in Pi's editor |
-| `Escape` / `Ctrl+C` | Cancel and preserve the existing editor draft |
+| `Ctrl+R` | Open search or move to the next match |
+| `Up` / `Ctrl+P` | Previous match |
+| `Down` / `Ctrl+N` | Next match |
+| `PageUp` / `PageDown` | Move one page |
+| `Enter` | Put the match in the editor |
+| `Escape` / `Ctrl+C` | Cancel without changing the draft |
 
-The same picker is available with `/history-search [initial query]`.
+Use `/history-search [query]` to open it from a command. Selection and navigation follow Pi's configured `tui.select.*` bindings.
 
-The keys above are Pi's defaults. Navigation, confirmation, and cancellation are
-routed through Pi's `tui.select.*` keybindings, and the picker footer names
-whatever keys you have bound to them.
+Matching is case-insensitive and supports non-contiguous subsequences. Exact, prefix, contiguous, and boundary matches rank ahead of wider gaps; recency breaks ties.
 
-## Matching
-
-Matching is case-insensitive and allows non-contiguous subsequences. Ranking favors, in order:
-
-- exact matches
-- prefixes and contiguous substrings
-- consecutive characters
-- word and path-segment boundaries
-- shorter gaps and earlier matches
-- newer entries when relevance is tied
-
-Matched characters are highlighted. Empty queries show newest entries first.
-
-## History scope
-
-The extension uses Pi's public session API and searches every deduplicated entry available from:
-
-- user prompts on the active session branch, including entries older than compaction
-- `!` and `!!` commands represented on that branch
-- interactive prompts observed during the current Pi process before they are persisted
-
-It intentionally does not read private editor fields or scan other session files. Switching branches rebuilds search from the selected active branch. History and matching are not count-capped; the UI only paginates what is rendered on screen.
-
-A short single-line editor draft seeds the initial query. Multiline or long drafts open an unfiltered picker. In either case, cancelling leaves the draft untouched; only confirming a result replaces it.
-
-## `Ctrl+R` and session rename
-
-Pi also uses `Ctrl+R` to rename a session *inside* the `/resume` session picker. This extension follows the contextual approach used by the upstream history-search extension: it intercepts `Ctrl+R` in a custom main editor instead of registering a global extension shortcut. As a result, history search wins in the normal editor, rename still wins inside `/resume`, and Pi does not report a shortcut conflict.
-
-The extension decorates the editor installed before it instead of replacing that editor. Rendering, input modes, border styling, autocomplete, and other custom behavior therefore remain intact, and the prior editor is restored when the extension shuts down or reloads.
-
-## Why the `fzf` executable is not used
-
-An installed `fzf` binary is not needed. Launching it interactively would compete with Pi for terminal ownership, while invoking `fzf --filter` after every keystroke would add subprocess latency and lose the integrated editor, theme, draft-preservation, and overlay behavior. The native matcher provides the useful fuzzy-search behavior without an external dependency.
+The search covers user prompts and shell commands on the active branch, including entries before compaction, plus prompts observed by the current process. It does not scan other session files. `Ctrl+R` is intercepted only in the main editor, so Pi's rename shortcut still works in `/resume`.
 
 ## Dependencies and limitations
 
-- **Runtime:** Pi's public extension, session, editor, keybinding, and TUI APIs.
-- **Third-party packages or executables:** None.
-- **Mode:** Interactive TUI only; RPC, print, and JSON modes cannot display the picker.
-- **Custom editors:** The extension decorates the current editor's input handler and composes with the other editor decorators in this package.
+- Uses Pi's public session, editor, keybinding, and TUI APIs.
+- No third-party packages or executables; `fzf` is not required.
+- Interactive TUI only; cross-platform.

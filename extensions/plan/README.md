@@ -1,41 +1,24 @@
 # plan
 
-A tactical execution-plan companion for Pi. The agent maintains a concise plan with `update_plan`; active work appears as an independent card in the shared top-right workflow overlay, while `/plan` opens the full panel.
+Shows the current multi-step execution plan in the shared workflow overlay and a full panel.
 
-Plans complement persistent goals:
-
-- A **goal** defines the durable objective and verification checks.
-- A **plan** shows the current route through meaningful multi-step work.
-- Goal continuations can create and update plans automatically.
-- Goal checks and plan steps stay independent: changing the route must not redefine the goal's acceptance criteria.
-
-## Commands
+## Usage
 
 ```text
-/plan          Open the full plan panel
+/plan          Open the plan panel
 /plan status   Print the current plan
-/plan clear    Clear the plan
+/plan clear    Remove the plan
 /overlay       Toggle all workflow cards
 Ctrl+Shift+O   Toggle all workflow cards
 ```
 
-## Agent tool
+The `update_plan` agent tool replaces the complete plan. Steps are `pending`, `in_progress`, `completed`, or `cancelled`. An unfinished plan may have only one in-progress step. The card hides when every step is completed or cancelled.
 
-`update_plan` replaces the complete current plan. Each step has one of:
+Plan state follows session branches and is injected only while active. Plans describe the current route through work; they do not replace persistent goal completion checks.
 
-- `pending`
-- `in_progress`
-- `completed`
-- `cancelled`
+## Dependencies and limitations
 
-An unfinished plan must have exactly one in-progress step. The card hides automatically after every step is completed or cancelled.
-
-Plan state follows Pi session branches. Active plan context is injected transiently, including during automatic goal continuations.
-
-The card is registered with [`overlay-stack`](../overlay-stack/) rather than owning another overlay. This keeps goal, plan, and future cards independently maintainable while sharing responsive layout and visibility controls.
-
-## Dependencies
-
-- **Runtime:** Pi's extension and TUI APIs.
-- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
-- **Third-party packages:** `typebox` for the tool schema.
+- Uses Pi's public extension, session, context, and TUI APIs.
+- Requires [`overlay-stack`](../overlay-stack/).
+- Uses host-provided `typebox` for the tool schema.
+- Persistent TUI and RPC sessions are supported; panels require the TUI.

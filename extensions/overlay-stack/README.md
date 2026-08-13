@@ -1,39 +1,25 @@
 # overlay-stack
 
-A shared, persistent top-right overlay for workflow cards. Feature extensions register independent cards; this extension owns their framing, ordering, responsive sizing, visibility, and lifecycle.
+Provides one top-right overlay for workflow cards from `goal`, `plan`, `subagents`, and `file-changes`.
 
-Current cards:
-
-- `goal` — durable objective and validation state
-- `plan` — current tactical execution route
-- `subagents` — running delegated child agents and their latest activity
-- `file-changes` — files changed in the active or most recently completed run
-
-Cards are anchored to Pi's live terminal viewport in a non-capturing overlay, so the editor keeps keyboard focus and the cards do not consume transcript rows. The host redraws only when card state changes; it deliberately has no animation or one-second timer because periodic renders can pull some terminals back to the bottom of scrollback.
-
-Pi does not expose public transcript scroll state, and native terminal scrollback cannot provide a truly sticky overlay over historical rows. The stack therefore uses the strongest supported behavior—viewport anchoring without timer-driven redraws—rather than private scroll hooks.
-
-## Controls
+## Usage
 
 ```text
 /overlay                 Toggle the stack
-/overlay toggle          Toggle the stack
-/overlay show|hide       Show or hide the stack
-/overlay status          Report visibility
+/overlay show|hide       Change visibility
+/overlay status          Show visibility
 Ctrl+Shift+O             Toggle the stack
 ```
 
-The stack hides temporarily while the goal panel, plan panel, history search, or subagent transcript is open and restores afterward unless the user hid it manually. While hidden, card state keeps updating without requesting terminal redraws; showing the stack renders the latest state. Manual visibility resets for a new session or extension reload.
+The overlay does not capture keyboard input or consume transcript rows. It hides while a full-screen extension panel is open. Card state continues updating while hidden.
 
-On narrow or short terminals, cards hide responsively. If all cards cannot fit within 80% of terminal height, lower-priority cards are omitted rather than covering the editor.
+Cards are ordered by priority and sized to the live terminal. Lower-priority cards are omitted if the stack would exceed 80% of terminal height. Visibility resets on reload or a new session.
 
-## Design
+There is no timer. Redraws occur only when card state changes.
 
-The registry is process-global because Pi may evaluate a package entry point and a sibling relative import as separate Jiti module instances. Cards own their state and rendering; the stack owns only composition. This keeps goal validation, plan execution state, subagent orchestration, and file-change tracking independent.
+## Dependencies and limitations
 
-The workflow stack uses only Pi's public overlay API.
-
-## Dependencies
-
-- **Runtime:** Pi's public extension and TUI APIs.
-- **Third-party packages:** None.
+- Uses Pi's public extension, overlay, and TUI APIs.
+- No third-party packages or configuration files.
+- Interactive TUI only; cross-platform.
+- Pi does not expose terminal scrollback state, so the overlay is anchored to the live viewport only.

@@ -1,36 +1,26 @@
 # cat-buddy
 
-A small animated cat that sits on Pi's input bar.
+Adds an animated cat above Pi's input bar. Smart mode moves occasionally and reacts while Pi is working.
+
+## Usage
 
 ```text
-  ⡠⡪⠕⢀⣀⢰⠑⠔⢱
-  ⢇⡣⢴⠁⢄⠫⠬⡪⡬⠂
-───⠈⠉⠒⠒⠓⠒⠚⠚──
-```
-
-Smart mode is enabled by default: the cat moves occasionally and reacts while Pi works. It hides on terminals that are too small and can be toggled without opening its panel.
-
-## Commands
-
-```text
-/cat                Open the interactive control panel
-/cat status         Show the current settings
-/cat smart          Adaptive animation (default)
+/cat                Open the control panel
+/cat status         Show current settings
+/cat smart          Animate adaptively (default)
 /cat always         Animate continuously
 /cat working        Animate only while Pi works
-/cat static         Stay still
-/cat show|hide      Show or hide the cat
-Ctrl+Shift+C         Toggle cat visibility
+/cat static         Disable animation
+/cat show|hide      Change visibility
+Ctrl+Shift+C        Toggle visibility
 ```
 
-The panel supports arrow keys or `j`/`k`, Enter to select, and Escape to close.
+The panel uses arrow keys or `j`/`k`, Enter, and Escape. The cat decorates the current editor, so it composes with `codex-prompt` and `history-search`.
 
-The cat decorates the current editor through Pi's public editor API. Its first two rows sit above the editor and its feet replace the matching part of the top border, so it remains attached when the editor moves or grows. The cat uses the editor's accent color and the decorator preserves other custom-editor behavior, including `codex-prompt` and `history-search`.
-
-Animated modes request renders and some terminals may jump back to the bottom. Use `/cat static` when stable scrollback is more important than animation. Hiding the cat—or making the terminal too small to display it—pauses its animation until it can be shown again.
+Animation pauses while hidden or when the terminal is too small. Use static mode if animation disrupts terminal scrollback.
 
 ## Dependencies and limitations
 
-- **Runtime:** Pi's extension and TUI APIs.
-- **Third-party packages:** None.
-- **Compatibility:** The extension is terminal-independent and hides below 34 columns or 10 rows.
+- Uses Pi's extension, editor, and TUI APIs; no third-party packages.
+- Interactive TUI only; cross-platform.
+- Hidden below 34 columns or 10 rows.

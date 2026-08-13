@@ -21,6 +21,14 @@ function context(project: string) {
     ui: { notify: (message: string) => notifications.push(message), setStatus: () => undefined }, notifications };
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for scheduled work.");
+    await Bun.sleep(10);
+  }
+}
+
 test("persists reminders outside the transcript and exposes management", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-schedule-index-"));
   try {
@@ -53,7 +61,8 @@ test("retries overdue durable work and completes only after the turn settles", a
     await saveScheduleStore(path, store);
     const pi = new MockPi(); const ctx = context(project);
     scheduleExtension(pi as any, { agentDir });
-    await pi.emit("session_start", {}, ctx); await Bun.sleep(25);
+    await pi.emit("session_start", {}, ctx);
+    await waitFor(() => pi.sent.length === 1);
     expect(pi.sent).toHaveLength(1);
     expect(loadScheduleStore(path, project).tasks[0].pendingDeliveryAt).toBeDefined();
     await pi.emit("agent_start", {}, ctx);

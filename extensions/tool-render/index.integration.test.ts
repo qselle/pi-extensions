@@ -19,4 +19,4 @@ test("binds built-in tool overrides to the session cwd", async () => {
   if (exitCode !== 0) throw new Error(stderr || stdout);
   expect(stdout.trim()).toBe("tool-render cwd binding verified");
   expect(stderr).toBe("");
-});
+}, 30_000);

@@ -1,11 +1,8 @@
 import { expect, mock, test } from "bun:test";
 import type { SideChat, SideModelRef } from "./types.ts";
 
-// The repo convention (7 test files) is to mock @earendil-works/pi-tui and then
-// dynamically import the subject, because Bun applies module mocks
-// process-globally and never restores them. This keeps the UI test hermetic and
-// deterministic regardless of sibling suites. The real pi-tui integration is
-// exercised separately (see the extension loading in a live pi session).
+// Mock pi-tui before importing the subject to keep this UI test hermetic. The
+// suite runs in isolated workers, so the mock cannot leak into sibling files.
 const decode: Record<string, string> = {
   "\r": "enter",
   "\n": "enter",

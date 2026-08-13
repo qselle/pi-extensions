@@ -1,104 +1,48 @@
 # questions
 
-Claude Code-style structured questions for Pi, with terminal and Telegram replies racing safely. The extension registers the `questionnaire` tool and preserves the winning answer in the tool result so it survives compaction.
+Registers a `questionnaire` tool for structured terminal questions with optional Telegram replies.
 
-## Behavior
-
-For every non-secret question, Pi opens a terminal picker immediately and—when the optional Telegram hub is enabled—offers the same question through Telegram after a configurable delay (five minutes by default). The first valid reply wins:
-
-- a terminal answer immediately stops Telegram polling and edits the Telegram card to show completion without copying the answer
-- a Telegram answer immediately closes the terminal picker, appears in the terminal result, and updates the original card
-- Escape or `/cancel` interrupts the questionnaire and updates the other channel
-- a Telegram delivery or polling failure leaves the terminal picker usable
-- late delivery races are finalized safely, while shutdown or failed polling closes unresolved cards
-
-Questions run sequentially. The picker shows numbered options in a bordered Claude-style panel. `Other` is the final choice by default and opens a freeform input; set `allow_other: false` to restrict a question to its listed options. Questions without options always use freeform input.
-
-Example tool input:
+## Usage
 
 ```json
 {
   "questions": [
     {
       "id": "scope",
-      "question": "Which implementation scope should I use?",
+      "question": "Which scope should I use?",
       "options": ["Minimal", "Complete"]
-    },
-    {
-      "id": "notes",
-      "question": "Anything else I should account for?"
     }
   ]
 }
 ```
 
-A call supports one to four questions, with up to eight options each. IDs must be unique within the call.
+A call accepts one to four questions, up to eight options per question, and unique IDs. `Other` is added by default; set `allow_other: false` to restrict answers to listed options. Questions without options use freeform input.
 
-## Terminal interaction
+Terminal controls:
 
-The active question replaces the editor temporarily:
-
-- Up/Down changes the selection.
-- Enter selects an option.
-- `1` through `9` select directly.
-- Selecting the final `Other` row opens freeform input.
+- Up/Down changes selection.
+- Enter confirms.
+- `1`–`9` select an option directly.
 - Escape leaves freeform input or cancels the question.
 
-The terminal title changes to `❓ Input needed` while a question is pending. The normal title is restored after the questionnaire ends.
+Questions run in order and replace the editor while active. The answer is stored in the tool result.
 
-## Telegram replies
+Telegram:
 
-The extension optionally acquires the shared service documented by [`telegram`](../telegram/README.md). It never loads credentials, starts polling, or performs Telegram requests itself. Run `/telegram setup` to configure the shared service; manual file and environment configuration remain available for advanced settings.
+When [`telegram`](../telegram/) is configured, non-secret questions are sent after its configured delay. Terminal and Telegram answers race; the first valid answer wins and closes the other channel. Telegram failures do not disable terminal input.
 
-Telegram uses compact HTML cards labelled with the Pi session title, or the project directory when no title is set. The first card is delayed by `questionDelayMinutes`/`PI_TELEGRAM_QUESTION_DELAY_MINUTES`; if terminal input wins before the delay, no card is sent. After one card opens, later questions in that questionnaire are delivered immediately.
+Replies must come from the configured chat, optional topic, and exact question message. A bot used for replies cannot also use a webhook or another `getUpdates` consumer reliably.
 
-- Questions with listed options show an inline keyboard with one choice per row.
-- Questions without options use Telegram `ForceReply` for free text.
-- When freeform answers are allowed, you can ignore the buttons and reply directly with your own text.
-- Direct replies can still use an option number such as `2`, the exact option text, or `/cancel`.
+Secret answers:
 
-For safety, the central poller accepts only:
+Set `secret: true` for masked terminal input. The tool result receives an opaque handle instead of the value. A later tool call can use that handle; the extension substitutes the value in memory before execution.
 
-1. a callback or text reply from the configured chat
-2. the configured topic when `threadId` is set
-3. a callback on, or direct reply to, the exact Telegram question message
-4. a callback index that maps to a current listed choice
-
-Old updates are drained before the first interactive question is sent. Unrelated messages, stale buttons, stale replies, other chats, and other topics cannot win the race. Callback queries are acknowledged, and inline controls are removed as soon as Telegram, the terminal, cancellation, or shutdown closes the question. Resolution edits the original card. Telegram-entered answers remain visible there; terminal-entered answers are not copied to Telegram.
-
-### Telegram Bot API limitations
-
-Telegram reply support uses long polling through `getUpdates`:
-
-- A bot configured with a webhook cannot use `getUpdates`; remove the webhook or use a separate bot.
-- `getUpdates` has one shared cursor per bot. Use a dedicated bot if another application also consumes updates, otherwise the consumers can steal updates from each other.
-- Bots need permission to read replies in the configured group or topic.
-- Telegram delivery and polling are best effort. Network or Telegram failures do not prevent terminal answers.
-
-In non-interactive Pi modes, Telegram can be the only reply channel for non-secret questions. Without TUI or valid Telegram configuration—or for a secret question outside TUI—the tool returns a clear interruption instead of waiting forever.
-
-## Secret questions
-
-Set `secret: true` to mask terminal input and keep the value out of Pi's transcript. Instead of the answer, the tool result returns an opaque handle such as `[[secret:api-token#3f9c1a20]]`.
-
-- The real value is held only in memory for the current session branch and is never persisted, logged, or rendered.
-- Copy a handle verbatim into a later tool argument (for example a `bash` command or a request header). The extension swaps every known handle for its value while that tool call executes, so the transcript keeps only the handle.
-- Handles are dropped when the session shuts down or the conversation switches branches. A stale handle blocks the tool call with an instruction to ask for the secret again instead of inventing a value.
-- Handles resolve only in the Pi process that collected them, so a child agent cannot dereference a parent handle.
-- A revealed value can still leak through a command's own output. Prefer commands that do not echo their arguments or results.
-
-Secret questions are terminal-only. If Telegram is enabled, it receives a passive redacted card saying that secure input is waiting; the question text, choices, and answer are never sent, and no Telegram polling starts for that card. Completion edits the card to `Answered securely in Pi` without exposing the value.
-
-## Configuration lifecycle
-
-The central Telegram extension validates configuration and registers its service when enabled. `/telegram on` and `/telegram off` apply immediately; manual file edits require `/reload`. Missing service registration silently leaves this extension terminal-only, and invalid configuration produces a sanitized warning without breaking questions.
-
-This extension ignores the Telegram service in `PI_SUBAGENT_CHILD` processes so child agents cannot independently solicit remote replies.
+Secret values are never persisted and handles expire on shutdown or branch change. Stale handles block the tool call. Tool output can still reveal a substituted value, so use commands that do not echo secrets. Secret questions are terminal-only; Telegram receives only a redacted notice.
 
 ## Dependencies and limitations
 
-- **Runtime:** Pi's public extension and TUI APIs.
-- **Optional integration:** [`telegram`](../telegram/) adds delayed remote questions when enabled; terminal questions do not depend on it.
-- **Third-party packages:** None.
-- **Platforms:** Terminal interaction is cross-platform. Telegram requires outbound HTTPS access.
-- **Limits:** Four questions per call, eight listed options per question, and 4,000 characters per freeform answer.
+- Uses Pi's public extension, tool, editor, and TUI APIs.
+- Optionally uses [`telegram`](../telegram/); no third-party packages.
+- Terminal interaction is cross-platform. Telegram requires outbound HTTPS.
+- Freeform answers are limited to 4,000 characters.
+- Without a TUI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.

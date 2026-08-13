@@ -3,8 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import catExtension from "./index.ts";
 import { CatPanel, parseCatCommand } from "./panel.ts";
 
-// Exercise the panel's built-in fallback controls so these tests do not depend
-// on process-global pi-tui mocks installed by concurrently loaded test files.
+// Exercise the panel's built-in fallback controls directly.
 const SELECT = " ";
 const CLOSE = "q";
 const PREVIOUS = "k";
