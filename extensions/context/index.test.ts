@@ -230,8 +230,7 @@ test("shortens absolute context-file paths to session-relative labels", () => {
 
 test("passes the provider's usage components through so a gap explains itself", () => {
   const pi = new MockPi();
-  // Injected rather than read from pi, so the assertion holds regardless of the
-  // module mocks sibling suites install process-wide.
+  // Injected rather than read from pi so the assertion is provider-independent.
   const readLastUsage = () => ({ input: 15_110, output: 6_400, cacheRead: 600_000, cacheWrite: 26_923 });
 
   const report = collectReport(pi as any, commandContext(), estimators, readLastUsage);

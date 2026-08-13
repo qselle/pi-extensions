@@ -1,34 +1,26 @@
 # prevent-sleep
 
-Keeps the computer awake while the agent is actively working, so a long run —
-or a self-driving [`goal`](../goal/) — doesn't stall because your Mac idled to
-sleep.
+Keeps the computer awake while Pi is actively running an agent turn. The lock is released when the turn settles, the extension is disabled, or Pi exits.
 
-The wake lock is held from `agent_start` until the run **settles**
-(`agent_settled`), so it spans thinking, tool calls, retries, and compaction
-recovery. A goal stays covered because the agent is working throughout each
-turn (the gaps between a goal's turns are momentary). When the agent is genuinely
-idle — including a blocked/paused goal — the lock is released and the machine can
-sleep normally.
+## Usage
 
-| Platform | Mechanism |
-|----------|-----------|
-| macOS | `/usr/bin/caffeinate -i -w <pi-pid>` — prevents idle **system** sleep (not the display) and releases if pi exits |
+```text
+/prevent-sleep          Show status
+/prevent-sleep on|off   Enable or disable it for the session
+```
+
+Disable the extension in `pi config` to keep it off permanently.
+
+## Dependencies and limitations
+
+| Platform | Command |
+|---|---|
+| macOS | `/usr/bin/caffeinate -i -w <pi-pid>` |
 | Linux | `systemd-inhibit --what=idle:sleep --mode=block … sleep infinity` |
-| other | no-op |
+| Other | No operation |
 
-Fully **event-driven** (no timers).
+The macOS command prevents idle system sleep, not display sleep. The extension uses lifecycle events rather than a timer.
 
-## Commands
-
-- `/prevent-sleep` — show status (on/off + whether the lock is currently held)
-- `/prevent-sleep on` / `/prevent-sleep off` — toggle for this session
-
-Disable it permanently via `pi config`.
-
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API (`agent_start`, `agent_settled`).
-- **System:** macOS `caffeinate` or Linux `systemd-inhibit`.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
+- Uses Pi's `agent_start` and `agent_settled` events.
+- Requires `caffeinate` on macOS or `systemd-inhibit` on Linux.
+- No third-party packages.

@@ -30,8 +30,7 @@ class MockCustomEditor {
 }
 
 mock.module("@earendil-works/pi-coding-agent", () => ({
-  // Bun applies module mocks process-wide, so this shim must expose every symbol
-  // any sibling suite imports from Pi — including the config helpers.
+  // Expose every Pi symbol imported by this test's subject.
   CONFIG_DIR_NAME: ".pi",
   getAgentDir: () => join(tmpdir(), "pi-agent-mock"),
   keyText: (id: string) => (id === "app.tools.expand" ? "ctrl+o" : ""),
