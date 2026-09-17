@@ -1,20 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildCells,
-	fitCells,
+	compactInlineText,
 	displayModelId,
+	fitCells,
 	formatCost,
 	formatCwd,
 	formatPercent,
 	formatTokens,
+	layoutFooter,
 	modelLabel,
 	sanitizeStatusText,
 	statusLine,
+	workspaceLabel,
 	type FooterInput,
 } from "./format.ts";
 
 describe("formatTokens", () => {
-	test("formats across magnitudes like the Codex line", () => {
+	test("formats across magnitudes", () => {
 		expect(formatTokens(521)).toBe("521");
 		expect(formatTokens(96_000)).toBe("96K");
 		expect(formatTokens(28_200)).toBe("28.2K");
@@ -38,8 +41,8 @@ describe("formatPercent / formatCost", () => {
 	});
 });
 
-describe("model + cwd", () => {
-	test("displayModelId shows the id as-is (routing prefix + provider kept)", () => {
+describe("model + workspace", () => {
+	test("displayModelId shows the id as-is", () => {
 		expect(displayModelId("global.anthropic.claude-opus-4-8")).toBe("global.anthropic.claude-opus-4-8");
 		expect(displayModelId(undefined)).toBe("no-model");
 	});
@@ -47,90 +50,102 @@ describe("model + cwd", () => {
 		expect(modelLabel("global.anthropic.claude-opus-4-8", "max")).toBe("global.anthropic.claude-opus-4-8 max");
 		expect(modelLabel("global.anthropic.claude-opus-4-8", "off")).toBe("global.anthropic.claude-opus-4-8");
 	});
-	test("formatCwd collapses home to ~", () => {
+	test("formatCwd collapses Unix and Windows homes and workspaceLabel appends git", () => {
 		expect(formatCwd("/Users/q/private", "/Users/q")).toBe("~/private");
+		expect(formatCwd("C:\\Users\\q\\private", "C:\\Users\\q")).toBe("~\\private");
+		expect(workspaceLabel("~/private", "main")).toBe("~/private · main");
+		expect(workspaceLabel("~/private", null)).toBe("~/private");
 	});
 });
 
 const sample = (): FooterInput => ({
+	session: "Refactor auth",
 	model: "claude-opus-4-8 max",
-	dir: "~/private",
-	status: "Ready",
+	badges: ["fast"],
+	status: "ready",
 	usage: { tokens: 28_200, contextWindow: 258_000, percent: 6 },
 	totals: { input: 96_000, output: 521, cost: 0.21 },
 });
 
 describe("buildCells", () => {
-	test("produces the Codex order and text", () => {
+	test("produces a compact identity, state, context, and usage rail", () => {
 		const cells = buildCells(sample());
-		expect(cells.map((c) => c.id)).toEqual([
+		expect(cells.map((cell) => cell.id)).toEqual([
+			"session",
 			"model",
-			"dir",
+			"badges",
 			"status",
-			"left",
-			"used",
-			"window",
-			"usedTok",
-			"in",
-			"out",
+			"context",
+			"contextTokens",
+			"traffic",
 			"cost",
 		]);
-		expect(cells.map((c) => c.text)).toEqual([
+		expect(cells.map((cell) => cell.text)).toEqual([
+			"Refactor auth",
 			"claude-opus-4-8 max",
-			"~/private",
-			"Ready",
-			"Context 94% left",
-			"Context 6% used",
-			"258K window",
-			"28.2K used",
-			"96K in",
-			"521 out",
+			"[fast]",
+			"● ready",
+			"ctx 94% left",
+			"28.2K/258K",
+			"↓96K ↑521",
 			"$0.21",
 		]);
 	});
-	test("omits cost when zero and marks unknown context", () => {
+
+	test("omits empty optional cells and marks unknown context", () => {
 		const cells = buildCells({
 			model: "m",
-			dir: "d",
-			status: "Ready",
+			status: "working",
 			usage: { tokens: null, contextWindow: 258_000, percent: null },
 			totals: { input: 0, output: 0, cost: 0 },
 		});
-		expect(cells.some((c) => c.id === "cost")).toBe(false);
-		expect(cells.find((c) => c.id === "left")!.text).toBe("Context ?% left");
-		expect(cells.find((c) => c.id === "usedTok")!.text).toBe("? used");
+		expect(cells.some((cell) => cell.id === "session")).toBe(false);
+		expect(cells.some((cell) => cell.id === "badges")).toBe(false);
+		expect(cells.some((cell) => cell.id === "traffic")).toBe(false);
+		expect(cells.some((cell) => cell.id === "cost")).toBe(false);
+		expect(cells.find((cell) => cell.id === "context")?.text).toBe("ctx ?% left");
+		expect(cells.find((cell) => cell.id === "contextTokens")?.text).toBe("?/258K");
 	});
 });
 
-describe("fitCells", () => {
-	test("keeps everything when width is ample", () => {
-		expect(fitCells(buildCells(sample()), 300).length).toBe(10);
+describe("responsive layout", () => {
+	test("fitCells removes detail while retaining model and remaining context", () => {
+		expect(fitCells(buildCells(sample()), 300).length).toBe(8);
+		const kept = fitCells(buildCells(sample()), 55);
+		expect(kept.some((cell) => cell.id === "traffic")).toBe(false);
+		expect(kept.some((cell) => cell.id === "session")).toBe(false);
+		expect(kept.some((cell) => cell.id === "model")).toBe(true);
+		expect(kept.some((cell) => cell.id === "context")).toBe(true);
 	});
-	test("drops cost first, then tail fields; keeps model + % left longest", () => {
-		expect(fitCells(buildCells(sample()), 129).map((c) => c.id)).not.toContain("cost");
-		expect(fitCells(buildCells(sample()), 38).map((c) => c.id)).toEqual(["model", "left"]);
-		expect(fitCells(buildCells(sample()), 20).map((c) => c.id)).toEqual(["model"]);
+
+	test("anchors the workspace at the right edge when it fits", () => {
+		const width = 120;
+		const separator = " · ";
+		const layout = layoutFooter(buildCells(sample()), "~/src/pi-extensions · main", width, separator);
+		const leftWidth = layout.cells.reduce((total, cell) => total + [...cell.text].length, 0)
+			+ separator.length * Math.max(0, layout.cells.length - 1);
+		expect(leftWidth + layout.gap + [...layout.workspace].length).toBe(width);
+		expect(layout.workspace).toBe("~/src/pi-extensions · main");
+		expect(layout.gap).toBeGreaterThanOrEqual(2);
+	});
+
+	test("preserves repository and branch identity when shortening the workspace", () => {
+		const layout = layoutFooter(
+			buildCells(sample()),
+			"~/src/company/platform/pi-extensions · feature/very-long-branch-name",
+			82,
+		);
+		expect(layout.workspace).toContain("pi-extensions");
+		expect(layout.workspace).toContain("feature/");
+		expect([...layout.workspace].length).toBeLessThanOrEqual(Math.floor(82 * 0.42));
 	});
 });
 
-describe("git branch", () => {
-	test("folds the branch into the dir cell like pi's own footer", () => {
-		const cells = buildCells({ ...sample(), branch: "main" });
-		expect(cells.find((c) => c.id === "dir")!.text).toBe("~/private (main)");
-	});
-
-	test("leaves the dir alone outside a repo", () => {
-		for (const branch of [null, undefined, ""]) {
-			const cells = buildCells({ ...sample(), branch });
-			expect(cells.find((c) => c.id === "dir")!.text).toBe("~/private");
-		}
-	});
-
-	test("drops with the dir cell rather than crowding out context figures", () => {
-		const kept = fitCells(buildCells({ ...sample(), branch: "feature/very-long-branch-name" }), 60);
-		expect(kept.some((c) => c.id === "dir")).toBe(false);
-		expect(kept.some((c) => c.id === "model")).toBe(true);
-		expect(kept.some((c) => c.id === "left")).toBe(true);
+describe("compactInlineText", () => {
+	test("removes terminal controls, flattens whitespace, and bounds labels", () => {
+		expect(compactInlineText("\u001b[31m fast\nmode \u001b[0m", 20)).toBe("fast mode");
+		expect(compactInlineText("abcdefghijkl", 8)).toBe("abcdefg…");
+		expect(compactInlineText(undefined, 8)).toBe("");
 	});
 });
 

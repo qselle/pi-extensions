@@ -18,15 +18,13 @@ export interface UsageTotals {
 }
 
 export type CellId =
+	| "session"
 	| "model"
-	| "dir"
+	| "badges"
 	| "status"
-	| "left"
-	| "used"
-	| "window"
-	| "usedTok"
-	| "in"
-	| "out"
+	| "context"
+	| "contextTokens"
+	| "traffic"
 	| "cost";
 
 export interface Cell {
@@ -79,44 +77,58 @@ export function modelLabel(id: string | undefined, effort: string | undefined): 
 /** Collapse the home prefix to ~ for readability. */
 export function formatCwd(cwd: string, home: string | undefined): string {
 	if (!cwd) return "";
-	if (home && (cwd === home || cwd.startsWith(`${home}/`))) return `~${cwd.slice(home.length)}`;
+	if (home && (cwd === home || cwd.startsWith(`${home}/`) || cwd.startsWith(`${home}\\`))) {
+		return `~${cwd.slice(home.length)}`;
+	}
 	return cwd;
 }
 
 export interface FooterInput {
+	/** User-facing session name. Omitted until the session has been named. */
+	session?: string;
 	/** Pre-composed model + effort label, e.g. "claude-opus-4-8 max". */
 	model: string;
-	dir: string;
-	/** Git branch from pi's footer data provider; folded into the dir cell like pi's own footer. */
-	branch?: string | null;
-	status: string;
+	/** Short first-line contributions from optional extensions. */
+	badges?: readonly string[];
+	status: "ready" | "working";
 	usage: ContextUsageLike | undefined;
 	totals: UsageTotals;
 }
 
 /**
- * The single Codex-style footer line, in display order:
- *   model effort · dir (branch) · status · Context X% left · Context Y% used · W window · U used · I in · O out · $cost
- * Drop priority increases toward the tail so model + "% left" survive longest.
+ * Build the left-hand information cells. The workspace is laid out separately
+ * so it can remain anchored to the right instead of drifting with token totals.
  */
 export function buildCells(input: FooterInput): Cell[] {
-	const { model, dir, branch, status, usage, totals } = input;
+	const { session, model, badges = [], status, usage, totals } = input;
 	const usedPercent = usage?.percent ?? null;
 	const leftPercent = usedPercent == null ? null : Math.max(0, 100 - usedPercent);
-	const location = dir && branch ? `${dir} (${branch})` : dir;
+	const contextTokens = usage
+		? `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow)}`
+		: undefined;
+	const badgeText = badges.length > 0 ? badges.map((badge) => `[${badge}]`).join(" ") : undefined;
 	const cells: Cell[] = [
+		{ id: "session", text: session ?? "", priority: 7 },
 		{ id: "model", text: model, priority: 0 },
-		{ id: "dir", text: location, priority: 4 },
-		{ id: "status", text: status, priority: 3 },
-		{ id: "left", text: `Context ${formatPercent(leftPercent)} left`, priority: 1 },
-		{ id: "used", text: `Context ${formatPercent(usedPercent)} used`, priority: 2 },
-		{ id: "window", text: `${formatTokens(usage?.contextWindow ?? 0)} window`, priority: 5 },
-		{ id: "usedTok", text: `${formatTokens(usage?.tokens ?? null)} used`, priority: 6 },
-		{ id: "in", text: `${formatTokens(totals.input)} in`, priority: 7 },
-		{ id: "out", text: `${formatTokens(totals.output)} out`, priority: 8 },
+		{ id: "badges", text: badgeText ?? "", priority: 5 },
+		{ id: "status", text: `● ${status}`, priority: 4 },
+		{ id: "context", text: `ctx ${formatPercent(leftPercent)} left`, priority: 0 },
+		{ id: "contextTokens", text: contextTokens ?? "", priority: 8 },
+		{
+			id: "traffic",
+			text: totals.input > 0 || totals.output > 0
+				? `↓${formatTokens(totals.input)} ↑${formatTokens(totals.output)}`
+				: "",
+			priority: 9,
+		},
 	];
-	if (totals.cost > 0) cells.push({ id: "cost", text: formatCost(totals.cost), priority: 9 });
-	return cells.filter((c) => c.text.length > 0);
+	if (totals.cost > 0) cells.push({ id: "cost", text: formatCost(totals.cost), priority: 6 });
+	return cells.filter((cell) => cell.text.length > 0);
+}
+
+/** Right-hand workspace label. Kept separate so renderers can right-align it. */
+export function workspaceLabel(dir: string, branch?: string | null): string {
+	return branch ? `${dir} · ${branch}` : dir;
 }
 
 /**
@@ -146,6 +158,100 @@ export function fitCells<T extends { text: string; priority: number }>(
 		kept.splice(idx, 1);
 	}
 	return kept;
+}
+
+export interface FooterLayout<T extends { text: string }> {
+	cells: T[];
+	workspace: string;
+	gap: number;
+}
+
+/**
+ * Fit a left information rail and right-anchored workspace into one row.
+ * Optional information is removed before the workspace, then long workspaces
+ * are shortened from the start so the repository and branch remain visible.
+ */
+export function layoutFooter<T extends { text: string; priority: number }>(
+	cells: T[],
+	workspace: string,
+	maxWidth: number,
+	separator = " · ",
+	widthOf: (s: string) => number = (s) => [...s].length,
+): FooterLayout<T> {
+	if (maxWidth <= 0) return { cells: [], workspace: "", gap: 0 };
+	const separatorWidth = widthOf(separator);
+	const minGap = 2;
+	const rightLimit = Math.min(maxWidth, Math.max(16, Math.floor(maxWidth * 0.42)));
+	let right = truncateWorkspaceToWidth(workspace.trim(), rightLimit, widthOf);
+	const budget = Math.max(1, maxWidth - (right ? widthOf(right) + minGap : 0));
+	const kept = fitCells(cells, budget, separatorWidth, widthOf);
+	const leftWidth = joinedWidth(kept, separatorWidth, widthOf);
+
+	if (right && leftWidth + minGap + widthOf(right) > maxWidth) {
+		const available = maxWidth - leftWidth - minGap;
+		right = available >= 8 ? truncateWorkspaceToWidth(right, available, widthOf) : "";
+	}
+	const rightWidth = widthOf(right);
+	const gap = right ? Math.max(minGap, maxWidth - leftWidth - rightWidth) : 0;
+	return { cells: kept, workspace: right, gap };
+}
+
+function joinedWidth<T extends { text: string }>(
+	cells: readonly T[],
+	separatorWidth: number,
+	widthOf: (s: string) => number,
+): number {
+	return cells.reduce((sum, cell) => sum + widthOf(cell.text), 0)
+		+ separatorWidth * Math.max(0, cells.length - 1);
+}
+
+function truncateWorkspaceToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
+	if (widthOf(text) <= maxWidth) return text;
+	const separator = " · ";
+	const split = text.lastIndexOf(separator);
+	if (split < 0) return truncateStartToWidth(text, maxWidth, widthOf);
+	const directory = text.slice(0, split);
+	const branch = text.slice(split + separator.length);
+	const contentWidth = maxWidth - widthOf(separator);
+	if (contentWidth < 8) return truncateStartToWidth(text, maxWidth, widthOf);
+	const branchWidth = Math.max(5, Math.floor(contentWidth * 0.52));
+	const directoryWidth = contentWidth - branchWidth;
+	return `${truncateStartToWidth(directory, directoryWidth, widthOf)}${separator}${truncateEndToWidth(branch, branchWidth, widthOf)}`;
+}
+
+function truncateStartToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
+	if (!text || maxWidth <= 0) return "";
+	if (widthOf(text) <= maxWidth) return text;
+	const ellipsis = "…";
+	if (widthOf(ellipsis) >= maxWidth) return ellipsis;
+	const characters = [...text];
+	while (characters.length > 0 && widthOf(`${ellipsis}${characters.join("")}`) > maxWidth) characters.shift();
+	return `${ellipsis}${characters.join("")}`;
+}
+
+function truncateEndToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
+	if (!text || maxWidth <= 0) return "";
+	if (widthOf(text) <= maxWidth) return text;
+	const ellipsis = "…";
+	if (widthOf(ellipsis) >= maxWidth) return ellipsis;
+	const characters = [...text];
+	while (characters.length > 0 && widthOf(`${characters.join("")}${ellipsis}`) > maxWidth) characters.pop();
+	return `${characters.join("")}${ellipsis}`;
+}
+
+/** Plain, bounded text suitable for a one-line session label or footer badge. */
+export function compactInlineText(value: unknown, maxCharacters: number): string {
+	if (typeof value !== "string" || maxCharacters <= 0) return "";
+	const normalized = value
+		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/[\x00-\x1f\x7f]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	const characters = [...normalized];
+	return characters.length <= maxCharacters
+		? normalized
+		: `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
 
 /**
