@@ -25,7 +25,12 @@ class MockPi {
   }
 }
 
-function setup(options: { config?: SessionTitleConfig; results?: TitleResult[]; name?: string } = {}) {
+function setup(options: {
+  config?: SessionTitleConfig;
+  results?: TitleResult[];
+  name?: string;
+  request?: (args: any) => Promise<TitleResult>;
+} = {}) {
   const pi = new MockPi();
   if (options.name) pi.name = options.name;
   const calls: any[] = [];
@@ -33,7 +38,11 @@ function setup(options: { config?: SessionTitleConfig; results?: TitleResult[]; 
   let index = 0;
   sessionTitleExtension(pi as any, {
     config: options.config ?? config(),
-    request: (async (args: any) => { calls.push(args); return results[Math.min(index++, results.length - 1)]!; }) as any,
+    request: (async (args: any) => {
+      calls.push(args);
+      if (options.request) return options.request(args);
+      return results[Math.min(index++, results.length - 1)]!;
+    }) as any,
   });
   const notifications: { message: string; level?: string }[] = [];
   const branch: any[] = [];
@@ -47,9 +56,14 @@ function setup(options: { config?: SessionTitleConfig; results?: TitleResult[]; 
 
 const userEntry = (text: string) => ({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 
+async function flushDetachedRequest(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function firstTurn(h: ReturnType<typeof setup>, prompt = "please fix the retry loop in fetch") {
   await h.pi.emit("session_start", {}, h.ctx);
   await h.pi.emit("before_agent_start", { prompt }, h.ctx);
+  await flushDetachedRequest();
 }
 
 describe("loadConfig", () => {
@@ -68,25 +82,31 @@ describe("loadConfig", () => {
 });
 
 describe("titling once", () => {
-  test("names the session instantly from the first prompt, with no model call", async () => {
+  test("starts one model title from the first meaningful request", async () => {
     const h = setup();
     await firstTurn(h);
-    expect(h.pi.name).toBe("fix retry loop fetch");
-    expect(h.calls).toHaveLength(0);
-  });
-
-  test("replaces the provisional title after the turn settles", async () => {
-    const h = setup();
-    await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     expect(h.calls).toHaveLength(1);
-    expect(h.pi.names).toEqual(["fix retry loop fetch", "Generated Title"]);
+    expect(h.pi.names).toEqual(["Generated Title"]);
+    expect(h.calls[0].prompt).toContain("first_request: please fix the retry loop in fetch");
   });
 
-  test("never titles again once named", async () => {
+  test("does not block the main request while the title is generated", async () => {
+    let finish!: (result: TitleResult) => void;
+    const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
+    const h = setup({ request: async () => pending });
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    expect(h.calls).toHaveLength(1);
+    expect(h.pi.name).toBeUndefined();
+
+    finish({ title: "Pi Footer Redesign" });
+    await flushDetachedRequest();
+    expect(h.pi.name).toBe("Pi Footer Redesign");
+  });
+
+  test("never titles again after the first automatic attempt", async () => {
     const h = setup();
     await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     for (let turn = 0; turn < 10; turn += 1) {
       await h.pi.emit("before_agent_start", { prompt: `turn ${turn}` }, h.ctx);
       await h.pi.emit("agent_settled", {}, h.ctx);
@@ -97,41 +117,74 @@ describe("titling once", () => {
   test("leaves an already-named session alone, so /name is safe", async () => {
     const h = setup({ name: "Important Thing" });
     await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     expect(h.calls).toHaveLength(0);
     expect(h.pi.name).toBe("Important Thing");
   });
 
-  test("sends only user text", async () => {
+  test("uses only the triggering user request", async () => {
     const h = setup();
     await firstTurn(h, "add hyperlinks to tool blocks");
     await h.pi.emit("before_agent_start", { prompt: "now add stats" }, h.ctx);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     const prompt = h.calls[0].prompt as string;
     expect(prompt).toContain("first_request: add hyperlinks to tool blocks");
-    expect(prompt).toContain("- now add stats");
+    expect(prompt).not.toContain("now add stats");
   });
 
   test("passes the configured model override", async () => {
     const h = setup({ config: config({ model: "openai/gpt-4.1-mini" }) });
     await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     expect(h.calls[0].override).toBe("openai/gpt-4.1-mini");
   });
 
-  test("keeps the provisional title and retries later when titling fails", async () => {
+  test("leaves the session unnamed and does not retry when titling fails", async () => {
     const h = setup({ results: [{ error: "rate limited" }, { title: "Second Try" }] });
     await firstTurn(h);
+    expect(h.pi.name).toBeUndefined();
+    await h.pi.emit("before_agent_start", { prompt: "another request" }, h.ctx);
     await h.pi.emit("agent_settled", {}, h.ctx);
-    expect(h.pi.name).toBe("fix retry loop fetch");
-    await h.pi.emit("agent_settled", {}, h.ctx);
-    expect(h.pi.name).toBe("Second Try");
+    expect(h.calls).toHaveLength(1);
+    expect(h.pi.name).toBeUndefined();
+  });
+
+  test("does not overwrite a manual name assigned while generation is running", async () => {
+    let finish!: (result: TitleResult) => void;
+    const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
+    const h = setup({ request: async () => pending });
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    h.pi.setSessionName("My Name");
+    finish({ title: "Generated Title" });
+    await flushDetachedRequest();
+    expect(h.pi.name).toBe("My Name");
+  });
+
+  test("aborts and ignores title generation after session shutdown", async () => {
+    let finish!: (result: TitleResult) => void;
+    const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
+    const h = setup({ request: async () => pending });
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    await h.pi.emit("session_shutdown", {}, h.ctx);
+    expect(h.calls[0].signal.aborted).toBe(true);
+    finish({ title: "Stale Title" });
+    await flushDetachedRequest();
+    expect(h.pi.name).toBeUndefined();
+  });
+
+  test("waits through greetings for the first meaningful request", async () => {
+    const h = setup();
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "hello" }, h.ctx);
+    expect(h.calls).toHaveLength(0);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the Pi footer" }, h.ctx);
+    await flushDetachedRequest();
+    expect(h.calls).toHaveLength(1);
+    expect(h.pi.name).toBe("Generated Title");
   });
 
   test("does nothing when disabled", async () => {
     const h = setup({ config: config({ enabled: false }) });
     await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     expect(h.calls).toHaveLength(0);
     expect(h.pi.name).toBeUndefined();
   });
@@ -140,7 +193,6 @@ describe("titling once", () => {
     const h = setup();
     await h.pi.emit("session_start", {}, h.ctx);
     await h.pi.emit("before_agent_start", { prompt: "   " }, h.ctx);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     expect(h.pi.name).toBeUndefined();
     expect(h.calls).toHaveLength(0);
   });
@@ -156,12 +208,24 @@ describe("loading into an existing session", () => {
     expect(h.pi.name).toBe("Generated Title");
   });
 
-  test("titles an unnamed resumed session on its next settled turn", async () => {
+  test("does not retroactively title an unnamed resumed session", async () => {
     const h = setup();
-    h.branch.push(userEntry("a"), userEntry("b"));
+    h.branch.push(userEntry("prior substantive work"));
     await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "new work" }, h.ctx);
     await h.pi.emit("agent_settled", {}, h.ctx);
+    expect(h.calls).toHaveLength(0);
+    expect(h.pi.name).toBeUndefined();
+  });
+
+  test("can title after a resumed branch that only contained greetings", async () => {
+    const h = setup();
+    h.branch.push(userEntry("hello"));
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    await flushDetachedRequest();
     expect(h.calls).toHaveLength(1);
+    expect(h.pi.name).toBe("Generated Title");
   });
 
   test("does not touch a named resumed session", async () => {
@@ -191,7 +255,6 @@ describe("/title", () => {
   test("status reports title, model, and tracked prompts", async () => {
     const h = setup();
     await firstTurn(h);
-    await h.pi.emit("agent_settled", {}, h.ctx);
     await h.pi.commands.get("title").handler("status", h.ctx);
     const message = h.notifications.at(-1)!.message;
     expect(message).toContain("title: Generated Title");
@@ -201,10 +264,10 @@ describe("/title", () => {
 
   test("set applies a title and stops titling", async () => {
     const h = setup();
-    await firstTurn(h);
+    await h.pi.emit("session_start", {}, h.ctx);
     await h.pi.commands.get("title").handler("set  My  Chosen Title ", h.ctx);
     expect(h.pi.name).toBe("My Chosen Title");
-    await h.pi.emit("agent_settled", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
     expect(h.calls).toHaveLength(0);
   });
 
