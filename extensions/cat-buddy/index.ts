@@ -181,7 +181,7 @@ export default function (pi: ExtensionAPI) {
     installedFactory = (tui, theme, keybindings) => {
       host?.dispose();
       const editor = previousFactory?.(tui, theme, keybindings)
-        ?? new CustomEditor(tui, theme, keybindings);
+        ?? new CustomEditor(tui, theme, keybindings, { embedWorkingStatus: true });
       const render = editor.render.bind(editor);
       host = new CatSprite(tui, mode, working, visible);
       editor.render = (width: number) => host?.renderEditor(editor, render, width) ?? render(width);

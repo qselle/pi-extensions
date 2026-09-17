@@ -28,6 +28,18 @@ class MockPi {
   }
 }
 
+const editorTheme = {
+  borderColor: (value: string) => value,
+  selectList: {
+    selectedPrefix: (value: string) => value,
+    selectedText: (value: string) => value,
+    description: (value: string) => value,
+    scrollInfo: (value: string) => value,
+    noMatch: (value: string) => value,
+  },
+};
+const keybindings = { matches: () => false };
+
 afterEach(() => {
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
@@ -90,6 +102,39 @@ test("docks on the current editor through Pi's public editor lifecycle", async (
   await pi.emit("session_shutdown", {}, ctx);
   expect(currentFactory).toBe(previousFactory);
 });
+
+for (const tuiMode of ["regular", "fullscreen"] as const) {
+  test(`fallback editor embeds Pi's working indicator in ${tuiMode} mode`, async () => {
+    const pi = new MockPi();
+    let currentFactory: any;
+    const ctx = {
+      mode: "tui",
+      ui: {
+        getEditorComponent: () => currentFactory,
+        setEditorComponent: (factory: any) => { currentFactory = factory; },
+        notify() {},
+      },
+    };
+
+    catBuddyExtension(pi as any);
+    await pi.emit("session_start", {}, ctx);
+    const editor = currentFactory(
+      { mode: tuiMode, terminal: { rows: 24 }, requestRender() {} },
+      editorTheme,
+      keybindings,
+    );
+
+    expect(editor.embedWorkingStatus).toBe(true);
+    editor.setWorkingStatusIndicator({
+      renderInBorder: () => "⠋ Working",
+      renderSpinnerInBorder: () => "⠋",
+    });
+    expect(editor.render(48).some((line: string) => line.includes("Working"))).toBe(true);
+
+    await pi.emit("session_shutdown", {}, ctx);
+    expect(currentFactory).toBeUndefined();
+  });
+}
 
 test("pauses smart animation while hidden without background redraws", async () => {
   jest.useFakeTimers();
