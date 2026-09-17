@@ -3,7 +3,8 @@ import theme from "./gruvbox-dark.json";
 
 const REQUIRED_COLORS = [
   "accent", "border", "borderAccent", "borderMuted", "success", "error", "warning", "muted", "dim", "text",
-  "thinkingText", "selectedBg", "userMessageBg", "userMessageText", "customMessageBg", "customMessageText",
+  "thinkingText", "scrollbarTrack", "scrollbarThumb", "selectedBg", "searchMatchBg", "searchMatchText",
+  "userMessageBg", "userMessageText", "customMessageBg", "customMessageText",
   "customMessageLabel", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "toolTitle", "toolOutput", "mdHeading",
   "mdLink", "mdLinkUrl", "mdCode", "mdCodeBlock", "mdCodeBlockBorder", "mdQuote", "mdQuoteBorder", "mdHr",
   "mdListBullet", "toolDiffAdded", "toolDiffRemoved", "toolDiffContext", "syntaxComment", "syntaxKeyword",
@@ -12,7 +13,7 @@ const REQUIRED_COLORS = [
   "thinkingXhigh", "bashMode",
 ] as const;
 
-test("defines every required Pi color token", () => {
+test("defines every current Pi color token", () => {
   expect(theme.name).toBe("gruvbox-dark");
   for (const token of REQUIRED_COLORS) expect(theme.colors).toHaveProperty(token);
 });
