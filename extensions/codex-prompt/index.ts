@@ -46,7 +46,7 @@ export default function codexPromptExtension(pi: ExtensionAPI): void {
 		previousFactory = ctx.ui.getEditorComponent();
 		installedFactory = (tui, theme, keybindings) => {
 			const editor = previousFactory?.(tui, theme, keybindings)
-				?? new CustomEditor(tui, theme, keybindings);
+				?? new CustomEditor(tui, theme, keybindings, { embedWorkingStatus: true });
 			return decorateCodexEditor(editor);
 		};
 		ctx.ui.setEditorComponent(installedFactory);
