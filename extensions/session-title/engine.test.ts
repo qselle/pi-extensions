@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_MODEL_PREFERENCES,
   MAX_TITLE_CHARS,
   MAX_TITLE_WORDS,
   buildTitlePrompt,
+  normalizeGeneratedTitle,
   normalizeTitle,
   pickAnchor,
   provisionalTitle,
-  selectTitleModel,
   TITLE_SYSTEM_PROMPT,
 } from "./engine.ts";
 
@@ -27,7 +26,7 @@ describe("normalizeTitle", () => {
   });
 
   test("caps words and characters", () => {
-    expect(normalizeTitle("one two three four five six")).toBe("one two three four five");
+    expect(normalizeTitle("one two three four five six")).toBe("one two three four");
     const long = normalizeTitle("Supercalifragilisticexpialidocious extraordinarily verbose title");
     expect(long!.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
   });
@@ -36,6 +35,17 @@ describe("normalizeTitle", () => {
     for (const value of ["", "  ", "untitled", "New session", "chat", "hello", 42, undefined, null]) {
       expect(normalizeTitle(value as never)).toBeUndefined();
     }
+  });
+});
+
+describe("normalizeGeneratedTitle", () => {
+  test("removes a leading task verb from model output", () => {
+    expect(normalizeGeneratedTitle("Improve Pi Footer")).toBe("Pi Footer");
+    expect(normalizeGeneratedTitle("Title: Update Session Naming.")).toBe("Session Naming");
+  });
+
+  test("keeps an existing noun phrase intact", () => {
+    expect(normalizeGeneratedTitle("Pi Footer Redesign")).toBe("Pi Footer Redesign");
   });
 });
 
@@ -102,38 +112,8 @@ describe("TITLE_SYSTEM_PROMPT", () => {
     expect(TITLE_SYSTEM_PROMPT).toContain(`${MAX_TITLE_WORDS} words`);
     expect(TITLE_SYSTEM_PROMPT).toContain(`${MAX_TITLE_CHARS} characters`);
   });
-  test("does not ask the model to preserve an existing title", () => {
-    expect(TITLE_SYSTEM_PROMPT).not.toContain("repeat that title");
-  });
-});
-
-describe("selectTitleModel", () => {
-  const registry = (available: string[]) => (provider: string, id: string) =>
-    available.includes(`${provider}/${id}`) ? { provider, id } : undefined;
-
-  test("uses the first available preference", () => {
-    expect(selectTitleModel(registry(["anthropic/claude-haiku-4-5"]))).toEqual({
-      provider: "anthropic", id: "claude-haiku-4-5",
-    });
-  });
-
-  test("prefers cheaper models earlier in the list", () => {
-    expect(DEFAULT_MODEL_PREFERENCES[0]).toContain("haiku");
-    expect(DEFAULT_MODEL_PREFERENCES.at(-1)).toContain("nova-micro");
-  });
-
-  test("honors an override and keeps ids containing slashes", () => {
-    expect(selectTitleModel(registry(["openrouter/meta/llama-3.1-8b"]), { override: "openrouter/meta/llama-3.1-8b" }))
-      .toEqual({ provider: "openrouter", id: "meta/llama-3.1-8b" });
-  });
-
-  test("falls back to the session model when nothing matches", () => {
-    const fallback = { provider: "amazon-bedrock", id: "opus" };
-    expect(selectTitleModel(registry([]), { fallback })).toBe(fallback);
-    expect(selectTitleModel(registry([]), { override: "a/b", fallback })).toBe(fallback);
-  });
-
-  test("returns undefined with no match and no fallback", () => {
-    expect(selectTitleModel(registry([]))).toBeUndefined();
+  test("asks for a noun phrase rather than a leading task verb", () => {
+    expect(TITLE_SYSTEM_PROMPT).toContain("specific noun phrase");
+    expect(TITLE_SYSTEM_PROMPT).toContain("Do not begin with a task verb");
   });
 });

@@ -1,14 +1,12 @@
 /**
- * Pure titling logic: provisional local titles, prompt assembly, model-output
- * normalization, and cheap-model selection. No pi/tui imports, so it is fully
- * unit-testable.
+ * Pure titling logic: prompt signal detection, prompt assembly, and model-output
+ * normalization. No pi/tui imports, so it is fully unit-testable.
  *
- * A conversation is titled once, when it has no name. Nothing re-titles it, so
- * there is no refresh policy, no stored state, and no way for a bad title to
- * perpetuate itself.
+ * A conversation is titled once from its first meaningful request. Nothing
+ * re-titles it automatically, so there is no refresh policy or stored state.
  */
 
-export const MAX_TITLE_WORDS = 5;
+export const MAX_TITLE_WORDS = 4;
 export const MAX_TITLE_CHARS = 48;
 const MAX_ANCHOR_CHARS = 600;
 const MAX_RECENT_CHARS = 400;
@@ -49,10 +47,20 @@ export function normalizeTitle(raw: unknown): string | undefined {
   return title || undefined;
 }
 
+/** Enforce the noun-phrase contract on model output even if it echoes a task verb. */
+export function normalizeGeneratedTitle(raw: unknown): string | undefined {
+  const normalized = normalizeTitle(raw);
+  if (!normalized) return undefined;
+  return normalizeTitle(normalized.replace(
+    /^(?:add|build|change|create|debug|design|explain|fix|implement|improve|investigate|migrate|optimize|refactor|remove|rename|review|update)\s+/i,
+    "",
+  ));
+}
+
 /**
- * A free, instant title from the first prompt, used until the model answers.
- * Keeps meaningful words only, so "can you please fix the retry loop" becomes
- * "fix retry loop".
+ * A compact local label used by side chats and to detect whether a main-session
+ * prompt carries enough signal to title. Main sessions never display this
+ * heuristic text.
  */
 export function provisionalTitle(prompt: string, maxWords = 4): string | undefined {
   const cleaned = prompt
@@ -82,10 +90,11 @@ export function pickAnchor(texts: readonly string[]): string | undefined {
 }
 
 export const TITLE_SYSTEM_PROMPT = [
-  "You name a coding conversation. Reply with the title only: no quotes, no punctuation at the end, no explanation.",
-  `Use at most ${MAX_TITLE_WORDS} words and ${MAX_TITLE_CHARS} characters.`,
-  "Name the objective, not the latest detail.",
-  "Prefer concrete nouns from the work itself over generic words like task, help, session, or code.",
+  "Name this coding conversation from the user's request.",
+  "Reply only with a specific noun phrase in title case: no quotes, punctuation, or explanation.",
+  `Use 2–${MAX_TITLE_WORDS} words and at most ${MAX_TITLE_CHARS} characters.`,
+  "Describe the subject, not the requested action. Do not begin with a task verb such as Add, Fix, Update, Implement, Create, Improve, or Investigate.",
+  "Prefer concrete product, component, or problem names over generic words such as task, help, session, chat, or code.",
 ].join("\n");
 
 function clip(text: string, limit: number): string {
@@ -111,32 +120,3 @@ export function buildTitlePrompt(userTexts: readonly string[]): string {
   const prompt = parts.join("\n");
   return prompt.length > MAX_PROMPT_CHARS ? `${prompt.slice(0, MAX_PROMPT_CHARS)}\n\nTitle:` : prompt;
 }
-
-/**
- * Picks the cheapest capable model for titling: an explicit override first, then
- * a small-model preference list, then the session model as a last resort.
- */
-export function selectTitleModel<T>(
-  find: (provider: string, id: string) => T | undefined,
-  options: { override?: string; preferences?: readonly string[]; fallback?: T } = {},
-): T | undefined {
-  const candidates = options.override ? [options.override] : (options.preferences ?? DEFAULT_MODEL_PREFERENCES);
-  for (const candidate of candidates) {
-    const separator = candidate.indexOf("/");
-    if (separator <= 0) continue;
-    const found = find(candidate.slice(0, separator), candidate.slice(separator + 1));
-    if (found) return found;
-  }
-  return options.fallback;
-}
-
-/** Small, cheap, instruction-following models, best first. */
-export const DEFAULT_MODEL_PREFERENCES: readonly string[] = [
-  "amazon-bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "anthropic/claude-haiku-4-5",
-  "openai/gpt-4.1-mini",
-  "google/gemini-2.5-flash",
-  "amazon-bedrock/amazon.nova-lite-v1:0",
-  "amazon-bedrock/amazon.nova-micro-v1:0",
-];
