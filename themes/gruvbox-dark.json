@@ -34,8 +34,12 @@
     "dim": "bg4",
     "text": "fg1",
     "thinkingText": "fg3",
+    "scrollbarTrack": "bg2",
+    "scrollbarThumb": "fg4",
 
     "selectedBg": "bg2",
+    "searchMatchBg": "bg2",
+    "searchMatchText": "yellow",
     "userMessageBg": "bg1",
     "userMessageText": "fg1",
     "customMessageBg": "bg1",
