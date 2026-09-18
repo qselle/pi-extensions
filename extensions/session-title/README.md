@@ -14,7 +14,9 @@ Names a session from its user prompts without changing a title you set manually.
 2. The active session model generates a specific two-to-four-word noun phrase with thinking disabled.
 3. Once generation has been attempted, the extension does not retry or rename automatically. Existing and manually assigned titles always win; `/title now` remains an explicit override.
 
-Automatic titling never blocks the main turn. It sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder.
+Automatic titling never blocks the main turn. While it is pending, the shared footer shows `[naming…]`; an explicit `/title now` on a named session shows `[renaming…]`. The badge disappears on success, failure, cancellation, or shutdown.
+
+The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder.
 
 ## Configuration
 

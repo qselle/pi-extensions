@@ -17,8 +17,16 @@ class MockPi {
 }
 function context(project: string) {
   const notifications: string[] = [];
+  const statuses = new Map<string, string>();
+  const statusUpdates: Array<{ key: string; text: string | undefined }> = [];
   return { cwd: project, mode: "tui", isIdle: () => true, hasPendingMessages: () => false,
-    ui: { notify: (message: string) => notifications.push(message), setStatus: () => undefined }, notifications };
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      setStatus: (key: string, text: string | undefined) => {
+        statusUpdates.push({ key, text });
+        if (text === undefined) statuses.delete(key); else statuses.set(key, text);
+      },
+    }, notifications, statuses, statusUpdates };
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -88,6 +96,8 @@ test("a read-only standby takes ownership after the active process releases its 
     const standbyPi = new MockPi(); const standbyCtx = context(project);
     scheduleExtension(standbyPi as any, { agentDir, leaseRetryMs: 10 });
     await standbyPi.emit("session_start", {}, standbyCtx);
+    expect(standbyCtx.statuses.has("schedule")).toBe(false);
+    expect(standbyCtx.statusUpdates.some(({ text }) => text === "schedule read-only")).toBe(false);
     await standbyPi.commands.get("remind").handler("30m -- should be read only", standbyCtx);
     expect(standbyCtx.notifications.at(-1)).toContain("read-only");
 

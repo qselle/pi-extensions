@@ -13,6 +13,8 @@ class MockPi {
   commands = new Map<string, any>();
   name: string | undefined;
   names: string[] = [];
+  emitted: Array<{ name: string; value: unknown }> = [];
+  events = { emit: (name: string, value: unknown) => { this.emitted.push({ name, value }); } };
 
   on(event: string, handler: (event: any, ctx: any) => any) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
@@ -98,10 +100,18 @@ describe("titling once", () => {
     await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
     expect(h.calls).toHaveLength(1);
     expect(h.pi.name).toBeUndefined();
+    expect(h.pi.emitted.at(-1)).toEqual({
+      name: "footer:badge",
+      value: { id: "session-title", text: "naming…", order: -100 },
+    });
 
     finish({ title: "Pi Footer Redesign" });
     await flushDetachedRequest();
     expect(h.pi.name).toBe("Pi Footer Redesign");
+    expect(h.pi.emitted.at(-1)).toEqual({
+      name: "footer:badge",
+      value: { id: "session-title" },
+    });
   });
 
   test("never titles again after the first automatic attempt", async () => {
@@ -271,12 +281,20 @@ describe("/title", () => {
     expect(h.calls).toHaveLength(0);
   });
 
-  test("now regenerates even for a named session and reports cost", async () => {
+  test("now shows renaming, regenerates a named session, and reports cost", async () => {
     const h = setup({ name: "Old" });
     h.branch.push(userEntry("some work"));
     await h.pi.emit("session_start", {}, h.ctx);
     await h.pi.commands.get("title").handler("now", h.ctx);
     expect(h.calls).toHaveLength(1);
+    expect(h.pi.emitted).toContainEqual({
+      name: "footer:badge",
+      value: { id: "session-title", text: "renaming…", order: -100 },
+    });
+    expect(h.pi.emitted.at(-1)).toEqual({
+      name: "footer:badge",
+      value: { id: "session-title" },
+    });
     expect(h.notifications.at(-1)?.message).toContain("Generated Title");
   });
 
