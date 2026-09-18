@@ -15,6 +15,8 @@ import { requestTitle, type TitleResult } from "./request.ts";
 
 const CONFIG_FILE = "session-title.json";
 const MAX_TRACKED_PROMPTS = 6;
+const FOOTER_BADGE_EVENT = "footer:badge";
+const TITLE_BADGE_ID = "session-title";
 
 export interface SessionTitleConfig {
   enabled: boolean;
@@ -55,11 +57,21 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   let last: TitleResult | undefined;
   let requestGeneration = 0;
   let activeRequest: AbortController | undefined;
+  let titleBadge: string | undefined;
+
+  const setTitleBadge = (text?: string) => {
+    if (text === titleBadge) return;
+    titleBadge = text;
+    pi.events.emit(FOOTER_BADGE_EVENT, text
+      ? { id: TITLE_BADGE_ID, text, order: -100 }
+      : { id: TITLE_BADGE_ID });
+  };
 
   const cancelRequest = () => {
     requestGeneration += 1;
     activeRequest?.abort();
     activeRequest = undefined;
+    setTitleBadge();
   };
 
   const load = (ctx: ExtensionContext) => {
@@ -87,6 +99,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     const generation = requestGeneration;
     const controller = new AbortController();
     activeRequest = controller;
+    setTitleBadge(pi.getSessionName() ? "renaming…" : "naming…");
     let result: TitleResult;
     try {
       result = await run({
@@ -100,6 +113,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     }
     if (generation !== requestGeneration) return result;
     activeRequest = undefined;
+    setTitleBadge();
     last = result;
     if (result.title && (force || !pi.getSessionName())) {
       pi.setSessionName(result.title);

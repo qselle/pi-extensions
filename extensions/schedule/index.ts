@@ -76,7 +76,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   const updateStatus = (ctx: ExtensionContext) => {
     const current = active();
     if (loadError) return ctx.ui.setStatus(STATUS_KEY, "schedule error");
-    if (current.length === 0) return ctx.ui.setStatus(STATUS_KEY, lease ? undefined : "schedule read-only");
+    if (current.length === 0) return ctx.ui.setStatus(STATUS_KEY, undefined);
     const next = current.filter((task) => task.nextRunAt !== null).sort((a, b) => a.nextRunAt! - b.nextRunAt!)[0];
     ctx.ui.setStatus(STATUS_KEY, `${current.length} scheduled · ${lease ? (next ? `next ${formatDuration(next.nextRunAt! - Date.now())}` : "waiting") : "read-only"}`);
   };

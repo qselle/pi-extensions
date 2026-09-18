@@ -23,7 +23,7 @@ Storage and delivery:
 - Each project has an owner-only JSON queue and process lease.
 - A due task is marked pending before Pi wakes and completes only after the turn settles.
 - Missed cron runs coalesce; they are not replayed as a backlog.
-- Another Pi process for the same project sees the queue read-only while the lease is held.
+- Another Pi process for the same project sees the queue read-only while the lease is held; an idle standby does not occupy the footer status row.
 - Failures and interruptions pause the task with its pending delivery preserved.
 
 Limits: 50 tasks per project; reminders from 1 minute to 365 days; cron defaults to 50 runs and accepts 1–500.
