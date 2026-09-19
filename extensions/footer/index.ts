@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import {
 	buildCells,
 	compactInlineText,
+	contextColor,
 	formatCwd,
 	layoutFooter,
 	modelLabel,
@@ -179,6 +180,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 					if (tuiRef === tui) tuiRef = undefined;
 				},
 				render(width: number): string[] {
+					if (width <= 0) return [];
+					const usage = ctx.getContextUsage();
 					const badgeLabels = [...badges.entries()]
 						.sort(([leftId, left], [rightId, right]) => left.order - right.order || leftId.localeCompare(rightId))
 						.map(([, badge]) => badge.text);
@@ -187,7 +190,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 						model: modelLabel(ctx.model?.id, currentEffort(pi)),
 						badges: badgeLabels,
 						status: ctx.isIdle() ? "ready" : "working",
-						usage: ctx.getContextUsage(),
+						usage,
 						totals: totals.get(() => ctx.sessionManager.getBranch()),
 					});
 					const workspace = workspaceLabel(
@@ -200,7 +203,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 					const left = layout.cells.map((cell: Cell) => {
 						const color = cell.id === "status"
 							? (ctx.isIdle() ? "success" : "accent")
-							: CELL_COLOR[cell.id];
+							: cell.id === "context" ? contextColor(usage?.percent) : CELL_COLOR[cell.id];
 						return theme.fg(color, cell.text);
 					}).join(styledSeparator);
 					const right = layout.workspace ? theme.fg("muted", layout.workspace) : "";

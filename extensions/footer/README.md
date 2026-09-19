@@ -19,6 +19,11 @@ The main row can show:
 
 Narrow terminals remove secondary details before model and remaining-context information. Long workspaces preserve both the repository tail and the beginning of the branch name. Statuses published through `ctx.ui.setStatus()` remain on a separate second row so temporary progress never displaces the main footer.
 
+When a routed model name exceeds the available row, it is shortened before
+remaining context disappears. On extremely small widths the context label takes
+precedence. Context is green below 75% used, yellow from 75%, and red from 90%;
+unknown measurements use a muted color.
+
 Usage is scanned once and cached until a message, compaction, or branch change invalidates it. Totals include assistant responses, nested model usage on tool results, summaries, and compactions.
 
 The terminal title shows the session and project. A low-frequency Braille spinner is active only while Pi is working. Attention UI such as `questionnaire` temporarily owns the title and the footer restores the appropriate active or idle title afterward.

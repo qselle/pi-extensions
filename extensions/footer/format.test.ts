@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildCells,
 	compactInlineText,
+	contextColor,
 	displayModelId,
 	fitCells,
 	formatCost,
@@ -109,6 +110,33 @@ describe("buildCells", () => {
 });
 
 describe("responsive layout", () => {
+	test("long model identities cannot push context outside narrow terminals", () => {
+		const cells = buildCells({ ...sample(), model: "routed.provider.".repeat(12) });
+		for (let width = 1; width <= 120; width++) {
+			const layout = layoutFooter(cells, "~/project · main", width);
+			const line = layout.cells.map((cell) => cell.text).join(" · ")
+				+ " ".repeat(layout.gap) + layout.workspace;
+			expect([...line].length).toBeLessThanOrEqual(width);
+			if (width >= 16) expect(line).toContain("ctx 94% left");
+		}
+		expect(cells[1]!.text).toBe("routed.provider.".repeat(12));
+	});
+
+	test("uses display widths when shortening wide Unicode labels", () => {
+		const measure = (s: string) => [...s].reduce((n, c) => n + (c === "界" ? 2 : 1), 0);
+		for (let width = 1; width <= 80; width++) {
+			const layout = layoutFooter(buildCells({ ...sample(), model: "界".repeat(60) }), "界".repeat(30), width, " · ", measure);
+			expect(measure(layout.cells.map((cell) => cell.text).join(" · ")) + layout.gap + measure(layout.workspace)).toBeLessThanOrEqual(width);
+		}
+	});
+
+	test("context pressure has distinct healthy, warning, critical and unknown states", () => {
+		expect(contextColor(74)).toBe("success");
+		expect(contextColor(75)).toBe("warning");
+		expect(contextColor(90)).toBe("error");
+		expect(contextColor(null)).toBe("muted");
+		expect(contextColor(NaN)).toBe("muted");
+	});
 	test("fitCells removes detail while retaining model and remaining context", () => {
 		expect(fitCells(buildCells(sample()), 300).length).toBe(8);
 		const kept = fitCells(buildCells(sample()), 55);
