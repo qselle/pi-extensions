@@ -54,6 +54,12 @@ export function formatPercent(p: number | null | undefined): string {
 	return `${Math.round(p)}%`;
 }
 
+/** Semantic pressure from used context; unknown usage should never look healthy. */
+export function contextColor(percent: number | null | undefined): "muted" | "success" | "warning" | "error" {
+	if (percent == null || !Number.isFinite(percent)) return "muted";
+	return percent >= 90 ? "error" : percent >= 75 ? "warning" : "success";
+}
+
 /** "$0.21"; sub-cent costs keep 3 decimals so they aren't flattened to $0.00. */
 export function formatCost(n: number): string {
 	if (!Number.isFinite(n) || n <= 0) return "$0.00";
@@ -102,7 +108,7 @@ export interface FooterInput {
 export function buildCells(input: FooterInput): Cell[] {
 	const { session, model, badges = [], status, usage, totals } = input;
 	const usedPercent = usage?.percent ?? null;
-	const leftPercent = usedPercent == null ? null : Math.max(0, 100 - usedPercent);
+	const leftPercent = usedPercent == null ? null : Math.max(0, Math.min(100, 100 - usedPercent));
 	const contextTokens = usage
 		? `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow)}`
 		: undefined;
@@ -184,7 +190,21 @@ export function layoutFooter<T extends { text: string; priority: number }>(
 	const rightLimit = Math.min(maxWidth, Math.max(16, Math.floor(maxWidth * 0.42)));
 	let right = truncateWorkspaceToWidth(workspace.trim(), rightLimit, widthOf);
 	const budget = Math.max(1, maxWidth - (right ? widthOf(right) + minGap : 0));
-	const kept = fitCells(cells, budget, separatorWidth, widthOf);
+	let kept = fitCells(cells, budget, separatorWidth, widthOf);
+	// Essential cells can exceed even the entire terminal (long routed model
+	// identifiers are common). Reclaim the workspace before shortening identity.
+	if (joinedWidth(kept, separatorWidth, widthOf) > maxWidth) {
+		right = "";
+		kept = fitCells(cells, maxWidth, separatorWidth, widthOf).map((cell) => ({ ...cell }));
+		while (kept.length > 1 && joinedWidth(kept, separatorWidth, widthOf) > maxWidth) {
+			const first = kept[0]!;
+			const overflow = joinedWidth(kept, separatorWidth, widthOf) - maxWidth;
+			const target = widthOf(first.text) - overflow;
+			if (target < 1) kept.shift();
+			else first.text = truncateEndToWidth(first.text, target, widthOf);
+		}
+		if (kept.length === 1) kept[0]!.text = truncateEndToWidth(kept[0]!.text, maxWidth, widthOf);
+	}
 	const leftWidth = joinedWidth(kept, separatorWidth, widthOf);
 
 	if (right && leftWidth + minGap + widthOf(right) > maxWidth) {
