@@ -95,3 +95,30 @@ test("fallback editor embeds Pi's working indicator in regular and fullscreen mo
 		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
+
+test("accent rendering restores host colors and falls back if coloring fails", () => {
+  const host = (value: string) => `host:${value}`;
+  const editor = { borderColor: host, render(_width: number) { return [this.borderColor("───"), "  input", this.borderColor("───")]; }, handleInput() {}, invalidate() {}, getText: () => "input", setText() {} };
+  decorateCodexEditor(editor, () => { throw new Error("theme failed"); });
+  expect(editor.render(30)).toEqual(["host:───", "  input", "host:───"]);
+  expect(editor.borderColor).toBe(host);
+});
+
+test("repeated session start never captures the installed factory itself", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-editor-rebind-"));
+  const old = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = root;
+  try {
+    const pi = new MockPi(); let current: any; let constructed = 0;
+    const original = () => { constructed++; return { render: () => ["────", "  hi", "────"], handleInput() {}, invalidate() {}, getText: () => "hi", setText() {} }; };
+    current = original;
+    const ctx = { mode: "tui", ui: { getEditorComponent: () => current, setEditorComponent: (factory: any) => { current = factory; } } };
+    codexPromptExtension(pi as any);
+    await pi.emit("session_start", {}, ctx); const installed = current;
+    await pi.emit("session_start", {}, ctx);
+    expect(current).toBe(installed);
+    expect(current({}, editorTheme, keybindings).render(20).join("\n")).toContain("› hi");
+    expect(constructed).toBe(1);
+    await pi.emit("session_shutdown", {}, ctx);
+    expect(current).toBe(original);
+  } finally { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(root, { recursive: true, force: true }); }
+});
