@@ -308,7 +308,8 @@ export class SideChatWorkspace implements Component, Focusable {
     if (chat.pending) {
       appendSection(lines, section("›", "you", "accent", chat.pending.text, "text", width, this.theme));
       if (chat.status === "generating") {
-        appendSection(lines, [`${this.theme.fg("accent", "●")} ${this.theme.fg("accent", "assistant")}`, `  ${this.theme.fg("dim", "▌ thinking…")}`]);
+        if (chat.partial) appendSection(lines, section("●", "assistant · streaming", "accent", chat.partial, "text", width, this.theme));
+        else appendSection(lines, [`${this.theme.fg("accent", "●")} ${this.theme.fg("accent", "assistant")}`, `  ${this.theme.fg("dim", "▌ thinking…")}`]);
       }
     }
     if (chat.status === "error" && chat.error) {

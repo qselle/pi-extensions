@@ -60,6 +60,8 @@ export interface SideChat {
   turns: SideTurn[];
   /** Transient in-flight question (set while generating or after an error). */
   pending?: SidePending;
+  /** Transient display only; never persisted or sent back to the model. */
+  partial?: string;
   status: SideChatStatus;
   error?: string;
   /** Aggregate usage across every answer in this chat. */

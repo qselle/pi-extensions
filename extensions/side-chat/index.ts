@@ -1,4 +1,4 @@
-import { complete } from "@earendil-works/pi-ai/compat";
+import { streamSimple, type complete } from "@earendil-works/pi-ai/compat";
 import {
   buildSessionContext,
   convertToLlm,
@@ -50,6 +50,8 @@ export interface SideChatExtensionOptions {
   /** Injectable for tests. */
   titleConfig?: { enabled?: boolean; model?: string; refreshEvery?: number };
   requestTitle?: typeof requestTitle;
+  completion?: typeof complete;
+  stream?: typeof streamSimple;
 }
 
 export default function registerSideChat(pi: ExtensionAPI, options: SideChatExtensionOptions = {}): SideChatStore {
@@ -59,28 +61,43 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
   let workspaceRefresh: (() => void) | undefined;
   let workspaceCloser: (() => void) | undefined;
   const promotedTurns = new Map<string, number>();
+  let generation = 0;
+  const titleControllers = new Map<string, AbortController>();
 
-  const runModel = async (chat: SideChat, signal: AbortSignal): Promise<SideRunResult> => {
+  const runModel = async (chat: SideChat, signal: AbortSignal, onText: (text: string) => void): Promise<SideRunResult> => {
     const ctx = activeContext;
     if (!ctx) throw new Error("Side chat has no active session");
     const model = ctx.modelRegistry.find(chat.model.provider, chat.model.id);
     if (!model) throw new Error(`Model ${modelLabel(chat.model)} is not available`);
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (signal.aborted) throw new Error("Side chat cancelled");
     if (!auth.ok) throw new Error(auth.error);
 
-    const response = await complete(
-      model,
-      { systemPrompt: chat.systemPrompt, messages: toApiMessages(chat) },
-      {
+    const context = { systemPrompt: chat.systemPrompt, messages: toApiMessages(chat) };
+    const request = {
         apiKey: auth.apiKey,
         headers: auth.headers,
         env: auth.env,
         signal,
-        reasoning: "low",
+        reasoning: "low" as const,
         maxTokens: MAX_OUTPUT_TOKENS,
         sessionId: `${ctx.sessionManager.getSessionId()}:side:${chat.id}`,
-      },
-    );
+    };
+    let response;
+    if (options.completion) response = await options.completion(model, context, request);
+    else {
+      const events = (options.stream ?? streamSimple)(model, context, request);
+      let publishedAt = 0;
+      for await (const event of events) {
+        if (signal.aborted) break;
+        if (event.type === "text_delta" && Date.now() - publishedAt >= 80) {
+          publishedAt = Date.now();
+          onText(responseText(event.partial));
+        }
+      }
+      if (signal.aborted) throw new Error("Side chat cancelled");
+      response = await events.result();
+    }
 
     if (response.stopReason === "aborted" || signal.aborted) throw new Error("Side chat cancelled");
     if (response.stopReason === "error") throw new Error(response.errorMessage || "Side chat request failed");
@@ -103,16 +120,28 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
   const titleChat = async (chat: SideChat): Promise<void> => {
     const ctx = activeContext;
     if (!ctx || titleConfig.enabled === false || titled.has(chat.id)) return;
-    titled.add(chat.id);
     const questions = chat.turns.filter((turn) => turn.role === "user").map((turn) => turn.text);
     if (questions.length === 0) return;
-    const result = await runTitleRequest({
-      ctx: ctx as never,
-      prompt: buildTitlePrompt(questions),
-      override: titleConfig.model,
-    });
-    if (result.title) store.rename(chat.id, result.title);
-    else titled.delete(chat.id);
+    titled.add(chat.id);
+    const expectedGeneration = generation;
+    const previousTitle = chat.title;
+    const controller = new AbortController();
+    titleControllers.set(chat.id, controller);
+    try {
+      const result = await runTitleRequest({
+        ctx: ctx as never,
+        prompt: buildTitlePrompt(questions),
+        override: titleConfig.model,
+        signal: controller.signal,
+      });
+      if (generation !== expectedGeneration || controller.signal.aborted || store.get(chat.id) !== chat || chat.title !== previousTitle) return;
+      if (result.title) store.rename(chat.id, result.title);
+      else titled.delete(chat.id);
+    } catch {
+      if (generation === expectedGeneration) titled.delete(chat.id);
+    } finally {
+      if (titleControllers.get(chat.id) === controller) titleControllers.delete(chat.id);
+    }
   };
 
   const store = new SideChatStore({
@@ -193,7 +222,6 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     const lastAssistant = [...chat.turns].reverse().find((turn) => turn.role === "assistant");
     if (!lastAssistant) return "Nothing to promote yet — ask a question first.";
     if (promotedTurns.get(chat.id) === lastAssistant.timestamp) return "That side answer was already promoted.";
-    promotedTurns.set(chat.id, lastAssistant.timestamp);
     const question = [...chat.turns].reverse().find((turn) => turn.role === "user");
     const content = bounded(
       [`Side question: ${question?.text ?? "(unknown)"}`, "", "Side answer:", lastAssistant.text].join("\n"),
@@ -208,22 +236,28 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
       },
       { deliverAs: "nextTurn" },
     );
+    promotedTurns.set(chat.id, lastAssistant.timestamp);
     return "Promoted the latest answer to the next main turn.";
   };
 
-  const callbacks = (ctx: ExtensionContext): WorkspaceCallbacks => ({
-    list: () => store.list(),
-    onSend: (id, text) => {
-      store.send(id, text);
-    },
-    onRetry: (id) => store.retry(id),
-    onAbort: (id) => store.abort(id),
-    onPromote: (id) => promote(id),
-    onNew: () => safeCreate(ctx),
-    onDelete: (id) => store.remove(id),
-  });
+  const callbacks = (ctx: ExtensionContext): WorkspaceCallbacks => {
+    const expectedGeneration = generation;
+    const current = () => generation === expectedGeneration;
+    return {
+      list: () => current() ? store.list() : [],
+      onSend: (id, text) => {
+        if (current()) store.send(id, text);
+      },
+      onRetry: (id) => current() && store.retry(id),
+      onAbort: (id) => { if (current()) store.abort(id); },
+      onPromote: (id) => current() ? promote(id) : "This workspace belongs to an earlier session.",
+      onNew: () => current() ? safeCreate(ctx) : undefined,
+      onDelete: (id) => { if (current()) store.remove(id); },
+    };
+  };
 
   const openWorkspace = async (ctx: ExtensionContext, initial?: WorkspaceInitial): Promise<void> => {
+    const expectedGeneration = generation;
     if (ctx.mode !== "tui") {
       ctx.ui.notify("The side-chat workspace needs interactive TUI mode.", "warning");
       return;
@@ -246,9 +280,11 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
         },
       );
     } finally {
-      workspaceRefresh = undefined;
-      workspaceCloser = undefined;
-      pi.events.emit(OVERLAY_MODAL_EVENT, { id: WORKSPACE_MODAL_ID, open: false });
+      if (expectedGeneration === generation) {
+        workspaceRefresh = undefined;
+        workspaceCloser = undefined;
+        pi.events.emit(OVERLAY_MODAL_EVENT, { id: WORKSPACE_MODAL_ID, open: false });
+      }
     }
   };
 
@@ -291,7 +327,20 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     },
   });
 
+  const resetSessionWork = () => {
+    generation++;
+    for (const controller of titleControllers.values()) controller.abort();
+    titleControllers.clear();
+    titled.clear();
+    promotedTurns.clear();
+    workspaceCloser?.();
+    workspaceCloser = undefined;
+    workspaceRefresh = undefined;
+    pi.events.emit(OVERLAY_MODAL_EVENT, { id: WORKSPACE_MODAL_ID, open: false });
+  };
+
   pi.on("session_start", (_event, ctx) => {
+    resetSessionWork();
     activeContext = ctx;
     promotedTurns.clear();
     store.replaceAll(restoreSideChats(ctx.sessionManager.getBranch()));
@@ -299,12 +348,14 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
   });
 
   pi.on("session_tree", (_event, ctx) => {
+    resetSessionWork();
     activeContext = ctx;
     store.replaceAll(restoreSideChats(ctx.sessionManager.getBranch()));
     syncUsage();
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    resetSessionWork();
     store.stopAll();
     workspaceRefresh = undefined;
     ctx.ui.setStatus(USAGE_STATUS_KEY, undefined);
