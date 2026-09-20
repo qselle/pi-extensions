@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -40,7 +41,9 @@ interface SessionEntryLike {
 }
 
 export function normalizeTrackedPath(cwd: string, rawPath: string): { absolutePath: string; displayPath: string } {
-  const inputPath = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  let inputPath = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  if (inputPath === "~") inputPath = homedir();
+  else if (inputPath.startsWith("~/") || inputPath.startsWith("~\\")) inputPath = resolve(homedir(), inputPath.slice(2));
   const absolutePath = isAbsolute(inputPath) ? resolve(inputPath) : resolve(cwd, inputPath);
   const relativePath = relative(cwd, absolutePath);
   const outsideCwd = relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
@@ -53,9 +56,12 @@ export function normalizeTrackedPath(cwd: string, rawPath: string): { absolutePa
 export function countChangedLines(patch: string): { additions: number; removals: number } {
   let additions = 0;
   let removals = 0;
+  let inHunk = false;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-    else if (line.startsWith("-") && !line.startsWith("---")) removals++;
+    if (line.startsWith("@@ ")) { inHunk = true; continue; }
+    if (line.startsWith("diff ") || line.startsWith("Index: ")) { inHunk = false; continue; }
+    if (line.startsWith("+") && (inHunk || !line.startsWith("+++"))) additions++;
+    else if (line.startsWith("-") && (inHunk || !line.startsWith("---"))) removals++;
   }
   return { additions, removals };
 }
@@ -84,7 +90,7 @@ export function restoreFileChanges(entries: readonly unknown[]): StoredFileChang
     const candidate = entry as SessionEntryLike;
     if (candidate.type !== "custom" || candidate.customType !== FILE_CHANGES_ENTRY_TYPE) continue;
     const decoded = decodeStoredFileChanges(candidate.data);
-    if (decoded && (!latest || decoded.completedAt >= latest.completedAt)) latest = decoded;
+    if (decoded) latest = decoded;
   }
   return latest;
 }
@@ -92,20 +98,28 @@ export function restoreFileChanges(entries: readonly unknown[]): StoredFileChang
 export class FileChangeRun {
   private readonly baselines = new Map<string, FileBaseline>();
   private readonly changes = new Map<string, FileChange>();
+  private readonly captures = new Map<string, Promise<void>>();
+  private readonly refreshVersions = new Map<string, number>();
 
-  constructor(private readonly countContentChanges: ContentChangeCounter) {}
+  constructor(private readonly countContentChanges: ContentChangeCounter, private readonly readText: (path: string) => Promise<string> = (path) => readFile(path, "utf8")) {}
 
   async captureBaseline(cwd: string, rawPath: string): Promise<void> {
     const normalized = normalizeTrackedPath(cwd, rawPath);
     if (this.baselines.has(normalized.absolutePath)) return;
 
-    try {
-      const content = await readFile(normalized.absolutePath, "utf8");
-      this.baselines.set(normalized.absolutePath, { ...normalized, existed: true, content });
-    } catch (error) {
-      if (!hasErrorCode(error, "ENOENT")) return;
-      this.baselines.set(normalized.absolutePath, { ...normalized, existed: false, content: "" });
-    }
+    const existing = this.captures.get(normalized.absolutePath);
+    if (existing) return existing;
+    const capture = (async () => {
+      try {
+        const content = await this.readText(normalized.absolutePath);
+        this.baselines.set(normalized.absolutePath, { ...normalized, existed: true, content });
+      } catch (error) {
+        if (!hasErrorCode(error, "ENOENT")) return;
+        this.baselines.set(normalized.absolutePath, { ...normalized, existed: false, content: "" });
+      }
+    })();
+    this.captures.set(normalized.absolutePath, capture);
+    try { await capture; } finally { this.captures.delete(normalized.absolutePath); }
   }
 
   async refresh(cwd: string, rawPath: string): Promise<void> {
@@ -113,13 +127,16 @@ export class FileChangeRun {
     const baseline = this.baselines.get(absolutePath);
     if (!baseline) return;
 
+    const version = (this.refreshVersions.get(absolutePath) ?? 0) + 1;
+    this.refreshVersions.set(absolutePath, version);
     let content: string;
     try {
-      content = await readFile(absolutePath, "utf8");
+      content = await this.readText(absolutePath);
     } catch {
       return;
     }
 
+    if (this.refreshVersions.get(absolutePath) !== version) return;
     if (baseline.existed && content === baseline.content) {
       this.changes.delete(absolutePath);
       return;

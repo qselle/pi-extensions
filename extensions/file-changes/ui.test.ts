@@ -38,7 +38,7 @@ mock.module("@earendil-works/pi-tui", () => ({
 }));
 
 const { compactFilePath, fileChangesTitle, renderFileChangesBody } = await import("./ui.ts");
-const { setHyperlinkMode, hasDanglingLink } = await import("../hyperlinks/link.ts");
+const { setHyperlinkMode, hasDanglingLink } = await import("../../lib/links.ts");
 
 const theme = {
   fg: (_color: string, value: string) => value,

@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { closeDanglingLink, hyperlinkPath } from "../hyperlinks/link.ts";
+import { closeDanglingLink, hyperlinkPath } from "../../lib/links.ts";
 import type { FileChange } from "./changes.ts";
 
 const MAX_VISIBLE_FILES = 8;

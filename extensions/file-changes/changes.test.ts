@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import {
   FILE_CHANGES_ENTRY_TYPE,
   FILE_CHANGES_ENTRY_VERSION,
@@ -103,4 +103,49 @@ test("restores only the latest valid summary on the active branch", () => {
     { type: "custom", customType: FILE_CHANGES_ENTRY_TYPE, data: latest },
   ]);
   expect(restored).toEqual(latest);
+});
+
+test("counts patch content beginning with header-like plus/minus sequences", () => {
+  expect(countChangedLines("--- file\n+++ file\n@@ -1,2 +1,2 @@\n---old-content\n----old-content\n+++new-content\n++++new-content")).toEqual({ additions: 2, removals: 2 });
+});
+
+test("restoration follows append order even if the system clock moves backward", () => {
+  const record = (path: string, completedAt: number) => ({ type: "custom", customType: FILE_CHANGES_ENTRY_TYPE, data: { version: 1, files: [{ path, kind: "modified", additions: 1, removals: 0 }], completedAt } });
+  expect(restoreFileChanges([record("old.ts", 200), record("latest.ts", 100)])?.files[0]?.path).toBe("latest.ts");
+});
+
+test("concurrent baseline requests keep one baseline through repeated writes", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-file-changes-concurrent-"));
+  try {
+    const path = join(cwd, "file.ts");
+    await writeFile(path, "original\n");
+    const run = new FileChangeRun(countFixtureChanges);
+    await Promise.all(Array.from({ length: 8 }, () => run.captureBaseline(cwd, "file.ts")));
+    await writeFile(path, "replacement\nextra\n");
+    await run.captureBaseline(cwd, "file.ts");
+    await Promise.all([run.refresh(cwd, "file.ts"), run.refresh(cwd, "file.ts")]);
+    expect(run.files()[0]).toMatchObject({ additions: 2, removals: 1 });
+    await writeFile(path, "original\n");
+    await run.refresh(cwd, "file.ts");
+    expect(run.files()).toEqual([]);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("deduplicates in-flight baseline reads and ignores stale refresh completions", async () => {
+  const reads: Array<(value: string) => void> = [];
+  const run = new FileChangeRun((_path, _before, after) => ({ additions: after === "newest" ? 2 : 1, removals: 0 }), () => new Promise<string>((resolve) => reads.push(resolve)));
+  const first = run.captureBaseline("/project", "file.ts");
+  const second = run.captureBaseline("/project", "file.ts");
+  expect(reads).toHaveLength(1);
+  reads[0]!("original"); await Promise.all([first, second]);
+  const older = run.refresh("/project", "file.ts");
+  const newer = run.refresh("/project", "file.ts");
+  reads[2]!("newest"); await newer;
+  reads[1]!("older"); await older;
+  expect(run.files()[0]?.additions).toBe(2);
+});
+
+test("home-relative tool paths resolve consistently with Pi", () => {
+  expect(normalizeTrackedPath("/project", "~/example.ts").absolutePath).toBe(join(homedir(), "example.ts"));
+  expect(normalizeTrackedPath("/project", "@~/example.ts").absolutePath).toBe(join(homedir(), "example.ts"));
 });

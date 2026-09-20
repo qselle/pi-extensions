@@ -128,8 +128,9 @@ export default function fileChangesExtension(
   pi.on("tool_result", async (event, ctx) => {
     if (!isEditToolResult(event) && !isWriteToolResult(event)) return;
     if (event.isError || typeof event.input.path !== "string" || !activeRun) return;
-    await activeRun.refresh(ctx.cwd, event.input.path);
-    refreshDisplay();
+    const run = activeRun;
+    await run.refresh(ctx.cwd, event.input.path);
+    if (activeRun === run) refreshDisplay();
   });
 
   pi.on("agent_settled", () => finishRun());
