@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hyperlinkUrl } from "../../lib/links.ts";
-import { cleanText, webUrl, type SearchHit, type SearchResult } from "./client.ts";
+import { cleanText, searchConstraints, webUrl, type SearchHit, type SearchResult } from "./client.ts";
 import { expansionHint, fitToolRow, toolText } from "../../lib/tool-ui.ts";
 
 export { toolText as textBlock } from "../../lib/tool-ui.ts";
@@ -40,6 +40,7 @@ export function searchPreview(details: SearchResult, theme: Theme) {
     ...(details.provider === "mistral" ? [theme.fg("dim", "model-selected citations")] : []),
     ...(details.access || details.quality ? [theme.fg("muted", `${details.access ? `${details.access === "keyless" ? "keyless" : "account"} · ` : ""}${details.quality ? `${details.quality} · requested mode` : "search"}`)] : []),
     ...(details.dateRange ? [theme.fg("dim", `${details.dateRange.start ?? "any start"} → ${details.dateRange.end ?? "any end"} · requested`)] : []),
+    ...searchConstraints(details).map((line) => theme.fg("dim", cleanText(line, 1200))),
     ...(details.diagnostics && details.diagnostics.received > count ? [theme.fg("dim", `${details.diagnostics.received - count} rows excluded · expand for reasons`)] : []),
   ];
   return {

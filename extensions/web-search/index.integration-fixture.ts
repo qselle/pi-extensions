@@ -43,6 +43,7 @@ const theme = { fg: (_: string, text: string) => text };
 const search = tools.get("web_search");
 const result = { content: [{ type: "text", text: "source content" }], details: {
   quality: "deep", searchType: "deep",
+  domains: ["example.com/API"], excludedDomains: ["example.com/API/old"], maxAgeHours: 0, category: "news",
   dateRange: { start: "2024-01-01", end: "2024-01-31" },
   diagnostics: { received: 4, invalid: 1, duplicate: 1, outsideDomains: 1, omitted: 0 },
   provider: "exa", query: "query", results: [{ url: "https://example.com/", title: "A long source title 界".repeat(10), snippet: "snippet" }],
@@ -57,6 +58,8 @@ assert(search.renderResult(result, { expanded: false, isPartial: false }, theme)
 assert(!search.renderResult(result, { expanded: false, isPartial: false }, theme).render(40)[0].includes("1 sources"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("3 rows excluded"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("deep · requested mode"));
+assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("fresh fetch"));
+assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("Sources: example.com/API"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("ctrl+e to expand"));
 assert.equal(search.renderShell, "self");
 const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search citations" } };
@@ -115,6 +118,9 @@ for (const pagination of [undefined, { state: "more", nextOffset: 42 }, { state:
   for (const width of [1, 12, 80]) assert(component.render(width).every((line: string) => visibleWidth(line) <= width));
   if (pagination?.state === "more") assert(component.render(24).join("\n").includes("next offset 42"));
 }
+const fallbackView = reader.renderResult({ content: [], details: { url: "https://example.com", reader: "exa", access: "keyless", truncated: true, fallback: { from: "ax", reason: "ax returned no readable content." } } }, { expanded: false, isPartial: false }, theme);
+assert(fallbackView.render(120).join("\n").includes("ax fallback"));
+for (const width of [1, 12, 40, 80]) assert(fallbackView.render(width).every((line: string) => visibleWidth(line) <= width));
 
 // Inspect actual host cards too: their padding reduces the renderer's available width.
 const agentDir = mkdtempSync(join(tmpdir(), "pi-web-render-"));
