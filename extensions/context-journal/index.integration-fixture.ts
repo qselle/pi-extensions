@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import extension from "./index.ts";
+const tools = new Map<string, any>(); const commands = new Map<string, any>(); const handlers = new Map<string, Function>();
+const entries: any[] = []; let active = ["bash", "context_notes", "context_history", "context_budget"];
+extension({ registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand: (name: string, value: any) => commands.set(name, value),
+  on: (name: string, handler: Function) => { const previous = handlers.get(name); handlers.set(name, (event: any, ctx: any) => { const prior = previous?.(event, ctx); return handler(prior ? { ...event, ...prior } : event, ctx) ?? prior; }); }, getActiveTools: () => active, setActiveTools: (next: string[]) => { active = next; },
+  appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }) } as never);
+const ctx = { ui: { notify() {} }, sessionManager: { getBranch: () => entries }, getContextUsage: () => undefined };
+handlers.get("session_start")!({}, ctx);
+assert.deepEqual(active, ["bash"]);
+await assert.rejects(tools.get("context_notes").execute("x", { action: "list" }), /disabled/);
+await commands.get("context-journal").handler("on", ctx);
+assert(active.includes("context_history"));
+await tools.get("context_notes").execute("x", { action: "write", key: "objective", text: "Complete the whole task" });
+const output = handlers.get("context")!({ messages: [{ role: "user", content: "hello" }] }, ctx);
+assert.equal(output.messages.length, 2);
+assert(output.messages[1].content.includes("Complete the whole task"));
+assert.equal(handlers.get("context")!({ messages: output.messages }, ctx).messages.length, 2);
+await commands.get("context-journal").handler("off", ctx);
+assert.deepEqual(active, ["bash"]);
+assert.equal(handlers.get("context")!({ messages: output.messages }, ctx).messages.length, 1);
+handlers.get("session_tree")!({}, { ...ctx, sessionManager: { getBranch: () => entries.slice(0, 2) } });
+assert(active.includes("context_notes"));
+const read = await tools.get("context_notes").execute("x", { action: "read", key: "objective" });
+assert.equal(read.content[0].text, "Complete the whole task");
+assert((await tools.get("context_budget").execute("x", {}, undefined, undefined, ctx)).content[0].text.includes("unknown"));
+entries.push({ type: "message", id: "old", message: { role: "user", content: "older task" } }, { type: "message", id: "new", message: { role: "user", content: "newer task" } });
+const first = await tools.get("context_history").execute("x", { limit: 1 }, undefined, undefined, ctx);
+assert(first.content[0].text.includes('before="new"'));
+const last = await tools.get("context_history").execute("x", { limit: 1, before: "new" }, undefined, undefined, ctx);
+assert(last.content[0].text.includes("End of matching history"));
+assert.equal(last.details.nextBefore, undefined);
+console.log("journal activation, restoration, injection and budget checks verified");
