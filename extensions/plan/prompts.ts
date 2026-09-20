@@ -1,17 +1,17 @@
-import { currentPlanItem, planStats, type PlanState } from "./plan.ts";
+import { currentPlanItem, planStats, planRows, type PlanState } from "./plan.ts";
 
 export const PLAN_CONTEXT_TYPE = "plan-context";
 
 export const PLAN_PROMPT_GUIDELINES = [
   "Use update_plan for meaningful multi-step implementation or investigation work, including work performed inside an active goal. Skip it for simple one-step tasks.",
-  "Every update_plan call replaces the complete tactical plan. Keep exactly one step in_progress while unfinished work remains, and update statuses as evidence is produced.",
+  "Every update_plan call replaces the complete tactical plan. Groups may contain children up to three levels deep; group status derives from children. Keep exactly one leaf step in_progress while unfinished work remains, and update statuses as evidence is produced.",
   "A plan tracks execution, not success criteria. When a persistent goal is active, goal checks remain the durable verification contract and the plan should describe the current route through that work.",
 ];
 
 export function buildPlanContext(plan: PlanState): string {
   const stats = planStats(plan.items);
   const current = currentPlanItem(plan);
-  const lines = plan.items.map((item) => `- [${statusMark(item.status)}] ${escapeXml(item.step)}`).join("\n");
+  const lines = planRows(plan.items).map(({ item, depth }) => `${"  ".repeat(depth)}- [${statusMark(item.status)}] ${escapeXml(item.step)}`).join("\n");
 
   return `## Active execution plan
 
@@ -28,7 +28,7 @@ Keep this plan synchronized with actual work. Before finishing the response, cal
 export function planToolResponse(plan: PlanState): string {
   const stats = planStats(plan.items);
   const current = currentPlanItem(plan);
-  const lines = plan.items.map((item) => `- [${statusMark(item.status)}] ${item.step}`);
+  const lines = planRows(plan.items).map(({ item, depth }) => `${"  ".repeat(depth)}- [${statusMark(item.status)}] ${item.step}`);
   return [
     `Plan updated: ${stats.finished}/${stats.total} finalized.`,
     plan.explanation ? `Rationale: ${plan.explanation}` : undefined,

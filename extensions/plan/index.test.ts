@@ -258,3 +258,33 @@ test("keeps the card and full panel inside responsive widths", () => {
     expect(panel.render(width).every((line: string) => line.length <= width)).toBe(true);
   }
 });
+
+test("nested plans persist as version two and restore branch-local leaf progress", async () => {
+  const { pi, ctx } = harness();
+  await pi.emit("session_start", {}, ctx);
+  await pi.tools.get("update_plan").execute("nested", { plan: [{ step: "Build", children: [{ step: "Implement", status: "completed" }, { step: "Verify", status: "in_progress" }] }] });
+  expect(pi.entries.at(-1).data.version).toBe(2);
+  expect(pi.entries.at(-1).data.plan.items[0].status).toBe("in_progress");
+  const branch = [...pi.entries];
+  await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => [] } });
+  const [empty] = await pi.emit("context", { messages: [] }, ctx);
+  expect(empty).toBeUndefined();
+  await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => branch } });
+  const [restored] = await pi.emit("context", { messages: [] }, ctx);
+  expect(restored.messages[0].content).toContain("1/2 finalized");
+  expect(restored.messages[0].content).toContain("  - [>] Verify");
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("a late clear confirmation cannot remove a replaced plan", async () => {
+  const { pi, ctx } = harness();
+  const update = pi.tools.get("update_plan");
+  await update.execute("initial", activePlan);
+  let answer!: (value: boolean) => void;
+  ctx.ui.confirm = () => new Promise<boolean>((resolve) => { answer = resolve; });
+  const clearing = pi.commands.get("plan").handler("clear", ctx);
+  await update.execute("new", { plan: [{ step: "New work", status: "in_progress" }] });
+  answer(true); await clearing;
+  expect(pi.entries.at(-1).data.plan.items[0].step).toBe("New work");
+  await pi.emit("session_shutdown", {}, ctx);
+});
