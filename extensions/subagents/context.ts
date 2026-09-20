@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, copyFile, lstat, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
   SessionManager,
@@ -17,12 +17,15 @@ const SUMMARY_MAX_TOKENS = 8_192;
 
 export type ContextMode = "fresh" | "summary" | "fork";
 
+export interface ChildCheckpoint { directory: string; file: string; initialEntryCount: number; leafId: string | null }
+
 export interface ChildContext {
   directory: string;
   sessionFile: string;
   inheritedMessages: number;
   initialEntryCount: number;
   cleanup(): Promise<void>;
+  checkpoint?(): ChildCheckpoint;
 }
 
 export type ParentSummarizer = (ctx: any, messages: any[], signal?: AbortSignal) => Promise<string>;
@@ -76,11 +79,34 @@ export async function createChildContext(
   ctx: any,
   mode: ContextMode,
   summary?: string,
+  resume?: ChildCheckpoint,
 ): Promise<ChildContext> {
-  const directory = await mkdtemp(join(tmpdir(), "pi-subagent-context-"));
+  const parentFile = ctx.sessionManager.getSessionFile();
+  const root = parentFile ? `${parentFile}.subagents` : tmpdir();
+  if (parentFile) {
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    if ((await lstat(root)).isSymbolicLink()) throw new Error("Child checkpoint root must not be a symbolic link.");
+  }
+  const directory = await mkdtemp(join(root, "pi-subagent-context-"));
   let cleanupPromise: Promise<void> | undefined;
   try {
-    const parentSession = ctx.sessionManager.getSessionFile();
+    if (resume) {
+      if (!parentFile) throw new Error("Resuming a child requires a persisted parent session.");
+      const source = await checkpointFile(ctx, resume);
+      const sessionFile = join(directory, resume.file);
+      await copyFile(source, sessionFile);
+      const session = SessionManager.open(sessionFile, directory, ctx.cwd);
+      if (resume.leafId) {
+        if (!session.getEntry(resume.leafId)) throw new Error("Child checkpoint leaf is missing.");
+        session.branch(resume.leafId);
+      } else session.resetLeaf();
+      // Persist the selected leaf before the RPC process opens its own manager.
+      session.appendCustomEntry("subagent-resumed", { version: 1 });
+      return { directory, sessionFile, inheritedMessages: 0, initialEntryCount: resume.initialEntryCount,
+        checkpoint: () => ({ directory: basename(directory), file: basename(sessionFile), initialEntryCount: resume.initialEntryCount, leafId: SessionManager.open(sessionFile, directory, ctx.cwd).getLeafId() }),
+        cleanup: () => rm(directory, { recursive: true, force: true }) };
+    }
+    const parentSession = parentFile;
     const session = SessionManager.create(ctx.cwd, directory, parentSession ? { parentSession } : undefined);
     const sessionFile = session.getSessionFile();
     if (!sessionFile) throw new Error("Failed to create child session file");
@@ -103,11 +129,18 @@ export async function createChildContext(
       inheritedMessages = 1;
     }
 
+    // Public SessionManager defers disk creation until an assistant message.
+    // Materialize public session entries now so a separate RPC process receives
+    // fresh/summary context too, without fabricating an assistant response.
+    try { await writeFile(sessionFile, [session.getHeader(), ...session.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n", { flag: "wx", mode: 0o600 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    const initialCount = session.getEntries().length;
     return {
       directory,
       sessionFile,
       inheritedMessages,
       initialEntryCount: session.getEntries().length,
+      ...(parentFile ? { checkpoint: () => ({ directory: basename(directory), file: basename(sessionFile), initialEntryCount: initialCount, leafId: SessionManager.open(sessionFile, directory, ctx.cwd).getLeafId() }) } : {}),
       cleanup() {
         cleanupPromise ??= rm(directory, { recursive: true, force: true });
         return cleanupPromise;
@@ -129,4 +162,21 @@ function appendInherited(session: SessionManager, message: any): void {
     return;
   }
   session.appendMessage(structuredClone(message));
+}
+
+export async function checkpointFile(ctx: any, resume: ChildCheckpoint): Promise<string> {
+  const parentFile = ctx.sessionManager.getSessionFile();
+  if (!parentFile || basename(resume.directory) !== resume.directory || !/^pi-subagent-context-[\w-]+$/.test(resume.directory) || basename(resume.file) !== resume.file || !resume.file.endsWith(".jsonl")) throw new Error("Invalid child checkpoint path.");
+  const root = `${parentFile}.subagents`;
+  if ((await lstat(root)).isSymbolicLink()) throw new Error("Unsafe child checkpoint root.");
+  const realRoot = await realpath(root);
+  const source = join(root, resume.directory, resume.file);
+  const info = await lstat(source);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024 * 1024 || dirname(await realpath(source)) !== join(realRoot, resume.directory)) throw new Error("Child checkpoint is missing, unsafe, or too large.");
+  return source;
+}
+
+export async function removeCheckpoint(ctx: any, resume: ChildCheckpoint): Promise<void> {
+  try { await rm(dirname(await checkpointFile(ctx, resume)), { recursive: true, force: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
