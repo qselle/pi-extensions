@@ -8,6 +8,7 @@ import { emptyScheduleStore, loadScheduleStore, saveScheduleStore, scheduleStore
 
 type Handler = (event: any, ctx: any) => any;
 class MockPi {
+  events = { emit() {} };
   handlers = new Map<string, Handler[]>(); commands = new Map<string, any>(); tools = new Map<string, any>(); sent: any[] = [];
   on(event: string, handler: Handler) { const list = this.handlers.get(event) ?? []; list.push(handler); this.handlers.set(event, list); }
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
@@ -109,3 +110,162 @@ test("a read-only standby takes ownership after the active process releases its 
     await standbyPi.emit("session_shutdown", {}, standbyCtx);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const event of ["session_start", "session_tree", "session_shutdown"]) {
+  for (const command of ["remind", "cron", "pause", "stop all", "schedule_stop"]) {
+    for (const fail of [false, true]) {
+      test(`${command}: delayed ${fail ? "failed" : "successful"} save cannot update UI after ${event}`, async () => {
+        const root = mkdtempSync(join(tmpdir(), "pi-schedule-navigation-"));
+        const pi = new MockPi(); const ctx = context(join(root, "project"));
+        const next = context(join(root, "next-project"));
+        let defer = false;
+        let entered = false;
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        scheduleExtension(pi as any, { agentDir: join(root, "agent"), save: async (path, store) => {
+          if (defer) { entered = true; await gate; if (fail) throw new Error("Delayed failure"); }
+          await saveScheduleStore(path, store);
+        } });
+        try {
+          await pi.emit("session_start", {}, ctx);
+          await pi.commands.get("remind").handler("30m -- existing reminder", ctx);
+          defer = true;
+          const name = command === "pause" || command === "stop all" ? "schedule" : command;
+          const args = command === "remind" ? "40m -- new reminder" : command === "cron" ? "0 9 * * * -- morning review" : command;
+          const existing = await pi.tools.get("get_schedules").execute();
+          const pending = command === "schedule_stop"
+            ? pi.tools.get("schedule_stop").execute("stop", { task_id: existing.details.tasks[0].id }, undefined, undefined, ctx).then(
+              () => { throw new Error("Stale tool execution reported success"); },
+              (error: Error) => { expect(error.message).toContain(fail ? "Delayed failure" : "Session changed"); },
+            )
+            : pi.commands.get(name).handler(args, ctx);
+          await waitFor(() => entered);
+          const notifications = ctx.notifications.length;
+          const statuses = ctx.statusUpdates.length;
+          const navigation = pi.emit(event, {}, next);
+          release();
+          await Promise.all([pending, navigation]);
+          expect(ctx.notifications).toHaveLength(notifications);
+          expect(ctx.statusUpdates).toHaveLength(statuses);
+          if (event !== "session_shutdown") {
+            const state = await pi.tools.get("get_schedules").execute();
+            expect(state.details.tasks).toEqual([]);
+            expect(state.details.writable).toBe(true);
+          }
+        } finally {
+          release();
+          await pi.emit("session_shutdown", {}, next);
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+for (const action of ["pause", "stop", "stop all"]) {
+  for (const started of [false, true]) {
+    test(`failed ${action} preserves ${started ? "running" : "queued"} delivery ownership`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "pi-schedule-rollback-"));
+      const project = join(root, "project"); const agentDir = join(root, "agent");
+      const path = scheduleStorePath(agentDir, project);
+      const store = emptyScheduleStore(project);
+      store.tasks.push(createReminder({ prompt: "check this delivery exactly once", runAt: Date.now() - 1000 }, Date.now() - 60000, "due"));
+      await saveScheduleStore(path, store);
+      const pi = new MockPi(); const ctx = context(project);
+      let fail = false;
+      scheduleExtension(pi as any, { agentDir, save: async (path, store) => {
+        if (fail) throw new Error("Cannot save control change");
+        await saveScheduleStore(path, store);
+      } });
+      try {
+        await pi.emit("session_start", {}, ctx);
+        await waitFor(() => pi.sent.length === 1);
+        if (started) await pi.emit("agent_start", {}, ctx);
+        fail = true;
+        await pi.commands.get("schedule").handler(action, ctx);
+        expect(ctx.notifications.at(-1)).toContain("Cannot save control change");
+        fail = false;
+        if (!started) await pi.emit("agent_start", {}, ctx);
+        const [transformed] = await pi.emit("context", { messages: [{ role: "custom", ...pi.sent[0].message }] }, ctx);
+        expect(transformed.messages[0]?.content).toContain("check this delivery exactly once");
+        await pi.emit("agent_settled", {}, ctx);
+        expect(loadScheduleStore(path, project).tasks[0]).toMatchObject({ status: "completed", runs: 1 });
+        expect(pi.sent).toHaveLength(1);
+      } finally {
+        await pi.emit("session_shutdown", {}, ctx);
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test("settlement waits for a failed control save before completing its delivery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-schedule-settlement-"));
+  const project = join(root, "project"); const agentDir = join(root, "agent");
+  const path = scheduleStorePath(agentDir, project);
+  const store = emptyScheduleStore(project);
+  store.tasks.push(createReminder({ prompt: "settlement race", runAt: Date.now() - 1000 }, Date.now() - 60000, "due"));
+  await saveScheduleStore(path, store);
+  const pi = new MockPi(); const ctx = context(project);
+  let failNext = false; let entered = false; let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  scheduleExtension(pi as any, { agentDir, save: async (path, store) => {
+    if (failNext) { failNext = false; entered = true; await gate; throw new Error("Control save failed"); }
+    await saveScheduleStore(path, store);
+  } });
+  try {
+    await pi.emit("session_start", {}, ctx);
+    await waitFor(() => pi.sent.length === 1);
+    await pi.emit("agent_start", {}, ctx);
+    failNext = true;
+    const control = pi.commands.get("schedule").handler("stop all", ctx);
+    await waitFor(() => entered);
+    const settled = pi.emit("agent_settled", {}, ctx);
+    release();
+    await Promise.all([control, settled]);
+    expect(loadScheduleStore(path, project).tasks[0]).toMatchObject({ status: "completed", runs: 1 });
+    expect(pi.sent).toHaveLength(1);
+  } finally {
+    release(); await pi.emit("session_shutdown", {}, ctx);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const first of ["stop all", "remind", "cron"] as const) {
+  test(`a failed ${first} cannot erase or contaminate a concurrently created reminder`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-schedule-concurrent-"));
+    const agentDir = join(root, "agent");
+    const pi = new MockPi(); const ctx = context(join(root, "project"));
+    let failNext = false;
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    scheduleExtension(pi as any, { agentDir, save: async (path, store) => {
+      if (failNext) { failNext = false; entered = true; await gate; throw new Error("First write failed"); }
+      await saveScheduleStore(path, store);
+    } });
+    try {
+      await pi.emit("session_start", {}, ctx);
+      await pi.commands.get("remind").handler("30m -- original", ctx);
+      failNext = true;
+      const failed = first === "stop all"
+        ? pi.commands.get("schedule").handler(first, ctx)
+        : pi.commands.get(first).handler(first === "remind" ? "30m -- should not exist" : "0 9 * * * -- should not exist", ctx);
+      await waitFor(() => entered);
+      const created = pi.commands.get("remind").handler("40m -- concurrent reminder", ctx);
+      release();
+      await Promise.all([failed, created]);
+      const result = await pi.tools.get("get_schedules").execute();
+      const disk = loadScheduleStore(scheduleStorePath(agentDir, ctx.cwd), ctx.cwd);
+      expect(result.details.tasks).toEqual(disk.tasks);
+      expect(disk.tasks.map((task) => task.prompt).sort()).toEqual(["concurrent reminder", "original"]);
+      expect(disk.tasks.every((task) => task.status === "active")).toBe(true);
+      expect(ctx.notifications.some((message) => message.includes("First write failed"))).toBe(true);
+      expect(pi.sent).toHaveLength(0);
+    } finally {
+      release();
+      await pi.emit("session_shutdown", {}, ctx);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
