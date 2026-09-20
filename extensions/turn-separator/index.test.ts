@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import turnSeparator from "./index.ts";
 
 /** Fake ExtensionAPI that captures handlers, appended entries, and the renderer. */
-function harness() {
+function harness(now?: () => number) {
 	const handlers: Record<string, (event: any, ctx: any) => void> = {};
 	const appended: Array<{ type: string; data: any }> = [];
 	let renderer: ((entry: any, options: any, theme: any) => any) | undefined;
@@ -17,7 +17,7 @@ function harness() {
 			renderer = r;
 		},
 	};
-	turnSeparator(pi);
+	turnSeparator(pi, now);
 	const ctx = { mode: "tui" };
 	const fire = (evt: string, event: any = {}) => handlers[evt]?.(event, ctx);
 	return {
@@ -173,11 +173,13 @@ describe("turn-separator stats", () => {
 		expect(h.appended).toHaveLength(0);
 	});
 
-	test("renderer includes stats in the rule", () => {
+		test("expanded renderer includes stats while compact mode avoids duplicate usage", () => {
 		const h = harness();
 		const theme = { fg: (_c: string, s: string) => s };
 		const entry = { data: { seconds: 74, stats: { input: 100, output: 318, cacheRead: 4_100, cacheWrite: 0, cost: 0.21 } } };
-		const line = h.renderer!(entry, { expanded: false }, theme).render(100)[0];
+		const compact = h.renderer!(entry, { expanded: false }, theme).render(100)[0];
+		expect(compact).not.toContain("$0.21");
+		const line = h.renderer!(entry, { expanded: true }, theme).render(100)[0];
 		expect(line).toContain("Worked for 1m 14s");
 		expect(line).toContain("↑318");
 		expect(line).toContain("$0.21");
@@ -190,4 +192,38 @@ describe("turn-separator stats", () => {
 		expect(line).toContain("Worked for 5s");
 		expect(line).not.toContain("$");
 	});
+});
+
+
+for (const boundary of ["agent_start", "agent_settled", "session_shutdown", "session_tree"]) {
+  test(`${boundary} prevents prior work and usage leaking into the next block`, () => {
+    const h = harness();
+    h.fire("message_end", { message: { role: "assistant", usage: { input: 900, output: 999, cost: { total: 9 } } } });
+    h.fire("tool_execution_start");
+    h.fire(boundary);
+    h.fire("message_start", assistant);
+    expect(h.appended).toHaveLength(0);
+    h.fire("message_end", { message: { role: "assistant", usage: { input: 10, output: 2, cost: { total: 0.01 } } } });
+    h.fire("tool_execution_start");
+    h.fire("message_start", assistant);
+    expect(h.appended[0]!.data.stats).toMatchObject({ input: 10, output: 2, cost: 0.01 });
+  });
+}
+
+test("a response without stream timing does not inherit the prior response's rate or latency", () => {
+  let time = 1000;
+  const h = harness(() => time);
+  h.fire("before_provider_request");
+  time = 1200;
+  h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+  time = 2200;
+  h.fire("message_end", { message: { role: "assistant", usage: { output: 100 } } });
+  h.fire("before_provider_request");
+  time = 2500;
+  h.fire("message_end", { message: { role: "assistant", usage: { output: 50 } } });
+  h.fire("tool_execution_start");
+  h.fire("message_start", assistant);
+  expect(h.appended[0]!.data.stats.output).toBe(150);
+  expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
+  expect(h.appended[0]!.data.stats.tps).toBeUndefined();
 });
