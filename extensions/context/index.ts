@@ -136,7 +136,7 @@ export function collectReport(
     ? allTools
     : allTools.filter((tool) => tool?.name !== undefined && activeNames.has(tool.name));
 
-  const reported = typeof usage?.tokens === "number" && usage.tokens > 0 ? usage.tokens : undefined;
+  const reported = typeof usage?.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens >= 0 ? usage.tokens : undefined;
   // The raw components explain any gap between pi's figure and the estimate.
   const lastUsage = safeCall(() => readLastUsage(entries));
 

@@ -18,7 +18,11 @@ A report includes:
 - the largest individual entries
 - the independent estimated total and the latest provider usage components
 
-Rows use Pi's token estimator. The headline uses `getContextUsage()`, which is the value Pi uses for compaction. Differences are shown instead of forced to reconcile.
+Rows use Pi's token estimator. The headline uses `getContextUsage()`, which is the value Pi uses for compaction.
+When that value is unavailable (including after compaction), the headline says
+`Estimated`; a reported zero remains `Used 0`. Differences are shown instead of forced to reconcile.
+
+Display columns are Unicode-aware, including wide glyphs and combining marks.
 
 The report is a non-context transcript entry. It stores labels and counts, not context-file or skill contents. In non-TUI modes it is returned as a plain notification.
 
