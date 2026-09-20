@@ -68,6 +68,44 @@ async function firstTurn(h: ReturnType<typeof setup>, prompt = "please fix the r
   await flushDetachedRequest();
 }
 
+test("rename preserves manual wording and defeats a late generated title", async () => {
+  let finish!: (result: TitleResult) => void;
+  const h = setup({ request: async () => new Promise((resolve) => { finish = resolve; }) });
+  await h.pi.emit("session_start", {}, h.ctx);
+  await h.pi.emit("before_agent_start", { prompt: "investigate long running network requests" }, h.ctx);
+  await h.pi.commands.get("rename").handler("My exact title: with more than four words!", h.ctx);
+  finish({ title: "Late Generated Title" });
+  await flushDetachedRequest();
+  expect(h.pi.name).toBe("My exact title: with more than four words!");
+});
+
+test("rename prompt cancellation and session replacement leave the name unchanged", async () => {
+  const h = setup({ name: "Existing" });
+  h.ctx.mode = "tui";
+  h.ctx.ui.input = async () => undefined;
+  await h.pi.commands.get("rename").handler("", h.ctx);
+  expect(h.pi.name).toBe("Existing");
+  h.ctx.ui.input = async () => {
+    await h.pi.emit("session_shutdown", {}, h.ctx);
+    return "stale title";
+  };
+  await h.pi.commands.get("rename").handler("", h.ctx);
+  expect(h.pi.name).toBe("Existing");
+});
+
+test("an explicit title request cannot notify a replaced session", async () => {
+  let finish!: (result: TitleResult) => void;
+  const h = setup({ name: "Existing", request: async () => new Promise((resolve) => { finish = resolve; }) });
+  h.branch.push(userEntry("existing work"));
+  await h.pi.emit("session_start", {}, h.ctx);
+  const command = h.pi.commands.get("title").handler("now", h.ctx);
+  await h.pi.emit("session_shutdown", {}, h.ctx);
+  h.ctx.ui.notify = () => { throw new Error("stale UI"); };
+  finish({ title: "Late title" });
+  await command;
+  expect(h.pi.name).toBe("Existing");
+});
+
 describe("loadConfig", () => {
   test("defaults to enabled", () => {
     expect(loadConfig(join(tmpdir(), "missing-title-dir"))).toEqual({ enabled: true });
@@ -80,6 +118,14 @@ describe("loadConfig", () => {
     expect(loadConfig(dir)).toEqual({ enabled: true, model: undefined });
     writeFileSync(join(dir, "session-title.json"), "{oops");
     expect(loadConfig(dir)).toEqual({ enabled: true });
+  });
+
+  test("reads the independent Tab link switch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "session-title-config-"));
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({ enabled: false, tabLink: true }));
+    expect(loadConfig(dir)).toEqual({ enabled: false, model: undefined, tabLink: true });
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({ tabLink: false }));
+    expect(loadConfig(dir).tabLink).toBe(false);
   });
 });
 

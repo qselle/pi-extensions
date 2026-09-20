@@ -47,6 +47,16 @@ export function normalizeTitle(raw: unknown): string | undefined {
   return title || undefined;
 }
 
+/** Manual names preserve wording and punctuation rather than model-title rules. */
+export function normalizeManualTitle(raw: string): string | undefined {
+  const text = raw.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  const characters = [...text];
+  return characters.length > 120 ? `${characters.slice(0, 119).join("")}…` : text;
+}
+
 /** Enforce the noun-phrase contract on model output even if it echoes a task verb. */
 export function normalizeGeneratedTitle(raw: unknown): string | undefined {
   const normalized = normalizeTitle(raw);

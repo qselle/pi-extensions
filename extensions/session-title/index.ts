@@ -10,8 +10,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildTitlePrompt, normalizeTitle, provisionalTitle } from "./engine.ts";
+import { buildTitlePrompt, normalizeManualTitle, provisionalTitle } from "./engine.ts";
 import { requestTitle, type TitleResult } from "./request.ts";
+import { registerTabLink, type TabLinkOptions } from "./tab-link.ts";
 
 const CONFIG_FILE = "session-title.json";
 const MAX_TRACKED_PROMPTS = 6;
@@ -22,6 +23,8 @@ export interface SessionTitleConfig {
   enabled: boolean;
   /** "provider/model" override for the titling request. */
   model?: string;
+  /** Follow Pi names in Herdr when the tab is empty or already linked. */
+  tabLink?: boolean;
 }
 
 export function agentDirectory(): string {
@@ -34,6 +37,7 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
     return {
       enabled: parsed?.enabled !== false,
       model: typeof parsed?.model === "string" && parsed.model.includes("/") ? parsed.model : undefined,
+      ...(typeof parsed?.tabLink === "boolean" ? { tabLink: parsed.tabLink } : {}),
     };
   } catch {
     return { enabled: true };
@@ -43,11 +47,13 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
 export interface SessionTitleOptions {
   config?: SessionTitleConfig;
   request?: typeof requestTitle;
+  tabLink?: Omit<TabLinkOptions, "enabled">;
 }
 
 export default function sessionTitleExtension(pi: ExtensionAPI, options: SessionTitleOptions = {}): void {
   const config = options.config ?? loadConfig();
   const run = options.request ?? requestTitle;
+  const tabLink = registerTabLink(pi, { ...options.tabLink, enabled: config.tabLink });
 
   let prompts: string[] = [];
   /** True once the session has a name, from any source. Titling stops for good. */
@@ -148,9 +154,9 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   });
 
   pi.registerCommand("title", {
-    description: "Session title: /title [status|now|set <text>]",
+    description: "Session title: /title [status|now|set <text>|tab]",
     getArgumentCompletions: (prefix) => {
-      const items = ["status", "now", "set"]
+      const items = ["status", "now", "set", "tab", "tab status", "tab link", "tab auto", "tab off"]
         .filter((value) => value.startsWith(prefix.toLowerCase()))
         .map((value) => ({ value, label: value }));
       return items.length > 0 ? items : null;
@@ -159,8 +165,13 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
       const [command = "", ...rest] = args.trim().split(/\s+/);
       const action = command.toLowerCase();
 
+      if (action === "tab") {
+        await tabLink.command(rest.join(" "), ctx);
+        return;
+      }
+
       if (action === "set") {
-        const title = normalizeTitle(rest.join(" "));
+        const title = normalizeManualTitle(rest.join(" "));
         if (!title) {
           ctx.ui.notify("Usage: /title set <text>", "error");
           return;
@@ -178,7 +189,10 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
           ctx.ui.notify("Nothing to title yet.", "info");
           return;
         }
-        const result = await generate(ctx as never, prompts, true);
+        const pending = generate(ctx, prompts, true);
+        const generation = requestGeneration;
+        const result = await pending;
+        if (generation !== requestGeneration) return;
         ctx.ui.notify(
           result.title
             ? `Title: “${result.title}” (${result.model ?? "?"}, $${(result.usage?.cost ?? 0).toFixed(4)})`
@@ -189,10 +203,33 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
       }
 
       if (action && action !== "status") {
-        ctx.ui.notify("Usage: /title [status|now|set <text>]", "error");
+        ctx.ui.notify("Usage: /title [status|now|set <text>|tab]", "error");
         return;
       }
-      ctx.ui.notify(statusText(config, pi.getSessionName(), prompts.length, last, autoAttempted), "info");
+      ctx.ui.notify(`${statusText(config, pi.getSessionName(), prompts.length, last, autoAttempted)}\n${tabLink.status()}`, "info");
+    },
+  });
+
+  pi.registerCommand("rename", {
+    description: "Set a session name directly: /rename <text> (or open a name prompt)",
+    handler: async (args, ctx) => {
+      let raw: string | undefined = args.trim();
+      if (!raw) {
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify("Usage: /rename <text>", "info");
+          return;
+        }
+        const generation = requestGeneration;
+        raw = await ctx.ui.input("Session name", pi.getSessionName() ?? "Name this session");
+        if (generation !== requestGeneration || raw === undefined) return;
+      }
+      const title = normalizeManualTitle(raw);
+      if (!title) return;
+      cancelRequest();
+      pi.setSessionName(title);
+      named = true;
+      autoAttempted = true;
+      ctx.ui.notify(`Title set to “${title}”.`, "info");
     },
   });
 
