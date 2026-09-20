@@ -4,12 +4,16 @@ Runs an explicit shell command on a cadence and wakes Pi only when its result ma
 
 ## Usage
 
+Monitor control tools stay inactive until a monitor is created or restored.
+Use `/monitor` to start one.
+
 ```text
 /monitor 30s -- gh pr checks
 /monitor 1m --on failure -- npm test
 /monitor 5m --on success -- curl -fsS https://example.test/health
 /monitor 30s --on change --max-runs 40 -- ./scripts/status
 /monitor status
+/monitor view
 /monitor pause|resume|stop <id>
 /monitor stop all
 ```
@@ -22,6 +26,16 @@ Policies:
 
 Only `/monitor` can create or change a monitor command. `get_monitors` lists monitors and `monitor_stop` stops one.
 
+`/monitor view` opens a scrollable, searchable snapshot with full commands,
+check counts, UTC timestamps, wake conditions, exit status and pause/stop reasons.
+Use `/` to search, `n`/`N` to move between matches and Escape to close. Reopen to
+refresh; session navigation closes the panel. In RPC mode it prints the same full
+details. Viewing a monitor does not run its command or wake the model. Captured
+command output is not retained in the panel; an unobserved exit status stays unknown.
+
+Snapshots open at the overview. Home/End move to the top/bottom; live-follow and
+thinking controls are reserved for the transcript viewer.
+
 ## Dependencies and limitations
 
 - 4 active or paused monitors.
@@ -32,6 +46,11 @@ Only `/monitor` can create or change a monitor command. `get_monitors` lists mon
 - Runs only while a persistent session is open, idle, and has no queued user messages.
 
 The full command is stored in session state. Do not include secrets. Interruptions and provider errors pause the monitor. A wakeup does not grant permission for unrelated external or destructive actions.
+
+Pausing or stopping cancels an in-flight check. If you resume before that process
+settles, the fresh check waits for it; cancelled output cannot update the baseline,
+consume a check from the run limit, or trigger an alert. `monitor_stop` also cancels
+an in-flight command when a monitor ID is supplied.
 
 - Uses Pi's public extension API and host-provided `typebox`.
 - No third-party runtime packages.

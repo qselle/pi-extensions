@@ -1,3 +1,4 @@
+import { deferredTools } from "../../lib/deferred-tools.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatDuration } from "../loop/interval.ts";
@@ -18,6 +19,8 @@ import {
   type MonitorObservation,
 } from "./monitor.ts";
 import { runBoundedProcess } from "./runner.ts";
+import { SnapshotPanel } from "../../lib/transcript/snapshot-panel.ts";
+import { monitorBlocks } from "./panel.ts";
 
 const ENTRY_TYPE = "monitor-state";
 const WAKE_TYPE = "monitor-wakeup";
@@ -37,6 +40,8 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function monitorExtension(pi: ExtensionAPI, options: MonitorExtensionOptions = {}): void {
+  const controls = deferredTools(pi, ["monitor_stop", "get_monitors"]);
+  const panel = new SnapshotPanel(pi, "monitor", "monitors · snapshot");
   const jobs = new Map<string, MonitorJob>();
   const wakePrompts = new Map<string, string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -62,6 +67,7 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
   };
 
   const updateStatus = (ctx: ExtensionContext) => {
+    if (jobs.size) controls.activate();
     const current = active();
     if (current.length === 0) return ctx.ui.setStatus(STATUS_KEY, undefined);
     const next = current.filter((job) => job.nextRunAt !== null).sort((a, b) => a.nextRunAt! - b.nextRunAt!)[0];
@@ -107,19 +113,23 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
     if (!job) return scheduleTimer(ctx);
 
     runningCommandId = job.id;
-    commandAbort = new AbortController();
+    const controller = new AbortController();
+    commandAbort = controller;
     updateStatus(ctx);
     let observation: MonitorObservation;
     try {
       const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
       const args = process.platform === "win32" ? ["/d", "/s", "/c", job.command] : ["-lc", job.command];
-      observation = await (options.runCommand ?? runBoundedProcess)(shell, args, cwd, COMMAND_TIMEOUT_MS, commandAbort.signal);
+      observation = await (options.runCommand ?? runBoundedProcess)(shell, args, cwd, COMMAND_TIMEOUT_MS, controller.signal);
     } catch (error) {
       observation = { code: -1, killed: false, stdout: "", stderr: `Monitor execution failed: ${errorMessage(error)}` };
     }
     if (generation !== lifecycle) return;
     runningCommandId = undefined;
     commandAbort = undefined;
+    // Pausing and resuming may make the job active again before its cancelled
+    // process settles. That result belongs to the cancelled check, not the resume.
+    if (controller.signal.aborted) return scheduleTimer(ctx);
     const current = jobs.get(job.id);
     if (!current || current.status !== "active") return scheduleTimer(ctx);
     const observed = applyObservation(current, observation);
@@ -184,12 +194,13 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
   pi.registerCommand("monitor", {
     description: "Run an explicit command periodically and wake on change/failure/success",
     getArgumentCompletions: (prefix) => {
-      const items = ["status", "pause", "resume", "stop", "stop all"].filter((item) => item.startsWith(prefix.toLowerCase()))
+      const items = ["status", "view", "pause", "resume", "stop", "stop all"].filter((item) => item.startsWith(prefix.toLowerCase()))
         .map((value) => ({ value, label: value }));
       return items.length ? items : null;
     },
     handler: async (args, ctx) => {
       const input = args.trim();
+      if (input === "view") return panel.open(ctx, monitorBlocks([...jobs.values()]));
       if (!input || input === "status" || input === "list") return ctx.ui.notify(formatMonitorList([...jobs.values()]), "info");
       const management = /^(pause|resume|stop)(?:\s+(\S+))?$/i.exec(input);
       if (management) return manage(management[1]!.toLowerCase(), management[2] ?? "", ctx);
@@ -212,6 +223,7 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
       const job = id ? jobs.get(id) : undefined;
       if (!job || (job.status !== "active" && job.status !== "paused")) throw new Error("No active monitor matched the request.");
       jobs.set(job.id, stopMonitor(job, params.reason?.trim() || "Stopped by the model after handling the monitor alert."));
+      if (runningCommandId === job.id) commandAbort?.abort();
       save(ctx);
       return { content: [{ type: "text" as const, text: `Monitor ${job.id} stopped.` }], details: { job: jobs.get(job.id) } };
     },
@@ -267,6 +279,7 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
   });
 
   const restore = (ctx: ExtensionContext) => {
+    controls.initialize();
     closed = false;
     lifecycle++;
     commandAbort?.abort();
