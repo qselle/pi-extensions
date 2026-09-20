@@ -18,3 +18,12 @@ test("an alias can remain dormant while follow-up controls activate", () => {
   controls.initialize(); controls.activate(["job_wait"]);
   expect(active).toEqual(["bash", "job_wait"]);
 });
+
+test("branch restoration retains tools already withheld by this instance", () => {
+  let active = ["read", "update_goal"];
+  const controls = deferredTools({ getActiveTools: () => active, setActiveTools: (next: string[]) => { active = next; } } as any, ["update_goal", "never-selected"]);
+  controls.initialize();
+  controls.initialize();
+  controls.activate();
+  expect(active).toEqual(["read", "update_goal"]);
+});
