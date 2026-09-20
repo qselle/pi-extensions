@@ -20,8 +20,12 @@
     ]
   },
   "include": [
+    "lib/**/*.ts",
     "extensions/**/*.ts",
     "repository.test.ts",
-    "themes/**/*.ts"
+    "themes/**/*.ts",
+    "package.integration-fixture.ts",
+    "package.integration.test.ts",
+    "scripts/*fixture.ts"
   ]
 }

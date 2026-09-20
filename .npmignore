@@ -1,0 +1,7 @@
+**/*.test.ts
+**/*fixture.ts
+**/*benchmark.ts
+**/.DS_Store
+**/*.log
+**/.env
+**/.env.*
