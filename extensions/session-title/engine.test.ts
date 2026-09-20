@@ -4,11 +4,21 @@ import {
   MAX_TITLE_WORDS,
   buildTitlePrompt,
   normalizeGeneratedTitle,
+  normalizeManualTitle,
   normalizeTitle,
   pickAnchor,
   provisionalTitle,
   TITLE_SYSTEM_PROMPT,
 } from "./engine.ts";
+
+test("manual names preserve wording, remove controls, and cap Unicode characters", () => {
+  expect(normalizeManualTitle("\x1b]0;bad\x07\x1b[31mMy  title:\nwith five more words!\x1b[0m")).toBe("My title: with five more words!");
+  expect(normalizeManualTitle("\t\n")).toBeUndefined();
+  expect(normalizeManualTitle("Session")).toBe("Session");
+  const title = normalizeManualTitle("🐈".repeat(130))!;
+  expect([...title]).toHaveLength(120);
+  expect(title.endsWith("…")).toBe(true);
+});
 
 describe("normalizeTitle", () => {
   test("keeps a good title as-is", () => {
