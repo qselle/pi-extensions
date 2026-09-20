@@ -538,3 +538,45 @@ test("keeps compact and expanded goal UI within responsive widths", () => {
     }
   }
 });
+
+for (const action of ["clear", "edit", "replacement", "panel"] as const) {
+  test(`stale ${action} dialog cannot change a goal restored on another branch`, async () => {
+    const pi = new MockPi();
+    const ctx = mockContext(pi);
+    goalExtension(pi as any);
+    await pi.commands.get("goal").handler("Original objective", ctx);
+    let release!: (value: any) => void;
+    const pending = new Promise<any>((resolve) => { release = resolve; });
+    if (action === "edit") ctx.ui.editor = () => pending;
+    else if (action === "panel") ctx.ui.custom = () => pending;
+    else ctx.ui.confirm = () => pending;
+    const running = pi.commands.get("goal").handler(action === "replacement" ? "Replacement objective" : action === "panel" ? "" : action, ctx);
+    const replacement = createGoal("Other branch objective");
+    pi.entries.push({ type: "custom", customType: "goal-state", data: { version: 2, goal: replacement } });
+    await pi.emit("session_tree", {}, ctx);
+    const count = pi.entries.length;
+    release(action === "edit" ? "Edited old objective" : action === "panel" ? "pause" : true);
+    await running;
+    expect(pi.entries).toHaveLength(count);
+    const result = await pi.tools.get("get_goal").execute("read", {}, undefined, undefined, ctx);
+    expect(JSON.parse(result.content[0].text).goal.objective).toBe("Other branch objective");
+    await pi.emit("session_shutdown", {}, ctx);
+  });
+}
+
+test("a pending clear dialog cannot schedule continuation after shutdown", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.commands.get("goal").handler("Original objective", ctx);
+  let release!: (value: boolean) => void;
+  ctx.ui.confirm = () => new Promise((resolve) => { release = resolve; });
+  const running = pi.commands.get("goal").handler("clear", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+  const count = pi.entries.length;
+  release(true);
+  await running;
+  await Bun.sleep(40);
+  expect(pi.entries).toHaveLength(count);
+  expect(pi.sent).toHaveLength(0);
+});

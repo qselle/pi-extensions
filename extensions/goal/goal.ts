@@ -246,10 +246,11 @@ export function goalChecksComplete(goal: GoalState): boolean {
   return goal.checks.every((check) => check.status === "complete" || check.status === "cancelled");
 }
 
-export function goalCheckProgress(goal: GoalState): { complete: number; total: number } {
+export function goalCheckProgress(goal: GoalState): { complete: number; total: number; cancelled: number } {
   return {
-    complete: goal.checks.filter((check) => check.status === "complete" || check.status === "cancelled").length,
-    total: goal.checks.length,
+    complete: goal.checks.filter((check) => check.status === "complete").length,
+    total: goal.checks.filter((check) => check.status !== "cancelled").length,
+    cancelled: goal.checks.filter((check) => check.status === "cancelled").length,
   };
 }
 

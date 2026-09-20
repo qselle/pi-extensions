@@ -1,3 +1,4 @@
+import { deferredTools } from "../../lib/deferred-tools.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
@@ -33,6 +34,7 @@ import {
 } from "./goal.ts";
 import {
   GOAL_COMPLETED_EVENT,
+  GOAL_CHANGED_EVENT,
   createGoalCompletedEvent,
 } from "./events.ts";
 import {
@@ -97,7 +99,9 @@ const UpdateGoalParameters = Type.Object({
 });
 
 export default function goalExtension(pi: ExtensionAPI) {
+  const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal"]);
   let goal: GoalState | undefined;
+  let sessionGeneration = 0;
   let continuationTimer: ReturnType<typeof setTimeout> | undefined;
   let nextRunIsContinuation = false;
   let currentRunIsContinuation = false;
@@ -126,7 +130,9 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   const persist = () => {
+    if (goal) controls.activate();
     pi.appendEntry<GoalEntry>(ENTRY_TYPE, { version: 2, goal: goal ?? null });
+    pi.events.emit(GOAL_CHANGED_EVENT, { version: 1, status: goal?.status ?? "none" });
   };
 
   const save = (_ctx?: ExtensionContext) => {
@@ -247,8 +253,11 @@ export default function goalExtension(pi: ExtensionAPI) {
       ctx.ui.notify("No goal is currently set.", "info");
       return;
     }
+    const snapshot = goal;
+    const generation = sessionGeneration;
     const confirmed = await ctx.ui.confirm("Clear goal?", "The goal card and automatic continuation will stop.");
     if (!confirmed) return;
+    if (generation !== sessionGeneration || snapshot !== goal) return;
     stopContinuationTimer();
     goal = undefined;
     save(ctx);
@@ -260,8 +269,11 @@ export default function goalExtension(pi: ExtensionAPI) {
       ctx.ui.notify("No goal is currently set.", "warning");
       return;
     }
+    const snapshot = goal;
+    const generation = sessionGeneration;
     const edited = await ctx.ui.editor("Edit goal", goal.objective);
     if (edited === undefined) return;
+    if (generation !== sessionGeneration || snapshot !== goal) return;
     try {
       const wasActive = goal.status === "active";
       goal = editGoalObjective(goal, edited);
@@ -274,6 +286,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   };
 
   const setGoalFromCommand = async (objective: string, ctx: ExtensionCommandContext) => {
+    const snapshot = goal;
+    const generation = sessionGeneration;
     if (shouldConfirmReplacement(goal)) {
       const current = truncateToWidth(goal!.objective.replace(/\s+/g, " "), 120, "…");
       const replacement = truncateToWidth(objective.replace(/\s+/g, " "), 120, "…");
@@ -283,6 +297,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       );
       if (!confirmed) return;
     }
+    if (generation !== sessionGeneration || snapshot !== goal) return;
 
     try {
       createNewGoal(objective, ctx);
@@ -294,8 +309,10 @@ export default function goalExtension(pi: ExtensionAPI) {
   };
 
   const showGoalPanel = async (ctx: ExtensionCommandContext) => {
+    const generation = sessionGeneration;
     if (!goal) {
       const objective = await ctx.ui.editor("Set goal", "");
+      if (generation !== sessionGeneration || goal) return;
       if (objective?.trim()) await setGoalFromCommand(objective, ctx);
       return;
     }
@@ -324,6 +341,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       pi.events.emit(OVERLAY_MODAL_EVENT, { id: "goal-panel", open: false });
     }
 
+    if (generation !== sessionGeneration || snapshot !== goal) return;
     if (action === "edit") await editGoal(ctx);
     else if (action === "pause") pauseGoal(ctx);
     else if (action === "resume") resumeGoal(ctx);
@@ -340,6 +358,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
+      const generation = sessionGeneration;
       stopContinuationTimer();
       try {
         const input = args.trim();
@@ -354,7 +373,7 @@ export default function goalExtension(pi: ExtensionAPI) {
           }
         }
       } finally {
-        if (goal?.status === "active") scheduleContinuation(ctx);
+        if (generation === sessionGeneration && goal?.status === "active") scheduleContinuation(ctx);
       }
     },
   });
@@ -664,6 +683,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   const restore = (ctx: ExtensionContext) => {
+    controls.initialize();
+    sessionGeneration++;
     goal = undefined;
     lastAssistantText = undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -675,6 +696,8 @@ export default function goalExtension(pi: ExtensionAPI) {
       const restored = decodeGoalEntry(entry.data);
       if (restored) goal = restored.goal ?? undefined;
     }
+    if (goal) controls.activate();
+    pi.events.emit(GOAL_CHANGED_EVENT, { version: 1, status: goal?.status ?? "none" });
     agentRunning = false;
     runGoalId = undefined;
     runStartedAt = undefined;
@@ -692,6 +715,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_compact", () => overlayCard.invalidate());
   pi.on("session_shutdown", () => {
+    sessionGeneration++;
     stopContinuationTimer();
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
@@ -719,7 +743,8 @@ function renderGoalToolResult(details: GoalToolDetails | undefined, theme: Theme
   const preview = details.action === "progress" && current
     ? current.content
     : state.objective;
-  const progressText = progress.total > 0 ? `${progress.complete}/${progress.total} · ` : "";
+  const progressText = (progress.total > 0 ? `${progress.complete}/${progress.total} · ` : "")
+    + (progress.cancelled > 0 ? `${progress.cancelled} cancelled · ` : "");
   const symbol = state.status === "blocked" || state.status === "usage_limited"
     ? theme.fg("error", "!")
     : state.status === "budget_limited" || state.status === "stalled"
