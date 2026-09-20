@@ -95,6 +95,7 @@ interface ManagedAgent extends AgentSnapshot {
   resume?: ChildCheckpoint;
   inbox: string[];
   resuming?: Promise<void>;
+  resumeController?: AbortController;
   client?: AgentClient;
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
@@ -257,8 +258,9 @@ export class SubagentCoordinator {
   async suspend(): Promise<SavedAgent[]> {
     this.active = false; this.generation++;
     const agents = [...this.agents.values()];
-    for (const agent of agents) { agent.suppressCompletion = true; agent.generation = -1; }
+    for (const agent of agents) { agent.suppressCompletion = true; agent.generation = -1; agent.resumeController?.abort(); }
     const outcomes = await Promise.allSettled(agents.map(async (agent) => {
+      await agent.resuming?.catch(() => undefined);
       if (agent.client) { await agent.client.stop(); agent.client = undefined; }
       this.captureTranscript(agent);
       if (!agent.checkpoint && !agent.cleanupDone) { await agent.cleanup(); agent.cleanupDone = true; }
@@ -272,7 +274,8 @@ export class SubagentCoordinator {
     return saved;
   }
 
-  private async resumeAgent(agent: ManagedAgent, parentContext?: unknown): Promise<void> {
+  private async resumeAgent(agent: ManagedAgent, parentContext?: unknown, signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
     if (agent.client) return;
     try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Retain the last complete checkpoint. */ }
     if (!agent.resume) throw new Error(`No durable conversation is available for ${agent.name}; spawn a new child.`);
@@ -280,25 +283,47 @@ export class SubagentCoordinator {
     if (this.openCount() + this.reservations >= this.maxOpenAgents) throw new Error(`At most ${this.maxOpenAgents} subagents may remain open`);
     this.reservations++;
     const generation = this.generation;
+    const controller = new AbortController();
+    agent.resumeController = controller;
+    const resumeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const work = (async () => {
-      const runtime = await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume });
+      const runtime = await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume }, resumeSignal);
+      const abortStartup = () => void runtime.client.stop().catch(() => undefined);
+      resumeSignal.addEventListener("abort", abortStartup, { once: true });
       try {
-        await runtime.client.start(); this.assertGeneration(generation);
+        throwIfAborted(resumeSignal);
+        this.assertGeneration(generation);
+        await runtime.client.start();
+        throwIfAborted(resumeSignal);
+        this.assertGeneration(generation);
+        if (agent.status === "closed") throw new Error(`Subagent ${agent.name} was closed during resume`);
         agent.client = runtime.client; agent.cleanup = runtime.cleanup; agent.cleanupDone = false;
         agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript;
         agent.generation = generation; agent.suppressCompletion = false;
         this.attach(agent, runtime.client);
-      } catch (error) { await runtime.client.stop(); await runtime.cleanup(); throw error; }
+      } catch (error) {
+        try { await runtime.client.stop(); } finally { await runtime.cleanup(); }
+        throw error;
+      } finally { resumeSignal.removeEventListener("abort", abortStartup); }
     })();
     agent.resuming = work;
-    try { await work; } finally { agent.resuming = undefined; this.reservations = Math.max(0, this.reservations - 1); }
+    try { await work; } finally {
+      agent.resuming = undefined;
+      if (agent.resumeController === controller) agent.resumeController = undefined;
+      if (generation === this.generation) this.reservations = Math.max(0, this.reservations - 1);
+    }
   }
 
-  async send(name: string, message: string, parentContext?: unknown): Promise<AgentSnapshot> {
+  async send(name: string, message: string, parentContext?: unknown, signal?: AbortSignal): Promise<AgentSnapshot> {
+    throwIfAborted(signal);
     const agent = this.requireAgent(name);
+    const generation = this.generation;
     const input = boundedInput(message, "send message", MAX_MESSAGE_CHARS);
     if (agent.status === "closed") throw new Error(`Subagent ${agent.name} is closed`);
-    await this.resumeAgent(agent, parentContext);
+    await this.resumeAgent(agent, parentContext, signal);
+    throwIfAborted(signal);
+    this.assertGeneration(generation);
+    if (this.agents.get(agent.id) !== agent || (agent.status as AgentStatus) === "closed") throw new Error(`Subagent ${agent.name} is no longer available`);
     const client = agent.client;
     if (!client) throw new Error(`Subagent ${agent.name} is unavailable`);
     const queued = agent.inbox.splice(0);
@@ -324,6 +349,8 @@ export class SubagentCoordinator {
   async interrupt(name: string): Promise<AgentSnapshot> {
     const agent = this.requireAgent(name);
     agent.inbox = [];
+    agent.resumeController?.abort();
+    await agent.resuming?.catch(() => undefined);
     this.changed();
     if (agent.status === "closed") throw new Error(`Subagent ${agent.name} is closed`);
     await agent.client?.clearQueue?.();
@@ -568,6 +595,7 @@ export class SubagentCoordinator {
     if (agent.closing) return agent.closing;
     if (agent.status === "closed" && !agent.client && agent.cleanupDone) return Promise.resolve();
     agent.status = "closed";
+    agent.resumeController?.abort();
     agent.inbox = [];
     agent.resume = undefined;
     agent.endedAt ??= this.now();
@@ -576,9 +604,10 @@ export class SubagentCoordinator {
       agent.completion.resolve();
     }
     this.changed();
-    const client = agent.client;
     const operation = (async () => {
       const failures: unknown[] = [];
+      await agent.resuming?.catch(() => undefined);
+      const client = agent.client;
       if (client) {
         try {
           await client.stop();

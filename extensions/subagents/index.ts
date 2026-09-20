@@ -262,7 +262,7 @@ export default function registerSubagents(
         return toolResult("spawn", [agent], `Started ${agent.name} with ${runtime.model}${runtime.thinking ? ` (${runtime.thinking})` : ""}. Continue non-overlapping work; completion will arrive automatically.`);
       }
       if (params.action === "send") {
-        const agent = await coordinator.send(params.agent_name ?? "", params.message ?? "", ctx);
+        const agent = await coordinator.send(params.agent_name ?? "", params.message ?? "", ctx, signal);
         return toolResult("send", [agent], `Sent follow-up to ${agent.name}.`);
       }
       if (params.action === "queue") {

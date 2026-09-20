@@ -45,6 +45,10 @@ stopped children and unread final results; it never starts a model call. `send`
 explicitly resumes from a copy of the saved conversation. Older branch checkpoints
 do not include later child turns. `/subagents` can inspect saved transcripts.
 
+Closing, interrupting, or leaving the session also cancels a resume still starting
+up. Cancelling a `send` before dispatch starts no child turn and keeps queued input
+for a later explicit send; `interrupt` intentionally clears that input.
+
 Queue-only messages survive a normal reload. `interrupt` discards this inbox and
 clears the RPC input queue before and after aborting. Submitted queued messages
 are removed before RPC dispatch, so an ambiguous failure cannot replay them.
