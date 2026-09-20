@@ -21,6 +21,7 @@ export interface AgentClient {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
   abort(): Promise<void>;
+  clearQueue?(): Promise<void>;
   stop(): Promise<void>;
   onEvent(listener: (event: RpcEvent) => void): () => void;
   onExit(listener: (error: Error) => void): () => void;
@@ -132,6 +133,10 @@ export class RpcAgentClient implements AgentClient {
 
   steer(message: string): Promise<void> {
     return this.request({ type: "steer", message }).then(() => undefined);
+  }
+
+  clearQueue(): Promise<void> {
+    return this.request({ type: "clear_queue" }).then(() => undefined);
   }
 
   abort(): Promise<void> {

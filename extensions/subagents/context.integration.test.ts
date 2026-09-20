@@ -14,10 +14,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from ${JSON.stringify(Bun.resolveSync("@earendil-works/pi-coding-agent", import.meta.dir))};
 import { createChildContext } from ${JSON.stringify(contextModule)};
 
-export default async function () {
+async function verify() {
   const root = await mkdtemp(join(tmpdir(), "pi-subagents-context-parent-"));
   try {
     const parent = SessionManager.create(root, root);
@@ -57,17 +57,20 @@ export default async function () {
     await rm(root, { recursive: true, force: true });
   }
 }
+await verify();
+console.log("native assertions executed");
 `, "utf8");
 
   try {
     const result = Bun.spawnSync({
-      cmd: [process.execPath, piCli, "--no-extensions", "-e", script, "--list-models"],
+      cmd: [process.execPath, script],
       cwd: resolve(import.meta.dir, "../.."),
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env,
+      env: { ...process.env, PI_CODING_AGENT_DIR: join(directory, "agent") },
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toContain("native assertions executed");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

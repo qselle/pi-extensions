@@ -1,3 +1,4 @@
+import { SUBAGENT_STATE, restoreAgents } from "./persistence.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   SessionManager,
@@ -9,6 +10,8 @@ import { Type } from "typebox";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
 import {
   createChildContext,
+  checkpointFile,
+  removeCheckpoint,
   parentMessages,
   summarizeParent,
   type ChildContext,
@@ -68,7 +71,7 @@ export interface SubagentsExtensionOptions {
   maxOpenAgents?: number;
 }
 
-const ActionSchema = StringEnum(["spawn", "send", "interrupt", "wait", "list", "close"] as const);
+const ActionSchema = StringEnum(["spawn", "send", "queue", "read", "interrupt", "wait", "list", "close"] as const);
 const ContextSchema = StringEnum(["fresh", "summary", "fork"] as const);
 const ThinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 const WaitModeSchema = StringEnum(["any", "all"] as const);
@@ -101,8 +104,19 @@ export default function registerSubagents(
   const summaryWork = new SharedWork<string>();
   let card: ReturnType<typeof registerOverlayCard>;
   let activeContext: ExtensionContext | undefined;
+  let restoring = false;
+  let lastCheckpoint = "";
   let usageTotals = emptySubagentUsage();
   let activeTranscriptRefresh: (() => void) | undefined;
+  let closeTranscript: (() => void) | undefined;
+  let viewRevision = 0;
+  const dismissTranscript = () => {
+    viewRevision++;
+    closeTranscript?.();
+    closeTranscript = undefined;
+    activeTranscriptRefresh = undefined;
+    pi.events.emit(OVERLAY_MODAL_EVENT, { id: "subagent-transcript", open: false });
+  };
 
   const syncUsageStatus = () => {
     if (!activeContext?.hasUI) return;
@@ -119,7 +133,7 @@ export default function registerSubagents(
     const ctx = request.parentContext as any;
     if (!ctx) throw new Error("Subagent spawn is missing its parent context");
     let summary: string | undefined;
-    if (request.contextMode === "summary") {
+    if (request.contextMode === "summary" && !request.resume) {
       const key = `${ctx.sessionManager.getSessionId?.() ?? "session"}:${ctx.sessionManager.getLeafId() ?? "empty"}`;
       summary = await summaryWork.acquire(
         key,
@@ -128,7 +142,7 @@ export default function registerSubagents(
       );
     }
 
-    const childContext = await createContext(ctx, request.contextMode, summary);
+    const childContext = await createContext(ctx, request.contextMode, summary, request.resume);
     try {
       const invocation = getPiCommand(buildChildArgs(pi, ctx, childContext, request));
       const client = createClient({
@@ -140,6 +154,7 @@ export default function registerSubagents(
       return {
         client,
         cleanup: childContext.cleanup,
+        checkpoint: childContext.checkpoint,
         transcript: () => childTranscriptEntries(childContext, request.task, request.cwd),
       };
     } catch (error) {
@@ -155,6 +170,11 @@ export default function registerSubagents(
       onChange: () => {
         card?.invalidate();
         activeTranscriptRefresh?.();
+        if (activeContext && !restoring) {
+          const agents = coordinator.checkpoint();
+          const signature = JSON.stringify(agents);
+          if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
+        }
       },
       onCompletion: (agent) => {
         pi.sendMessage({
@@ -202,7 +222,7 @@ export default function registerSubagents(
     label: "Subagents",
     description: [
       "Coordinate bounded, persistent child agents in isolated Pi sessions.",
-      "Actions: spawn, send, interrupt, wait, list, close.",
+      "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Read retrieves the latest result. Reload/quit stop processes and retain conversations; send explicitly resumes a restored child.",
       "Spawn returns immediately; completions are delivered automatically.",
       "Children inherit the current model, thinking level, active tools, working directory, and project instructions.",
       "Spawn may override model and thinking for a clear task-specific reason.",
@@ -242,8 +262,16 @@ export default function registerSubagents(
         return toolResult("spawn", [agent], `Started ${agent.name} with ${runtime.model}${runtime.thinking ? ` (${runtime.thinking})` : ""}. Continue non-overlapping work; completion will arrive automatically.`);
       }
       if (params.action === "send") {
-        const agent = await coordinator.send(params.agent_name ?? "", params.message ?? "");
+        const agent = await coordinator.send(params.agent_name ?? "", params.message ?? "", ctx);
         return toolResult("send", [agent], `Sent follow-up to ${agent.name}.`);
+      }
+      if (params.action === "queue") {
+        const agent = coordinator.queue(params.agent_name ?? "", params.message ?? "");
+        return toolResult("queue", [agent], `Queued for ${agent.name}; use send to deliver. No child turn was started or interrupted.`);
+      }
+      if (params.action === "read") {
+        const agent = coordinator.read(params.agent_name ?? "");
+        return toolResult("read", [agent], formatAgent(agent, true));
       }
       if (params.action === "interrupt") {
         const agent = await coordinator.interrupt(params.agent_name ?? "");
@@ -276,7 +304,9 @@ export default function registerSubagents(
         return toolResult("list", agents, formatAgents(agents, false));
       }
       if (params.action === "close") {
+        const saved = coordinator.checkpoint().find((row) => row.agent.name.toLowerCase() === params.agent_name?.toLowerCase() || row.agent.id === params.agent_name);
         const agent = await coordinator.close(params.agent_name ?? "");
+        if (saved?.resume) await removeCheckpoint(ctx, saved.resume);
         return toolResult("close", [agent], `Closed ${agent.name}.`);
       }
       throw new Error(`Unknown subagents action: ${params.action}`);
@@ -288,6 +318,8 @@ export default function registerSubagents(
   pi.registerCommand("subagents", {
     description: "Inspect child agent state and results",
     handler: async (_args, ctx) => {
+      dismissTranscript();
+      const revision = viewRevision;
       const agents = coordinator.list();
       if (agents.length === 0) {
         ctx.ui.notify("No subagents in this session.", "info");
@@ -295,16 +327,29 @@ export default function registerSubagents(
       }
       const labels = agents.map((agent) => `${statusSymbol(agent)} ${agent.name} · ${agent.contextMode} · ${agent.status} · ${runtimeLabel(agent)} · ${compact(agent.task, 48)}`);
       const selected = await ctx.ui.select(`Subagents (${agents.filter(isActive).length} running)`, labels);
-      if (!selected) return;
+      if (!selected || revision !== viewRevision) return;
       const agent = agents[labels.indexOf(selected)];
       if (!agent) return;
       if (ctx.mode !== "tui") {
         ctx.ui.notify(boundedText(formatAgent(agent, true), 4 * 1024), agent.status === "failed" ? "error" : "info");
         return;
       }
+      const saved = coordinator.checkpoint().find((row) => row.agent.id === agent.id);
+      if (saved?.resume && !isActive(agent)) {
+        try {
+          const file = await checkpointFile(ctx, saved.resume);
+          const session = SessionManager.open(file);
+          const entries = (saved.resume.leafId ? session.getBranch(saved.resume.leafId) : []).slice(saved.resume.initialEntryCount);
+          const first = entries.findIndex((entry: any) => entry.type === "message" && entry.message?.role === "user");
+          if (first >= 0) entries.splice(first, 1);
+          coordinator.restoreTranscript(agent.name, entries);
+        } catch { ctx.ui.notify("Saved child transcript is unavailable; the bounded result is still retained.", "warning"); }
+        if (revision !== viewRevision) return;
+      }
       pi.events.emit(OVERLAY_MODAL_EVENT, { id: "subagent-transcript", open: true });
       try {
         await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+          closeTranscript = () => done(undefined);
           const viewer = new LiveTranscriptViewer(
             () => coordinator.transcript(agent.name),
             theme,
@@ -322,28 +367,42 @@ export default function registerSubagents(
           overlayOptions: { anchor: "center", width: "92%", maxHeight: "90%", minWidth: 60, margin: 1 },
         });
       } finally {
-        activeTranscriptRefresh = undefined;
-        pi.events.emit(OVERLAY_MODAL_EVENT, { id: "subagent-transcript", open: false });
+        if (revision === viewRevision) {
+          closeTranscript = undefined;
+          activeTranscriptRefresh = undefined;
+          pi.events.emit(OVERLAY_MODAL_EVENT, { id: "subagent-transcript", open: false });
+        }
       }
     },
   });
 
   pi.on("session_start", (_event, ctx) => {
+    dismissTranscript();
     summaryWork.clear();
+    restoring = true;
     restoreUsage(ctx);
-    coordinator.startSession();
+    coordinator.restore(restoreAgents(ctx.sessionManager.getBranch()));
+    lastCheckpoint = JSON.stringify(coordinator.checkpoint());
+    restoring = false;
   });
 
-  pi.on("session_tree", (_event, ctx) => restoreUsage(ctx));
+  pi.on("session_tree", async (_event, ctx) => {
+    dismissTranscript(); restoring = true;
+    const saved = restoreAgents(ctx.sessionManager.getBranch());
+    try { await coordinator.suspend(); } finally {
+      restoreUsage(ctx); coordinator.restore(saved);
+      lastCheckpoint = JSON.stringify(coordinator.checkpoint()); restoring = false;
+    }
+  });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     summaryWork.clear();
-    activeTranscriptRefresh = undefined;
+    dismissTranscript();
     ctx.ui.setStatus(USAGE_STATUS_KEY, undefined);
-    activeContext = undefined;
     try {
-      await coordinator.shutdown();
+      await coordinator.suspend();
     } finally {
+      activeContext = undefined;
       card.unregister();
     }
   });
@@ -411,6 +470,9 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean): string {
     `runtime: ${runtimeLabel(agent)}`,
     `task: ${agent.task}`,
   ];
+  if (agent.queued) lines.push(`queued: ${agent.queued} message(s); delivered only by send`);
+  if (agent.unread) lines.push("unread result available: use read or wait");
+  if (agent.status === "stopped") lines.push("stopped after session transition; send explicitly resumes the saved conversation");
   if (agent.error) lines.push(`error: ${agent.error}`);
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
   else if (includeOutput && isActive(agent)) lines.push("", "(still running)");

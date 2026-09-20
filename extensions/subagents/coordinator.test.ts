@@ -236,3 +236,35 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+
+test("retained stopped conversations are bounded separately from running process capacity", async () => {
+  const { coordinator } = harness(16);
+  for (let i = 0; i < 16; i++) await coordinator.spawn(request(`child-${i}`));
+  const saved = await coordinator.suspend();
+  coordinator.restore(saved);
+  await expect(coordinator.spawn(request("overflow"))).rejects.toThrow("16 retained child conversations");
+  await coordinator.close("child-0");
+  await coordinator.spawn(request("replacement"));
+  await coordinator.shutdown();
+});
+
+
+test("events from an exited runtime cannot settle its resumed replacement", async () => {
+  const clients: FakeClient[] = [];
+  const coordinator = new SubagentCoordinator({ createRuntime: async () => {
+    const client = new FakeClient(); clients.push(client);
+    return { client, cleanup: async () => {}, checkpoint: () => ({ directory: "pi-subagent-context-test", file: "test.jsonl", initialEntryCount: 0, leafId: "leaf" }) };
+  } });
+  coordinator.startSession(); await coordinator.spawn(request("durable"));
+  clients[0]!.exit(new Error("process exited"));
+  await Promise.resolve();
+  await coordinator.send("durable", "Resume explicitly");
+  clients[0]!.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "stale output" }] } });
+  clients[0]!.emit({ type: "agent_settled" });
+  clients[0]!.exit(new Error("late exit"));
+  expect(coordinator.list()[0]!.status).toBe("running");
+  expect(coordinator.list()[0]!.output).toBe("");
+  expect(coordinator.list()[0]!.usage.turns).toBe(0);
+  await coordinator.shutdown();
+});

@@ -12,7 +12,7 @@ test("renders and navigates a live transcript with Pi's real TUI utilities", asy
   await writeFile(script, `
 import { LiveTranscriptViewer } from ${JSON.stringify(transcriptModule)};
 
-export default function () {
+function verify() {
   const theme = {
     fg: (_color, value) => value,
     bg: (_color, value) => value,
@@ -34,7 +34,7 @@ export default function () {
   };
   let renders = 0;
   let closed = false;
-  const tui = { terminal: { rows: 18 }, requestRender() { renders++; } };
+  const tui = { terminal: { rows: 42 }, requestRender() { renders++; } };
   const transcript = {
     agent: {
       id: "a",
@@ -66,22 +66,27 @@ export default function () {
     if (!text.includes(expected)) throw new Error("missing transcript section: " + expected);
   }
   if (output.some((line) => line.length > 60)) throw new Error("transcript exceeded render width");
+  tui.terminal.rows = 18;
+  viewer.render(60);
   viewer.handleInput("up");
-  viewer.handleInput("end");
+  viewer.handleInput("\\x1b[F");
   viewer.handleInput("q");
   if (renders < 2 || !closed) throw new Error("transcript controls did not update and close");
 }
+await verify();
+console.log("native assertions executed");
 `, "utf8");
 
   try {
     const result = Bun.spawnSync({
-      cmd: [process.execPath, piCli, "--no-extensions", "-e", script, "--list-models"],
+      cmd: [process.execPath, script],
       cwd: resolve(import.meta.dir, "../.."),
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env,
+      env: { ...process.env, PI_CODING_AGENT_DIR: join(directory, "agent") },
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toContain("native assertions executed");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
