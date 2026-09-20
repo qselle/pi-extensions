@@ -21,6 +21,11 @@ Replaces Pi's built-in tool cards with compact headlines, bounded output, groupe
 
 This extension changes rendering. Normally execution, parameters, and result details come from Pi's built-in definitions. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. The extensions negotiate through Pi's public event bus in either load order; the job ID and status remain visible when output is collapsed. The tools use the active session directory after session changes.
 
+Shell commands use your theme's Bash syntax colors for keywords, built-ins,
+strings, variables and comments. Highlighting applies to both inline commands
+and wrapped command blocks, while running and after completion. Command text,
+execution and output are unchanged. Reload Pi once to apply an extension update.
+
 Consecutive `read`, `grep`, `find`, and `ls` calls are grouped into one exploration block. Repeated reads of one file merge their ranges. Grouping is live-only and is not rebuilt after reload.
 
 Expanded exploration calls show their individual output, including calls hidden behind a grouped leader when collapsed. Output keeps the last 200 lines with an omitted-line count. Collapsed groups retain a failure diagnostic instead of replacing it with a successful read range. Command and edit/write errors show up to eight lines when collapsed and 200 when expanded.
@@ -41,6 +46,9 @@ The setting is stored in `$PI_CODING_AGENT_DIR/tool-render.json` as `{"enabled":
   grouped, and bounded error text wraps so the actionable cause is readable.
 
 - Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs.
+- Shell highlighting uses Pi's Bash grammar; embedded Python, JavaScript and other
+  heredoc bodies are not separately parsed. Commands over 16,000 characters and
+  highlighting failures use plain text, retaining the normal preview limits.
 - Imports the [`hyperlinks`](../hyperlinks/) helper module; no third-party packages.
 - Interactive TUI only; cross-platform.
 - Pi reports a one-time startup warning for each intentionally overridden built-in tool.

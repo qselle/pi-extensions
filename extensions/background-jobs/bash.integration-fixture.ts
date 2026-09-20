@@ -3,12 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
+import { stripVTControlCharacters } from "node:util";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 const root = await mkdtemp(join(tmpdir(), "pi-managed-bash-"));
 process.env.PI_CODING_AGENT_DIR = root;
 const { default: background } = await import("./index.ts");
 const { default: renderer } = await import("../tool-render/index.ts");
+initTheme("dark", false);
 try {
   await writeFile(join(root, "cwd-marker"), "correct-directory");
   for (const order of [[background, renderer], [renderer, background]]) {
@@ -47,6 +50,10 @@ try {
       const running = await bash.execute("yield", { command: "cat", yield_ms: 0 }, undefined, undefined, ctx);
       assert(["starting", "running"].includes(running.details.status));
       const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+      const shell = 'if true; then printf "%s\\n" "$PWD"; fi';
+      const shellRows = bash.renderCall({ command: shell }, theme, { args: { command: shell } }).render(100);
+      assert.equal(stripVTControlCharacters(shellRows.join("\n")), `• Ran ${shell}`);
+      assert(new Set(shellRows.join("\n").match(/\x1b\[38;[^m]+m/g)).size >= 3, "managed commands must retain shell syntax colors in both load orders");
       let invalidations = 0;
       const context = { state: {}, args: { command: "cat" }, invalidate: () => invalidations++, cwd: root };
       const options = { expanded: false, isPartial: false };
