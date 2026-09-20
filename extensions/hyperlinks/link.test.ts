@@ -13,7 +13,7 @@ import {
   setHyperlinkMode,
   supportsHyperlinks,
   toAbsolutePath,
-} from "./link.ts";
+} from "../../lib/links.ts";
 
 afterEach(() => setHyperlinkMode("auto"));
 
@@ -35,7 +35,7 @@ describe("fileUri", () => {
     expect(fileUri("/a/b/c.ts")).toBe("file:///a/b/c.ts");
   });
   test("normalizes Windows separators", () => {
-    expect(fileUri("C:\\src\\a.ts")).toBe("file://C:/src/a.ts");
+    expect(fileUri("C:\\src\\a.ts")).toBe("file:///C:/src/a.ts");
   });
 });
 
@@ -182,4 +182,24 @@ describe("URLs", () => {
     setHyperlinkMode("always");
     expect(hyperlinkPath("a.ts", "src/a.ts", "/repo")).toContain("file:///repo/src/a.ts");
   });
+});
+
+test("file links preserve literal fragment/query characters and POSIX backslashes", () => {
+  expect(fileUri("/tmp/a#b?c%.ts")).toBe("file:///tmp/a%23b%3Fc%25.ts");
+  if (process.platform !== "win32") expect(fileUri("/tmp/back\\slash.ts")).toBe("file:///tmp/back%5Cslash.ts");
+  expect(fileUri("C:\\src\\a#b?.ts")).toBe("file:///C:/src/a%23b%3F.ts");
+  expect(fileUri("\\\\server\\share\\a b.ts")).toBe("file://server/share/a%20b.ts");
+});
+
+test("Windows paths resolve independently of the current host platform", () => {
+  expect(toAbsolutePath("src/a.ts", "C:\\repo")).toBe("C:\\repo\\src\\a.ts");
+  expect(toAbsolutePath("C:\\src\\a.ts", "/repo")).toBe("C:\\src\\a.ts");
+});
+
+test("raw URL controls cannot escape the hyperlink target", () => {
+  setHyperlinkMode("always");
+  for (const control of ["\x07", "\x1b\\", "\n", "\x9c"]) {
+    expect(hyperlinkUrl("label", `https://example.test/${control}payload`)).toBe("label");
+  }
+  expect(hyperlinkPath("file", "/tmp/a\x07b")).toContain("file:///tmp/a%07b");
 });

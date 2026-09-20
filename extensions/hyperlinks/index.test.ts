@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import hyperlinksExtension, { agentDirectory, loadMode } from "./index.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getHyperlinkMode, setHyperlinkMode } from "./link.ts";
+import { getHyperlinkMode, setHyperlinkMode } from "../../lib/links.ts";
 
 afterEach(() => setHyperlinkMode("auto"));
 
@@ -184,4 +184,25 @@ describe("/open-path", () => {
 
 test("resolves the agent directory through Pi rather than hardcoding .pi", () => {
   expect(agentDirectory()).toBe(getAgentDir());
+});
+
+test("repeated session starts retain the original mode for shutdown restoration", () => {
+  setHyperlinkMode("always");
+  const pi = new MockPi();
+  hyperlinksExtension(pi as any, { configDirectory: configDir({ mode: "never" }) });
+  pi.fire("session_start");
+  pi.fire("session_start");
+  pi.fire("session_shutdown");
+  expect(getHyperlinkMode()).toBe("always");
+});
+
+test("a session without configuration restores the mode from before the previous session", () => {
+  setHyperlinkMode("auto");
+  const dir = configDir({ mode: "never" });
+  const pi = new MockPi();
+  hyperlinksExtension(pi as any, { configDirectory: dir });
+  pi.fire("session_start");
+  writeFileSync(join(dir, "hyperlinks.json"), "{}");
+  pi.fire("session_start");
+  expect(getHyperlinkMode()).toBe("auto");
 });
