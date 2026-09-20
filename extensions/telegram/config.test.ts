@@ -23,6 +23,20 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
 const OTHER_TOKEN = "987654321:abcdefghijklmnopqrstuvwxyz_ABCDEFGHI";
 
+test("topic policy round-trips through secure config and environment overrides", async () => {
+  const directory = temporaryDirectory();
+  const path = join(directory, "telegram.json");
+  try {
+    const result = readTelegramConfig({}, { botToken: TOKEN, chatId: "12345", topics: "required" });
+    expect(result.status).toBe("enabled");
+    if (result.status !== "enabled") return;
+    await saveTelegramConfig(result.config, { configFile: path });
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({ config: { topics: "required" } });
+    expect(loadTelegramConfig({ env: { PI_TELEGRAM_TOPICS: "off" }, configFile: path })).toMatchObject({ config: { topics: "off" } });
+    expect(readTelegramConfig({ PI_TELEGRAM_TOPICS: "wrong" }, result.config).status).toBe("invalid");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 function temporaryDirectory(): string {
   return mkdtempSync(join(tmpdir(), "pi-telegram-config-"));
 }

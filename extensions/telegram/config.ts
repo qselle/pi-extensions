@@ -6,11 +6,13 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 
 export type TelegramGoalDetails = "minimal" | "summary" | "full";
+export type TelegramTopicsMode = "auto" | "required" | "off";
 
 export interface TelegramConfig {
   botToken: string;
   chatId: string;
   threadId?: number;
+  topics?: TelegramTopicsMode;
   details: TelegramGoalDetails;
   questionDelayMinutes: number;
 }
@@ -19,6 +21,7 @@ export interface TelegramConfigFile {
   botToken?: string;
   chatId?: string;
   threadId?: number;
+  topics?: TelegramTopicsMode;
   details?: TelegramGoalDetails;
   questionDelayMinutes?: number;
   enabled?: boolean;
@@ -51,7 +54,7 @@ export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
 export const DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES = 5;
 const MAX_QUESTION_DELAY_MINUTES = 7 * 24 * 60;
-const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "details", "questionDelayMinutes", "enabled"]);
+const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "topics", "details", "questionDelayMinutes", "enabled"]);
 
 export function defaultTelegramConfigPath(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -137,6 +140,7 @@ export function readTelegramConfig(
   const envThreadId = env.PI_TELEGRAM_THREAD_ID?.trim();
   const rawThreadId: string | number | undefined = envThreadId || file.threadId;
   const rawDetails = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
+  const topics = env.PI_TELEGRAM_TOPICS?.trim() || file.topics;
   const envQuestionDelay = env.PI_TELEGRAM_QUESTION_DELAY_MINUTES?.trim();
   const rawQuestionDelay: string | number = envQuestionDelay
     || (file.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES);
@@ -147,7 +151,7 @@ export function readTelegramConfig(
       || chatId
       || rawThreadId !== undefined
       || env.PI_TELEGRAM_GOAL_DETAILS?.trim()
-      || envQuestionDelay,
+      || envQuestionDelay || topics,
     );
   if (!configured) return { status: "disabled" };
   if (!botToken || !chatId) {
@@ -171,6 +175,9 @@ export function readTelegramConfig(
     return { status: "invalid", message: "Telegram goal details must be minimal, summary, or full." };
   }
   const details: TelegramGoalDetails = rawDetails;
+  if (topics !== undefined && topics !== "auto" && topics !== "required" && topics !== "off") {
+    return { status: "invalid", message: "Telegram topics must be auto, required, or off." };
+  }
   const questionDelayMinutes = typeof rawQuestionDelay === "number" ? rawQuestionDelay : Number(rawQuestionDelay);
   if (!Number.isFinite(questionDelayMinutes) || questionDelayMinutes <= 0 || questionDelayMinutes > MAX_QUESTION_DELAY_MINUTES) {
     return {
@@ -179,7 +186,7 @@ export function readTelegramConfig(
     };
   }
 
-  const config = { botToken, chatId, threadId, details, questionDelayMinutes };
+  const config: TelegramConfig = { botToken, chatId, threadId, details, questionDelayMinutes, ...(topics ? { topics: topics as TelegramTopicsMode } : {}) };
   return file.enabled === false
     ? { status: "disabled", config }
     : { status: "enabled", config };
@@ -213,6 +220,9 @@ function parseTelegramConfigFile(
   if (record.details !== undefined && record.details !== "minimal" && record.details !== "summary" && record.details !== "full") {
     return invalidFile(path, "field details must be minimal, summary, or full");
   }
+  if (record.topics !== undefined && !["auto", "required", "off"].includes(String(record.topics))) {
+    return invalidFile(path, "field topics must be auto, required, or off");
+  }
   if (
     record.questionDelayMinutes !== undefined
     && (typeof record.questionDelayMinutes !== "number" || !Number.isFinite(record.questionDelayMinutes))
@@ -228,6 +238,7 @@ function parseTelegramConfigFile(
       botToken: record.botToken as string | undefined,
       chatId: record.chatId === undefined ? undefined : String(record.chatId),
       threadId: record.threadId as number | undefined,
+      ...(record.topics ? { topics: record.topics as TelegramTopicsMode } : {}),
       details: record.details as TelegramGoalDetails | undefined,
       questionDelayMinutes: record.questionDelayMinutes as number | undefined,
       enabled: record.enabled as boolean | undefined,
