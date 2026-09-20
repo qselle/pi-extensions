@@ -152,6 +152,7 @@ export class SessionTopics {
   }
 
   syncName(): Promise<void> {
+    if (this.config.threadId !== undefined) return Promise.resolve();
     const state = this.current;
     if (!state?.record.threadId || (state.record.mode ?? this.config.topics) === "off") return Promise.resolve();
     return this.enqueue(state, async () => {

@@ -65,6 +65,16 @@ test("fixed destinations and off mode never probe or create topics", async () =>
   expect(off.calls).toHaveLength(0);
 });
 
+test("fixed destination configuration does not rename a previously automatic topic", async () => {
+  const original = setup();
+  await original.topics.resolve();
+  const fixed = setup({ threadId: 42 }, original.entries);
+  fixed.bind("session-a", "New session name");
+  await fixed.topics.syncName();
+  expect(await fixed.topics.resolve()).toEqual({ threadId: 42 });
+  expect(fixed.calls).toHaveLength(0);
+});
+
 test("private and group capability discovery allows General only when configured", async () => {
   const h = setup();
   h.support(false);
