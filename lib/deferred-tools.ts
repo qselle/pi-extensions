@@ -4,10 +4,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export function deferredTools(pi: ExtensionAPI, names: readonly string[]) {
   let withheld = new Set<string>();
   return {
-    initialize(relevant = false) {
+    initialize() {
       if (!pi.getActiveTools || !pi.setActiveTools) return;
       const active = pi.getActiveTools();
-      withheld = new Set(relevant ? [] : active.filter(name => names.includes(name)));
+      // Tree navigation does not reset Pi's active tools. Keep ownership of
+      // controls we already hid until they have actually been activated.
+      withheld = new Set([...withheld, ...active.filter(name => names.includes(name))]);
       if (withheld.size) pi.setActiveTools(active.filter(name => !withheld.has(name)));
     },
     activate(selected: readonly string[] = names) {
