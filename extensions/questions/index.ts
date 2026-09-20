@@ -15,7 +15,7 @@ import {
   type QuestionnaireDetails,
 } from "./model.ts";
 import { firstReplyWins } from "./race.ts";
-import { findSecretHandles, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
+import { findSecretHandles, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
 import { createTelegramQuestionReply, safeTelegramQuestionError } from "./telegram.ts";
 import { createTerminalReplySource } from "./ui.ts";
 
@@ -95,6 +95,19 @@ export default function questionsExtension(
 ): void {
   const child = options.isSubagentChild ?? process.env.PI_SUBAGENT_CHILD === "1";
   const secrets = new SecretVault();
+  const pending = new Set<AbortController>();
+  let generation = 0;
+  let attentionContext: ExtensionContext | undefined;
+  const reset = () => {
+    generation++;
+    for (const controller of pending) controller.abort();
+    pending.clear();
+    secrets.clear();
+    if (attentionContext) clearAttentionTitle(pi, attentionContext);
+    attentionContext = undefined;
+  };
+  let unregisterVault = registerSecretVault(secrets);
+  pi.on("session_start", () => { reset(); unregisterVault(); unregisterVault = registerSecretVault(secrets); });
 
   pi.on("tool_call", (event) => {
     if (secrets.size === 0 && findSecretHandles(event.input).size === 0) return;
@@ -105,8 +118,8 @@ export default function questionsExtension(
       reason: `${unknown.length === 1 ? "A secret handle is" : "Secret handles are"} no longer valid in this session. Ask for the secret again with a questionnaire secret question instead of guessing the value.`,
     };
   });
-  pi.on("session_tree", () => secrets.clear());
-  pi.on("session_shutdown", () => secrets.clear());
+  pi.on("session_tree", reset);
+  pi.on("session_shutdown", () => { reset(); unregisterVault(); });
 
   pi.registerTool({
     name: "questionnaire",
@@ -131,9 +144,18 @@ export default function questionsExtension(
       let telegramWarningShown = false;
       let telegramActivated = false;
       const contextLabel = telegramContextLabel(pi.getSessionName?.(), ctx.cwd || process.cwd());
+      const expectedGeneration = generation;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) controller.abort();
+      pending.add(controller);
+      const current = () => generation === expectedGeneration;
 
       try {
         for (const [index, question] of questions.entries()) {
+          if (controller.signal.aborted || !current()) { interrupted = true; break; }
+          attentionContext = ctx;
           setAttentionTitle(pi, ctx, index, questions.length);
           const sources = [];
           const terminal = createTerminalReplySource(ctx, question, index, questions.length, Boolean(telegram && !question.secret));
@@ -148,16 +170,19 @@ export default function questionsExtension(
           if (telegramReply) sources.push(telegramReply.source);
 
           const outcome = await firstReplyWins(sources, {
-            signal,
+            signal: controller.signal,
             onSourceError: (source, error) => {
-              if (source !== "telegram" || telegramWarningShown) return;
+              if (!current() || source !== "telegram" || telegramWarningShown) return;
               telegramWarningShown = true;
               ctx.ui.notify(safeTelegramQuestionError(error), "warning");
             },
           });
+          // A reply can win immediately before navigation. Do not issue a
+          // secret handle or return its answer into the replacement session.
+          if (!current()) { interrupted = true; break; }
           if (telegramReply && (!("source" in outcome) || outcome.source !== "telegram")) {
             void telegramReply.mirror(outcome).catch((error) => {
-              if (telegramWarningShown) return;
+              if (!current() || telegramWarningShown) return;
               telegramWarningShown = true;
               ctx.ui.notify(safeTelegramQuestionError(error), "warning");
             });
@@ -192,8 +217,16 @@ export default function questionsExtension(
             });
         }
       } finally {
-        if (questions.length > 0) clearAttentionTitle(pi, ctx);
+        pending.delete(controller);
+        signal?.removeEventListener("abort", abort);
+        controller.abort();
+        if (current() && attentionContext === ctx) {
+          clearAttentionTitle(pi, ctx);
+          attentionContext = undefined;
+        }
       }
+
+      if (!current()) answers.length = 0;
 
       const details: QuestionnaireDetails = { questions: displayedQuestions, answers, interrupted };
       const response = answers
