@@ -1,6 +1,8 @@
+import { deferredTools } from "../../lib/deferred-tools.ts";
 import { resolve } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { SchedulePanel } from "./panel.ts";
 import { formatDuration } from "../loop/interval.ts";
 import {
   MAX_ACTIVE_SCHEDULES,
@@ -33,7 +35,7 @@ const IDLE_RETRY_MS = 500;
 const LEASE_RETRY_MS = 5_000;
 
 interface WakeDetails { taskId: string; wakeKey: string; transient: true }
-interface ScheduleExtensionOptions { agentDir?: string; leaseRetryMs?: number }
+interface ScheduleExtensionOptions { agentDir?: string; leaseRetryMs?: number; save?: typeof saveScheduleStore }
 
 const StopParameters = Type.Object({
   task_id: Type.Optional(Type.String({ description: "Scheduled task ID. Omit for the task that owns the current turn." })),
@@ -42,6 +44,8 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExtensionOptions = {}): void {
+  const controls = deferredTools(pi, ["schedule_stop", "get_schedules"]);
+  const panel = new SchedulePanel(pi);
   const tasks = new Map<string, ScheduledTask>();
   const wakePrompts = new Map<string, string>();
   let cwd = resolve(process.cwd());
@@ -52,8 +56,21 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   let pendingWake: WakeDetails | undefined;
   let runningWake: WakeDetails | undefined;
   let writes = Promise.resolve();
+  let management = Promise.resolve();
   let lifecycle = 0;
   let closed = true;
+
+  // Serialize state changes as well as disk writes: a later snapshot must not
+  // contain an earlier change that is still capable of rolling back.
+  const mutate = <T>(action: () => Promise<T>): Promise<T | undefined> => {
+    const generation = lifecycle;
+    const operation = management.then(async () => {
+      if (generation !== lifecycle || closed) return;
+      return action();
+    });
+    management = operation.then(() => undefined, () => undefined);
+    return operation;
+  };
 
   const active = () => [...tasks.values()].filter((task) => task.status === "active");
   const live = () => [...tasks.values()].filter((task) => task.status === "active" || task.status === "paused");
@@ -69,11 +86,13 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
     if (!lease) throw new Error("This Pi session does not own the project's schedule lease.");
     prune();
     const snapshot = store();
-    writes = writes.catch(() => undefined).then(() => saveScheduleStore(path, snapshot));
+    const destination = path;
+    writes = writes.catch(() => undefined).then(() => (options.save ?? saveScheduleStore)(destination, snapshot));
     await writes;
   };
 
   const updateStatus = (ctx: ExtensionContext) => {
+    if (tasks.size) controls.activate();
     const current = active();
     if (loadError) return ctx.ui.setStatus(STATUS_KEY, "schedule error");
     if (current.length === 0) return ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -95,7 +114,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
     updateStatus(ctx);
   };
 
-  const fireDue = async (ctx: ExtensionContext) => {
+  const fireDue = (ctx: ExtensionContext) => mutate(async () => {
     const generation = lifecycle;
     timer = undefined;
     if (closed) return;
@@ -125,7 +144,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       if (generation !== lifecycle || closed) return;
       ctx.ui.notify(`Schedule ${task.id} paused because its wakeup failed.`, "error"); scheduleTimer(ctx);
     }
-  };
+  });
 
   const attemptTakeover = async (ctx: ExtensionContext) => {
     const generation = lifecycle;
@@ -159,13 +178,15 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   };
 
   const requireWritable = (ctx: ExtensionCommandContext): boolean => {
+    if (closed) return false;
     if (loadError) { ctx.ui.notify(loadError, "error"); return false; }
     if (!lease) { ctx.ui.notify("Another Pi process owns this project's schedule queue. This session is read-only.", "warning"); return false; }
     return true;
   };
 
-  const manage = async (action: string, query: string, ctx: ExtensionCommandContext) => {
+  const manageNow = async (action: string, query: string, ctx: ExtensionCommandContext) => {
     if (!requireWritable(ctx)) return;
+    const generation = lifecycle;
     if (action === "stop" && query === "all") {
       const before = new Map(tasks);
       let count = 0;
@@ -173,9 +194,10 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
         if (task.status !== "active" && task.status !== "paused") continue;
         tasks.set(id, stopTask(task, "Stopped by the user.")); count++;
       }
-      pendingWake = undefined; runningWake = undefined; wakePrompts.clear();
       try { await persist(); }
-      catch (error) { tasks.clear(); for (const [id, task] of before) tasks.set(id, task); ctx.ui.notify(errorMessage(error), "error"); return; }
+      catch (error) { if (generation !== lifecycle || closed) return; tasks.clear(); for (const [id, task] of before) tasks.set(id, task); ctx.ui.notify(errorMessage(error), "error"); return; }
+      if (generation !== lifecycle || closed) return;
+      pendingWake = undefined; runningWake = undefined; wakePrompts.clear();
       scheduleTimer(ctx);
       ctx.ui.notify(`Stopped ${count} scheduled task${count === 1 ? "" : "s"}.`, "info"); return;
     }
@@ -188,56 +210,65 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
         if (active().length >= MAX_ACTIVE_SCHEDULES) throw new Error(`At most ${MAX_ACTIVE_SCHEDULES} scheduled tasks may be active.`);
         tasks.set(task.id, resumeTask(task));
       } else tasks.set(task.id, stopTask(task, "Stopped by the user."));
-      if (pendingWake?.taskId === task.id) pendingWake = undefined;
-      if (runningWake?.taskId === task.id) runningWake = undefined;
       try { await persist(); }
-      catch (error) { tasks.set(task.id, before); throw error; }
+      catch (error) { if (generation !== lifecycle || closed) return; tasks.set(task.id, before); throw error; }
+      if (generation !== lifecycle || closed) return;
+      if (pendingWake?.taskId === task.id) { wakePrompts.delete(pendingWake.wakeKey); pendingWake = undefined; }
+      if (runningWake?.taskId === task.id) { wakePrompts.delete(runningWake.wakeKey); runningWake = undefined; }
       scheduleTimer(ctx); ctx.ui.notify(`Schedule ${task.id} ${action === "stop" ? "stopped" : `${action}d`}.`, "info");
-    } catch (error) { ctx.ui.notify(errorMessage(error), "error"); }
+    } catch (error) { if (generation === lifecycle && !closed) ctx.ui.notify(errorMessage(error), "error"); }
   };
+
+  const manage = (action: string, query: string, ctx: ExtensionCommandContext) =>
+    mutate(() => manageNow(action, query, ctx));
 
   pi.registerCommand("remind", {
     description: "Create a persistent one-shot reminder: /remind <duration>|at <ISO time> -- <prompt>",
-    handler: async (args, ctx) => {
+    handler: (args, ctx) => mutate(async () => {
       if (!requireWritable(ctx)) return;
+      const generation = lifecycle;
       if (live().length >= MAX_ACTIVE_SCHEDULES) return ctx.ui.notify(`At most ${MAX_ACTIVE_SCHEDULES} active or paused schedules may be retained.`, "error");
       const parsed = parseReminderCommand(args.trim());
       if (!parsed) return ctx.ui.notify("Usage: /remind [in] <1m-365d> -- <prompt>, or /remind at <ISO-8601 timestamp> -- <prompt>", "warning");
       const task = createReminder(parsed); tasks.set(task.id, task);
       try { await persist(); }
-      catch (error) { tasks.delete(task.id); ctx.ui.notify(errorMessage(error), "error"); return; }
+      catch (error) { if (generation !== lifecycle || closed) return; tasks.delete(task.id); ctx.ui.notify(errorMessage(error), "error"); return; }
+      if (generation !== lifecycle || closed) return;
       scheduleTimer(ctx); ctx.ui.notify(`Reminder ${task.id} scheduled for ${new Date(task.nextRunAt!).toLocaleString()}.`, "info");
-    },
+    }),
   });
 
   pi.registerCommand("cron", {
     description: "Create a persistent five-field cron prompt: /cron <expression> [--tz zone] -- <prompt>",
-    handler: async (args, ctx) => {
+    handler: (args, ctx) => mutate(async () => {
       if (!requireWritable(ctx)) return;
+      const generation = lifecycle;
       if (live().length >= MAX_ACTIVE_SCHEDULES) return ctx.ui.notify(`At most ${MAX_ACTIVE_SCHEDULES} active or paused schedules may be retained.`, "error");
       const parsed = parseCronCommand(args.trim());
       if (!parsed) return ctx.ui.notify("Usage: /cron <minute> <hour> <day> <month> <weekday> [--tz IANA] [--max-runs 1-500] -- <prompt>", "warning");
       try {
         const task = createCronTask(parsed); tasks.set(task.id, task);
         try { await persist(); }
-        catch (error) { tasks.delete(task.id); throw error; }
+        catch (error) { if (generation !== lifecycle || closed) return; tasks.delete(task.id); throw error; }
+        if (generation !== lifecycle || closed) return;
         scheduleTimer(ctx);
         ctx.ui.notify(`Cron ${task.id} scheduled (${task.cronExpression}, ${task.timeZone}); next ${new Date(task.nextRunAt!).toLocaleString()}.`, "info");
-      } catch (error) { ctx.ui.notify(errorMessage(error), "error"); }
-    },
+      } catch (error) { if (generation === lifecycle && !closed) ctx.ui.notify(errorMessage(error), "error"); }
+    }),
   });
 
   pi.registerCommand("schedule", {
     description: "Inspect or manage persistent reminders and cron prompts",
     getArgumentCompletions: (prefix) => {
-      const items = ["status", "pause", "resume", "stop", "stop all"].filter((item) => item.startsWith(prefix.toLowerCase())).map((value) => ({ value, label: value }));
+      const items = ["status", "view", "pause", "resume", "stop", "stop all"].filter((item) => item.startsWith(prefix.toLowerCase())).map((value) => ({ value, label: value }));
       return items.length ? items : null;
     },
     handler: async (args, ctx) => {
       const input = args.trim();
+      if (input === "view") return panel.open(ctx, [...tasks.values()], Boolean(lease), loadError);
       if (!input || input === "status" || input === "list") return ctx.ui.notify(formatScheduleList([...tasks.values()], path, Boolean(lease), loadError), loadError ? "error" : "info");
       const management = /^(pause|resume|stop)(?:\s+(\S+))?$/i.exec(input);
-      if (!management) return ctx.ui.notify("Usage: /schedule [status|pause <id>|resume <id>|stop <id>|stop all]", "warning");
+      if (!management) return ctx.ui.notify("Usage: /schedule [status|view|pause <id>|resume <id>|stop <id>|stop all]", "warning");
       await manage(management[1]!.toLowerCase(), management[2] ?? "", ctx);
     },
   });
@@ -245,14 +276,20 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   pi.registerTool({
     name: "schedule_stop", label: "Stop Schedule", description: "Stop the persistent scheduled task that owns the current turn, or a specified task.", parameters: StopParameters,
     async execute(_id, params, _signal, _update, ctx) {
-      if (!lease) throw new Error("This session does not own the schedule queue.");
-      const id = params.task_id?.trim() || runningWake?.taskId;
-      const task = id ? tasks.get(id) : undefined;
-      if (!task || (task.status !== "active" && task.status !== "paused")) throw new Error("No active scheduled task matched the request.");
-      tasks.set(task.id, stopTask(task, params.reason?.trim() || "Stopped by the model after handling the scheduled task."));
-      try { await persist(); }
-      catch (error) { tasks.set(task.id, task); throw error; }
-      return { content: [{ type: "text" as const, text: `Schedule ${task.id} stopped.` }], details: { task: tasks.get(task.id) } };
+      const result = await mutate(async () => {
+        if (closed || !lease) throw new Error("This session does not own the schedule queue.");
+        const generation = lifecycle;
+        const id = params.task_id?.trim() || runningWake?.taskId;
+        const task = id ? tasks.get(id) : undefined;
+        if (!task || (task.status !== "active" && task.status !== "paused")) throw new Error("No active scheduled task matched the request.");
+        tasks.set(task.id, stopTask(task, params.reason?.trim() || "Stopped by the model after handling the scheduled task."));
+        try { await persist(); }
+        catch (error) { if (generation === lifecycle && !closed) tasks.set(task.id, task); throw error; }
+        if (generation !== lifecycle || closed) throw new Error("Session changed while saving the schedule.");
+        return { content: [{ type: "text" as const, text: `Schedule ${task.id} stopped.` }], details: { task: tasks.get(task.id) } };
+      });
+      if (!result) throw new Error("Session changed before saving the schedule.");
+      return result;
     },
   });
 
@@ -274,9 +311,9 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
     return changed ? { messages } : undefined;
   });
 
-  pi.on("message_end", async (event, ctx) => {
+  pi.on("message_end", (event, ctx) => mutate(async () => {
     const generation = lifecycle;
-    if (closed || !runningWake || !lease) return;
+    if (generation !== lifecycle || closed || !runningWake || !lease) return;
     const message = event.message as { role?: string; stopReason?: string; errorMessage?: string };
     if (message.role !== "assistant" || (message.stopReason !== "aborted" && message.stopReason !== "error")) return;
     const task = tasks.get(runningWake.taskId);
@@ -292,11 +329,11 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       if (generation !== lifecycle || closed) return;
       loadError = errorMessage(error); ctx.ui.notify(`Schedule ${task.id} could not persist its paused state: ${loadError}`, "error");
     }
-  });
+  }));
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", (_event, ctx) => mutate(async () => {
     const generation = lifecycle;
-    if (closed) return;
+    if (generation !== lifecycle || closed) return;
     const wake = runningWake; runningWake = undefined;
     if (wake) wakePrompts.delete(wake.wakeKey);
     if (wake && lease) {
@@ -311,9 +348,10 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       }
     }
     if (generation === lifecycle && !closed) scheduleTimer(ctx);
-  });
+  }));
 
   const restore = async (ctx: ExtensionContext) => {
+    controls.initialize();
     closed = false;
     const generation = ++lifecycle;
     clearTimer();
