@@ -16,6 +16,34 @@ function deferred<T>() {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+test("streamed text is transient, bounded, and cannot leak across cancellation or replacement", async () => {
+  const runs: { publish: (text: string) => void; finish: ReturnType<typeof deferred<SideRunResult>> }[] = [];
+  let writes = 0;
+  const store = new SideChatStore({ runModel: (_chat, _signal, publish) => {
+    const finish = deferred<SideRunResult>(); runs.push({ publish, finish }); return finish.promise;
+  }, hooks: { persistState: () => writes++ } });
+  const chat = store.create({ model: MODEL, systemPrompt: "", contextMode: "none" });
+  store.send(chat.id, "first");
+  const initialWrites = writes;
+  runs[0]!.publish("part");
+  expect(chat.partial).toBe("part");
+  expect(chat.turns).toHaveLength(0);
+  expect(writes).toBe(initialWrites);
+  store.abort(chat.id);
+  store.send(chat.id, "second");
+  runs[0]!.publish("late first answer");
+  expect(chat.partial).toBeUndefined();
+  runs[1]!.publish("x".repeat(70000));
+  expect(chat.partial).toHaveLength(65536);
+  runs[1]!.finish.resolve({ text: "final second answer" });
+  await flush();
+  expect(chat.partial).toBeUndefined();
+  expect(chat.turns.at(-1)?.text).toBe("final second answer");
+  runs[0]!.finish.resolve({ text: "late final" });
+  await flush();
+  expect(chat.turns).toHaveLength(2);
+});
+
 function harness(options: { maxTurns?: number } = {}) {
   const calls: Array<{ chat: SideChat; signal: AbortSignal; deferred: ReturnType<typeof deferred<SideRunResult>> }> = [];
   let changes = 0;
@@ -251,4 +279,24 @@ test("does not fire onAnswer when generation fails", async () => {
   store.send(chat.id, "q");
   await flush();
   expect(fired).toBe(0);
+});
+
+test("abort is immediate even if the provider ignores cancellation and later succeeds", async () => {
+  const first = deferred<SideRunResult>();
+  const second = deferred<SideRunResult>();
+  let calls = 0;
+  const store = new SideChatStore({ runModel: () => (++calls === 1 ? first.promise : second.promise) });
+  const chat = store.create(baseChat());
+  store.send(chat.id, "cancel me");
+  store.abort(chat.id);
+  expect(chat.status).toBe("idle");
+  expect(chat.pending).toBeUndefined();
+  expect(store.send(chat.id, "keep me")).toBe(true);
+  first.resolve({ text: "stale answer" });
+  await flush();
+  expect(chat.status).toBe("generating");
+  expect(chat.turns).toHaveLength(0);
+  second.resolve({ text: "current answer" });
+  await flush();
+  expect(chat.turns.map((turn) => turn.text)).toEqual(["keep me", "current answer"]);
 });

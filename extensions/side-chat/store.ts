@@ -20,7 +20,7 @@ export interface SideRunResult {
  * question, honors the abort signal, and returns the answer plus usage.
  * Throwing (or an aborted signal) marks the turn failed.
  */
-export type SideRunModel = (chat: SideChat, signal: AbortSignal) => Promise<SideRunResult>;
+export type SideRunModel = (chat: SideChat, signal: AbortSignal, onText: (text: string) => void) => Promise<SideRunResult>;
 
 export interface SideChatHooks {
   /** Fired after any observable state change (for UI refresh). */
@@ -160,7 +160,10 @@ export class SideChatStore {
   /** Abort an in-flight generation, discarding the pending question. */
   abort(id: string): void {
     const controller = this.controllers.get(id);
-    if (controller) controller.abort();
+    if (!controller) return;
+    this.controllers.delete(id);
+    controller.abort();
+    this.applyFailure(id, undefined, true);
   }
 
   rename(id: string, title: string): void {
@@ -208,7 +211,14 @@ export class SideChatStore {
   private run(chat: SideChat): void {
     const controller = new AbortController();
     this.controllers.set(chat.id, controller);
-    void this.runModel(chat, controller.signal).then(
+    chat.partial = undefined;
+    void this.runModel(chat, controller.signal, (text) => {
+      if (controller.signal.aborted || this.controllers.get(chat.id) !== controller || this.chats.get(chat.id) !== chat) return;
+      const partial = text.slice(0, 65536).replace(/[\ud800-\udbff]$/, "");
+      if (chat.partial === partial) return;
+      chat.partial = partial;
+      this.change();
+    }).then(
       (result) => this.settle(chat.id, controller, () => this.applySuccess(chat.id, result)),
       (error) => this.settle(chat.id, controller, () => this.applyFailure(chat.id, error, controller.signal.aborted)),
     );
@@ -235,6 +245,7 @@ export class SideChatStore {
     });
     trimTurns(chat, this.maxTurns);
     chat.pending = undefined;
+    chat.partial = undefined;
     chat.status = "idle";
     chat.error = undefined;
     if (result.usage) chat.usage = addSideUsage(chat.usage, result.usage);
@@ -247,6 +258,7 @@ export class SideChatStore {
   private applyFailure(id: string, error: unknown, aborted: boolean): void {
     const chat = this.chats.get(id);
     if (!chat) return;
+    chat.partial = undefined;
     if (aborted) {
       chat.pending = undefined;
       chat.status = "idle";
@@ -290,9 +302,9 @@ function normalizeTitle(title: string | undefined): string | undefined {
 /** A restored chat can never be mid-generation; normalize transient state. */
 function normalizeRestored(chat: SideChat): SideChat {
   if (chat.status === "generating") {
-    return { ...chat, status: "idle", pending: undefined };
+    return { ...chat, status: "idle", pending: undefined, partial: undefined };
   }
-  return chat;
+  return { ...chat, partial: undefined };
 }
 
 function defaultId(): string {
