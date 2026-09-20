@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closeDanglingLink, hasDanglingLink } from "../hyperlinks/link.ts";
+import { closeDanglingLink, hasDanglingLink } from "../../lib/links.ts";
 import {
 	boundTail,
 	countNonEmptyLines,

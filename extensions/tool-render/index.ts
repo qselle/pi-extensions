@@ -34,8 +34,11 @@ import {
 	type ExtensionAPI,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { closeDanglingLink } from "../hyperlinks/link.ts";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { expansionHint } from "../../lib/tool-ui.ts";
+import { PlainOutput } from "../../lib/output.ts";
+import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
+import { closeDanglingLink } from "../../lib/links.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -80,6 +83,7 @@ class Lines implements Component {
 		private readonly fallback: string,
 	) {}
 	render(width: number): string[] {
+		if (width <= 0) return [];
 		const w = Math.max(1, width);
 		try {
 			return this.build(w).map((l) => fit(l, w));
@@ -105,13 +109,20 @@ function branchBody(theme: Theme, contentLines: string[], width: number): string
 }
 
 /** bash: output only (the command is already in the headline), bounded. */
-function bashBody(result: any, opts: any, theme: Theme, width: number): string[] {
+function bashBody(result: any, opts: any, theme: Theme, width: number, isError = false): string[] {
 	const { text } = resultText(result);
-	if (text.trim().length === 0) return [];
-	const { lines, omitted } = boundTail(text, opts?.expanded ? 200 : 8);
-	const body: string[] = [];
-	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines`));
-	for (const l of lines) body.push(theme.fg("toolOutput", l));
+	if (text.trim().length === 0) return isError ? branchBody(theme, [theme.fg("error", "failed")], width) : [];
+	const managed = result?.details?.managed === true;
+	const boundary = managed ? text.indexOf("\n\n") : -1;
+	const header = boundary >= 0 ? text.slice(0, boundary).split("\n") : [];
+	const output = boundary >= 0 ? text.slice(boundary + 2) : text;
+	const { lines, omitted } = boundTail(output, opts?.expanded ? 200 : 8);
+	const body: string[] = header.map((line) => theme.fg("muted", line));
+	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines · ${expansionHint()}`));
+	for (const l of lines) {
+		const colored = theme.fg(isError ? "error" : "toolOutput", l);
+		body.push(...(isError ? wrapTextWithAnsi(colored, Math.max(1, width - 4)) : [colored]));
+	}
 	return branchBody(theme, body, width);
 }
 
@@ -205,8 +216,8 @@ function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: a
 		? `${bullet(theme, ctx)} ${verb} ${theme.fg("muted", fit(target, Math.max(3, width - (verbFor(name).length + 3))))}`
 		: `${bullet(theme, ctx)} ${verb}`;
 	if (ctx?.isError) {
-		const msg = firstLine(resultText(result).text).trim() || "failed";
-		return [head, ...branchBody(theme, [theme.fg("error", msg)], width)];
+		const msg = new PlainOutput().push(resultText(result).text).trim().slice(0, 1200) || "failed";
+		return [head, ...branchBody(theme, wrapTextWithAnsi(theme.fg("error", msg), Math.max(1, width - 4)), width)];
 	}
 	const summary = summarize(name, result, ctx?.args);
 	return summary ? [head, ...branchBody(theme, [theme.fg("muted", summary)], width)] : [head];
@@ -224,6 +235,16 @@ function makeRenderCall(name: ToolName) {
 			const running = name === "bash" && ctx?.executionStarted && ctx?.isPartial;
 			const verbText = name === "bash" && running ? "Running" : verbFor(name);
 			const verb = theme.bold(theme.fg("text", verbText));
+			if (name === "bash") {
+				const command = new PlainOutput().push(String(a?.command ?? "")).trim();
+				if (command.includes("\n") || visibleWidth(command) > Math.max(1, width - verbText.length - 3)) {
+					const inner = Math.max(1, width - 4);
+					const rows = wrapTextWithAnsi(command, inner);
+					const limit = ctx?.expanded ? 128 : 4;
+					return [`${bullet(theme, ctx)} ${verb} command`, ...rows.slice(0, limit).map((line, index) => `${index ? "    " : "  $ "}${theme.fg("text", line)}`),
+						...(rows.length > limit ? [`    ${theme.fg("dim", `… ${rows.length - limit} command lines · ${expansionHint()}`)}`] : [])];
+				}
+			}
 			const target = targetFor(name, a);
 			if (!target) return [`${bullet(theme, ctx)} ${verb}`];
 			const shown = fit(target, Math.max(3, width - (verbText.length + 3)));
@@ -241,7 +262,15 @@ function makeRenderResult(name: ToolName) {
 	return (result: any, opts: any, theme: Theme, ctx: any): Component => {
 		if (EXPLORATION_TOOLS.has(name)) {
 			return new Lines((width: number): string[] => {
+				if (opts?.expanded) {
+					const heading = standaloneExploration(name, result, theme, ctx, width);
+					return [...(ctx?.isError ? heading.slice(0, 1) : heading), ...bashBody(result, opts, theme, width, !!ctx?.isError)];
+				}
 				const st = groupState(ctx?.toolCallId);
+				if (ctx?.isError) {
+					const failure = standaloneExploration(name, result, theme, ctx, width);
+					return st && isLeader(ctx?.toolCallId) ? [...explorationBlock(st.rows, st.active, theme, width), ...failure] : failure;
+				}
 				if (!st) return standaloneExploration(name, result, theme, ctx, width);
 				if (!isLeader(ctx?.toolCallId)) return []; // follower — renders nothing
 				bindLeaderRerender(ctx?.toolCallId, () => {
@@ -259,8 +288,7 @@ function makeRenderResult(name: ToolName) {
 			// count can be read from the result patch.
 			if (name === "edit" || name === "write") {
 				if (ctx?.isError) {
-					const msg = firstLine(resultText(result).text).trim() || "failed";
-					return [diffHeadline(name, theme, ctx, width), ...branchBody(theme, [theme.fg("error", msg)], width)];
+					return [diffHeadline(name, theme, ctx, width), ...bashBody(result, opts, theme, width, true)];
 				}
 				const rows =
 					name === "edit"
@@ -273,8 +301,7 @@ function makeRenderResult(name: ToolName) {
 					: [head];
 			}
 			if (ctx?.isError) {
-				const msg = firstLine(resultText(result).text).trim() || "failed";
-				return branchBody(theme, [theme.fg("error", msg)], width);
+				return bashBody(result, opts, theme, width, true);
 			}
 			if (name === "bash") return bashBody(result, opts, theme, width);
 			if (opts?.isPartial) return branchBody(theme, [theme.fg("muted", "…")], width);
@@ -305,6 +332,11 @@ function writeEnabled(on: boolean): void {
 
 export default function toolRenderExtension(pi: ExtensionAPI): void {
 	if (readEnabled()) {
+		const bashStyle = { renderShell: "self" as const, renderCall: makeRenderCall("bash"), renderResult: makeRenderResult("bash") };
+		pi.events?.on(BASH_STYLE, (data) => {
+			const request = data as BashStyleRequest;
+			if (typeof request?.provide === "function") request.provide(bashStyle, () => {});
+		});
 		const factories: Record<ToolName, (dir: string) => any> = {
 			read: createReadToolDefinition,
 			write: createWriteToolDefinition,
@@ -318,11 +350,14 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		// relative paths against the session's cwd. Registering by name replaces the
 		// previous definition, so rebinding on session_start is idempotent.
 		let boundCwd: string | undefined;
-		const registerOverrides = (cwd: string): void => {
-			if (boundCwd === cwd) return;
+		let boundBash = false;
+		const registerOverrides = (cwd: string, includeBash = false): void => {
+			if (boundCwd === cwd && (!includeBash || boundBash)) return;
+			boundBash = includeBash;
 			boundCwd = cwd;
 			for (const name of Object.keys(factories) as ToolName[]) {
 				try {
+					if (name === "bash" && (!includeBash || managedBashOwns(pi, bashStyle))) continue;
 					pi.registerTool({
 						...factories[name](cwd),
 						renderShell: "self",
@@ -335,7 +370,8 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 			}
 		};
 
-		// Register immediately so the overrides exist before the first session event,
+		// Defer standalone bash until session_start, after all executor owners load.
+		// Register other overrides immediately before the first session event,
 		// then rebind to the authoritative session cwd (which /resume can change).
 		registerOverrides(process.cwd());
 
@@ -343,7 +379,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		// other tool or a new assistant message.
 		resetExploration();
 		pi.on("session_start", (_event: any, ctx: any) => {
-			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd);
+			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd, true);
 			resetExploration();
 		});
 		pi.on("tool_execution_start", (event: any) => {
@@ -352,7 +388,9 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		});
 		pi.on("tool_execution_end", (event: any) => {
 			if (EXPLORATION_TOOLS.has(event?.toolName)) {
-				const count = event.isError ? undefined : summarize(event.toolName as ToolName, event.result, undefined);
+				const count = event.isError
+					? `failed: ${firstLine(resultText(event.result).text).trim().slice(0, 240) || "unknown error"}`
+					: summarize(event.toolName as ToolName, event.result, undefined);
 				noteEnd(event.toolCallId, !!event.isError, count);
 			}
 		});
