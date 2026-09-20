@@ -10,7 +10,7 @@ import {
   supportsHyperlinks,
   toAbsolutePath,
   type HyperlinkMode,
-} from "./link.ts";
+} from "../../lib/links.ts";
 
 export {
   closeDanglingLink,
@@ -24,7 +24,7 @@ export {
   supportsHyperlinks,
   toAbsolutePath,
   type HyperlinkMode,
-} from "./link.ts";
+} from "../../lib/links.ts";
 
 const CONFIG_FILE = "hyperlinks.json";
 
@@ -58,6 +58,11 @@ export default function hyperlinksExtension(
   let restoreMode: HyperlinkMode | undefined;
 
   pi.on("session_start", () => {
+    if (appliedMode !== undefined && restoreMode !== undefined && getHyperlinkMode() === appliedMode) {
+      setHyperlinkMode(restoreMode);
+    }
+    appliedMode = undefined;
+    restoreMode = undefined;
     const configured = loadMode(options.configDirectory ?? agentDirectory());
     if (!configured) return;
     restoreMode = getHyperlinkMode();
