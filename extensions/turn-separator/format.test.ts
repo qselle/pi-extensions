@@ -13,6 +13,14 @@ describe("formatDuration", () => {
 });
 
 describe("separatorText", () => {
+	test("fits collapsed viewports without creating a minimum four-column rule", () => {
+		for (const width of [0, 1, 2, 3, 4, 5]) {
+			const line = separatorText(74, width);
+			expect(line).toBe("─".repeat(width <= 1 ? width : width - 1));
+		}
+		for (const width of [-1, NaN, Infinity]) expect(separatorText(74, width)).toBe("");
+		expect(separatorText(74, 3.5)).toBe("──");
+	});
 	test("labels the rule and keeps a 1-column right margin", () => {
 		const line = separatorText(74, 40);
 		expect(line).toContain("Worked for 1m 14s");

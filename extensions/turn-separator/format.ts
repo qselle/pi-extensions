@@ -16,7 +16,9 @@ export function separatorText(
 	width: number,
 	stats?: TurnStats,
 ): string {
-	const usable = Math.max(4, width - 1);
+	if (!Number.isFinite(width) || width < 1) return "";
+	const columns = Math.floor(width);
+	const usable = columns === 1 ? 1 : columns - 1;
 	const lead = 2;
 	// Reserve the lead, both label spaces, and at least one trailing dash.
 	const budget = usable - lead - 3;
