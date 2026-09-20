@@ -560,3 +560,37 @@ test("marks a card closed when Telegram polling fails", async () => {
     .toEqual(["<b>Question closed</b>", "<b>Resolved</b>"]);
   await service.shutdown();
 });
+
+test("question replies and corrections stay pinned to their original session topics", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let thread = 101;
+  let messageId = 0;
+  let release!: (updates: any[]) => void;
+  const incoming = new Promise<any[]>((resolve) => { release = resolve; });
+  const service = new DefaultTelegramService({ ...config, threadId: undefined }, {
+    topics: { resolve: async () => ({ threadId: thread }) } as any,
+    inbox: { initialize: async () => {}, read: async () => incoming },
+    emptyPollDelayMs: 0,
+    fetch: async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      requests.push({ method, body });
+      return response(method === "sendMessage" ? { message_id: ++messageId } : true);
+    },
+  });
+  const first = await service.openPrompt({ text: "First question", parse: parser });
+  thread = 202;
+  const second = await service.openPrompt({ text: "Second question", parse: parser });
+  const answer = (id: number, prompt: number, topic: number, text: string) => ({ update_id: id, message: {
+    message_id: 100 + id, text, chat: { id: config.chatId }, message_thread_id: topic, reply_to_message: { message_id: prompt },
+  } });
+  release([answer(1, first.messageId, 202, "valid"), answer(2, first.messageId, 101, "invalid"),
+    answer(3, second.messageId, 202, "valid"), answer(4, first.messageId, 101, "valid")]);
+  expect(await first.result).toEqual({ status: "answered", value: "accepted" });
+  expect(await second.result).toEqual({ status: "answered", value: "accepted" });
+  await service.drain();
+  expect(requests.find((request) => request.body.text === "Try again")?.body.message_thread_id).toBe(101);
+  const receipts = requests.filter((request) => String(request.body.text).includes("Reply received first"));
+  expect(receipts.map((request) => [request.body.reply_parameters.message_id, request.body.message_thread_id])).toEqual([[second.messageId, 202], [first.messageId, 101]]);
+  await service.shutdown();
+});

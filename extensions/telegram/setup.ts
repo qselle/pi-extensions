@@ -88,6 +88,7 @@ export async function promptTelegramSetup(
     botToken,
     chatId,
     threadId: current?.threadId,
+    topics: current?.topics,
     details: current?.details ?? "summary",
     questionDelayMinutes: Number(delayText),
   });

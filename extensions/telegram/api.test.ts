@@ -11,6 +11,20 @@ const config: TelegramConfig = {
   questionDelayMinutes: 5,
 };
 
+test("message destinations can override a fixed topic or explicitly use General", async () => {
+  const bodies: any[] = [];
+  const api = new TelegramApiClient(config, { fetch: async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return jsonResponse({ ok: true, result: { message_id: 1 } });
+  } });
+  await api.sendMessage("Other topic", { threadId: 99 });
+  await api.sendMessage("General", { threadId: null });
+  expect(bodies.map((body) => body.message_thread_id)).toEqual([99, undefined]);
+  const controller = new AbortController(); controller.abort();
+  await expect(api.sendMessage("Cancelled", { signal: controller.signal })).rejects.toThrow();
+  expect(bodies).toHaveLength(2);
+});
+
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,

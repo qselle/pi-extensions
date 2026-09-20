@@ -25,6 +25,8 @@ export interface TelegramInlineChoice {
 }
 
 export interface TelegramSendOptions extends TelegramRequestOptions {
+  /** Per-message destination; null explicitly selects General. */
+  threadId?: number | null;
   forceReply?: boolean;
   inputPlaceholder?: string;
   replyToMessageId?: number;
@@ -34,6 +36,7 @@ export interface TelegramSendOptions extends TelegramRequestOptions {
 
 export interface TelegramSendResult {
   messageId?: number;
+  threadId?: number;
 }
 
 export class TelegramApiError extends Error {
@@ -67,7 +70,8 @@ export class TelegramApiClient {
       text,
       disable_web_page_preview: true,
     };
-    if (this.config.threadId !== undefined) body.message_thread_id = this.config.threadId;
+    const threadId = options.threadId === null ? undefined : options.threadId ?? this.config.threadId;
+    if (threadId !== undefined) body.message_thread_id = threadId;
     if (options.parseMode) body.parse_mode = options.parseMode;
     if (options.inlineChoices && options.inlineChoices.length > 0) {
       body.reply_markup = {
@@ -136,6 +140,7 @@ export class TelegramApiClient {
   }
 
   async call(method: string, body: Record<string, unknown>, options: TelegramRequestOptions = {}): Promise<any> {
+    if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();

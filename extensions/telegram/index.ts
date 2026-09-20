@@ -1,6 +1,9 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { GOAL_COMPLETED_EVENT } from "../goal/events.ts";
-import { safeTelegramError } from "./api.ts";
+import { safeTelegramError, TelegramApiClient } from "./api.ts";
+import { SessionTopics, TOPIC_ENTRY } from "./topics.ts";
+import { BotInbox } from "./inbox.ts";
 import {
   loadTelegramConfig,
   saveTelegramConfig,
@@ -19,6 +22,7 @@ import {
 export interface TelegramExtensionOptions extends TelegramServiceOptions {
   env?: Readonly<Record<string, string | undefined>>;
   configFile?: string | false;
+  inboxDirectory?: string;
   isSubagentChild?: boolean;
   service?: TelegramService;
   setupPrompt?: typeof promptTelegramSetup;
@@ -45,6 +49,24 @@ export default function telegramExtension(
   let notifier: TelegramNotifier | undefined;
   let registration: { unregister(): void } | undefined;
   let activeContext: ExtensionContext | undefined;
+  let topics: SessionTopics | undefined;
+
+  const bindTopics = (ctx: ExtensionContext, name = pi.getSessionName?.()) => {
+    const id = ctx.sessionManager?.getSessionId?.();
+    if (!topics || !id) return;
+    topics.bind({
+      id, title: name, cwd: ctx.cwd,
+      entries: ctx.sessionManager.getEntries(),
+      save: (data) => pi.appendEntry(TOPIC_ENTRY, data),
+    });
+  };
+  const makeService = (config: TelegramConfig) => {
+    const api = new TelegramApiClient(config, options);
+    topics = new SessionTopics(config, api);
+    if (activeContext) bindTopics(activeContext);
+    const inbox = options.inbox ?? new BotInbox(options.inboxDirectory ?? join(getAgentDir(), "telegram-inbox"), config.botToken, api, options.pollTimeoutSeconds);
+    return new DefaultTelegramService(config, { ...options, topics, inbox });
+  };
 
   const installRuntime = (nextService: TelegramService, config?: TelegramConfig) => {
     service = nextService;
@@ -58,7 +80,7 @@ export default function telegramExtension(
   if (options.service) {
     installRuntime(options.service);
   } else if (configuration?.status === "enabled") {
-    installRuntime(new DefaultTelegramService(configuration.config, options), configuration.config);
+    installRuntime(makeService(configuration.config), configuration.config);
   }
   const initialRuntime = service && notifier ? { service, notifier } : undefined;
 
@@ -69,13 +91,15 @@ export default function telegramExtension(
     registration = undefined;
     notifier = undefined;
     service = undefined;
+    topics?.shutdown();
+    topics = undefined;
     previousRegistration?.unregister();
     await previousNotifier?.drain();
     await previousService?.shutdown();
   };
   const replaceRuntime = async (config?: TelegramConfig) => {
     await stopRuntime();
-    if (config) installRuntime(new DefaultTelegramService(config, options), config);
+    if (config) installRuntime(makeService(config), config);
   };
   const persist = options.writeConfig ?? (async (config: TelegramConfig & { enabled: boolean }) => {
     await saveTelegramConfig(config, {
@@ -87,12 +111,19 @@ export default function telegramExtension(
   const stopGoalListener = pi.events.on(GOAL_COMPLETED_EVENT, (event) => notifier?.handle(event));
 
   const handleTelegramCommand = async (rawAction: string, ctx: ExtensionContext) => {
+    if (/^topic(?:\s|$)/i.test(rawAction.trim())) {
+      if (!topics) { ctx.ui.notify("Enable Telegram before configuring session topics.", "info"); return; }
+      bindTopics(ctx);
+      const status = await topics.command(rawAction.trim().replace(/^topic\s*/i, ""));
+      ctx.ui.notify(`Telegram topics: ${status}`, "info");
+      return;
+    }
     const action = rawAction.trim().toLowerCase() || "status";
     if (action === "status") {
       if (injectedService) {
         ctx.ui.notify("Telegram is on (custom service).", "info");
       } else if (configuration?.status === "enabled") {
-        ctx.ui.notify(`Telegram is on (${formatDelay(configuration.config.questionDelayMinutes)} question delay).`, "info");
+        ctx.ui.notify(`Telegram is on (${formatDelay(configuration.config.questionDelayMinutes)} question delay).\nTopics: ${topics?.status() ?? "unavailable"}`, "info");
       } else if (configuration?.status === "disabled" && configuration.config) {
         ctx.ui.notify(`Telegram is off (${formatDelay(configuration.config.questionDelayMinutes)} question delay).`, "info");
       } else if (configuration?.status === "invalid") {
@@ -153,7 +184,7 @@ export default function telegramExtension(
     }
 
     if (action !== "on" && action !== "off") {
-      ctx.ui.notify("Usage: /telegram setup|on|off|status|test", "warning");
+      ctx.ui.notify("Usage: /telegram setup|on|off|status|test|topic", "warning");
       return;
     }
     if (injectedService) {
@@ -189,7 +220,7 @@ export default function telegramExtension(
   pi.registerCommand("telegram", {
     description: "Set up and control Telegram integration",
     getArgumentCompletions: (prefix: string) => {
-      const actions = ["setup", "on", "off", "status", "test"];
+      const actions = ["setup", "on", "off", "status", "test", "topic", "topic status", "topic auto", "topic required", "topic off", "topic retry", "topic new", "topic name", "topic follow"];
       const matches = actions.filter((action) => action.startsWith(prefix.trim().toLowerCase()));
       return matches.length > 0 ? matches.map((action) => ({ value: action, label: action })) : null;
     },
@@ -202,7 +233,12 @@ export default function telegramExtension(
 
   pi.on("session_start", (_event, ctx) => {
     activeContext = ctx;
+    bindTopics(ctx);
     if (configuration?.status === "invalid") ctx.ui.notify(configuration.message, "warning");
+  });
+  pi.on("session_info_changed", (event, ctx) => {
+    bindTopics(ctx, event.name);
+    void topics?.syncName();
   });
 
   pi.on("session_shutdown", async () => {
