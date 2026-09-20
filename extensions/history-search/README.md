@@ -19,6 +19,8 @@ Matching is case-insensitive and supports non-contiguous subsequences. Exact, pr
 
 The search covers user prompts and shell commands on the active branch, including entries before compaction, plus prompts observed by the current process. It does not scan other session files. `Ctrl+R` is intercepted only in the main editor, so Pi's rename shortcut still works in `/resume`.
 
+Session changes, tree navigation, and shutdown close an open picker. A selection from an earlier session cannot replace the current draft. Repeated session starts reuse the editor wrapper and preserve other editor extensions.
+
 ## Dependencies and limitations
 
 - Uses Pi's public session, editor, keybinding, and TUI APIs.

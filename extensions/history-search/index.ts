@@ -14,6 +14,15 @@ type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorCom
 export default function historySearchExtension(pi: ExtensionAPI) {
   let recentInputs: string[] = [];
   let pickerOpen = false;
+  let generation = 0;
+  let closePicker: (() => void) | undefined;
+  let currentContext: ExtensionContext | undefined;
+  const resetPicker = () => {
+    generation++;
+    closePicker?.(); closePicker = undefined;
+    if (pickerOpen) pi.events.emit(OVERLAY_MODAL_EVENT, { id: "history-search", open: false });
+    pickerOpen = false;
+  };
   let previousFactory: EditorFactory | undefined;
   let installedFactory: EditorFactory | undefined;
 
@@ -32,12 +41,17 @@ export default function historySearchExtension(pi: ExtensionAPI) {
 
     const draft = ctx.ui.getEditorText();
     const initialQuery = explicitQuery === undefined ? initialHistoryQuery(draft) : explicitQuery;
+    const version = generation;
     pickerOpen = true;
     pi.events.emit(OVERLAY_MODAL_EVENT, { id: "history-search", open: true });
     try {
       const selected = await ctx.ui.custom<string | null>(
-        (tui, theme, keybindings, done) =>
-          new HistoryPicker(history, initialQuery, theme, keybindings, tui, done),
+        (tui, theme, keybindings, done) => {
+          const picker = new HistoryPicker(history, initialQuery, theme, keybindings, tui, done);
+          if (version !== generation) done(null);
+          else closePicker = () => done(null);
+          return picker;
+        },
         {
           overlay: true,
           overlayOptions: {
@@ -49,10 +63,12 @@ export default function historySearchExtension(pi: ExtensionAPI) {
           },
         },
       );
-      if (selected !== null) ctx.ui.setEditorText(selected);
+      if (version === generation && typeof selected === "string") ctx.ui.setEditorText(selected);
     } finally {
-      pi.events.emit(OVERLAY_MODAL_EVENT, { id: "history-search", open: false });
-      pickerOpen = false;
+      if (version === generation) {
+        pi.events.emit(OVERLAY_MODAL_EVENT, { id: "history-search", open: false });
+        pickerOpen = false; closePicker = undefined;
+      }
     }
   };
 
@@ -69,19 +85,27 @@ export default function historySearchExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (event, ctx) => {
+    resetPicker();
+    currentContext = ctx;
     if (event.reason !== "reload") recentInputs = [];
     if (ctx.mode !== "tui") return;
 
+    if (installedFactory) return;
     previousFactory = ctx.ui.getEditorComponent();
+    const baseFactory = previousFactory;
     installedFactory = (tui, theme, keybindings) => {
-      const editor = previousFactory?.(tui, theme, keybindings)
+      const editor = baseFactory?.(tui, theme, keybindings)
         ?? new CustomEditor(tui, theme, keybindings);
       const handleInput = editor.handleInput.bind(editor);
       editor.handleInput = (data: string) => {
         if (matchesKey(data, SHORTCUT)) {
-          void openHistorySearch(ctx).catch((error) => {
+          const activeContext = currentContext;
+          const version = generation;
+          if (!activeContext) return;
+          void openHistorySearch(activeContext).catch((error) => {
+            if (version !== generation) return;
             const message = error instanceof Error ? error.message : String(error);
-            ctx.ui.notify(`History search failed: ${message}`, "error");
+            activeContext.ui.notify(`History search failed: ${message}`, "error");
           });
           return;
         }
@@ -93,6 +117,7 @@ export default function historySearchExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    resetPicker(); currentContext = undefined;
     if (ctx.mode !== "tui") return;
     if (ctx.ui.getEditorComponent() === installedFactory) {
       ctx.ui.setEditorComponent(previousFactory);
@@ -101,7 +126,8 @@ export default function historySearchExtension(pi: ExtensionAPI) {
     installedFactory = undefined;
   });
 
-  pi.on("session_tree", () => {
+  pi.on("session_tree", (_event, ctx) => {
+    resetPicker(); currentContext = ctx;
     recentInputs = [];
   });
 }

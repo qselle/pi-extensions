@@ -9,9 +9,14 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { rankHistory, type HistoryItem, type RankedHistoryItem } from "./history.ts";
-import { keyLabel } from "./keys.ts";
+import { keyLabel } from "../../lib/keys.ts";
 
 const MAX_VISIBLE_RESULTS = 10;
+
+export interface HistoryPickerLabels {
+  title?: string;
+  confirm?: string;
+}
 
 export class HistoryPicker implements Component, Focusable {
   private readonly input = new Input();
@@ -26,6 +31,7 @@ export class HistoryPicker implements Component, Focusable {
     private readonly keybindings: KeybindingsManager,
     private readonly tui: TUI,
     private readonly done: (result: string | null) => void,
+    private readonly labels: HistoryPickerLabels = {},
   ) {
     this.input.setValue(initialQuery);
     this.refresh();
@@ -107,13 +113,13 @@ export class HistoryPicker implements Component, Focusable {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    if (safeWidth < 4) return [truncateToWidth("History", safeWidth, "")];
+    if (safeWidth < 4) return [truncateToWidth(this.labels.title ?? "History", safeWidth, "")];
 
     const innerWidth = safeWidth - 2;
     const count = this.matches.length === this.items.length
       ? `${this.items.length}`
       : `${this.matches.length}/${this.items.length}`;
-    const lines = [this.topBorder(safeWidth, ` History search · ${count} `)];
+    const lines = [this.topBorder(safeWidth, ` ${this.labels.title ?? "History search"} · ${count} `)];
     const queryWidth = Math.max(1, innerWidth - 3);
     const queryLine = this.input.render(queryWidth)[0] ?? "";
     lines.push(this.frameLine(`${this.theme.fg("accent", "? ")}${queryLine}`, safeWidth));
@@ -144,7 +150,7 @@ export class HistoryPicker implements Component, Focusable {
     const navigate = `${keyLabel(this.keybindings, "tui.select.up", "↑")}${keyLabel(this.keybindings, "tui.select.down", "↓")}/Ctrl+R`;
     const use = keyLabel(this.keybindings, "tui.select.confirm", "Enter");
     const cancel = keyLabel(this.keybindings, "tui.select.cancel", "Esc");
-    lines.push(this.frameLine(this.theme.fg("dim", ` ${navigate} navigate · ${use} use · ${cancel} cancel`), safeWidth));
+    lines.push(this.frameLine(this.theme.fg("dim", ` ${navigate} navigate · ${use} ${this.labels.confirm ?? "use"} · ${cancel} cancel`), safeWidth));
     lines.push(this.bottomBorder(safeWidth));
     return lines.map((line) => truncateToWidth(line, safeWidth, ""));
   }

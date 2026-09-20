@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { keyLabel } from "./keys.ts";
+import { keyLabel } from "../../lib/keys.ts";
 
 function manager(keys: Record<string, string[]>): never {
   return { getKeys: (id: string) => keys[id] ?? [] } as never;
