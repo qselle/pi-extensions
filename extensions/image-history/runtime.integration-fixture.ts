@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAgentSessionServices, createAgentSessionFromServices, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { getModels } from "@earendil-works/pi-ai/compat";
+import extension from "./index.ts";
+const root = await mkdtemp(join(tmpdir(), "pi-image-history-"));
+process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+let session: Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"] | undefined;
+try {
+  const manager = SessionManager.create(root, join(root, "sessions"));
+  const image = { type: "image" as const, mimeType: "image/png", data: "aGVsbG8=" };
+  const id = manager.appendMessage({ role: "user", content: [image], timestamp: 1 });
+  const model = getModels("anthropic")[0]!;
+  manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Saw image" }], api: model.api, provider: model.provider, model: model.id, timestamp: 2, stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  manager.appendMessage({ role: "user", content: "Continue", timestamp: 3 });
+  const services = await createAgentSessionServices({ cwd: root, agentDir: process.env.PI_CODING_AGENT_DIR,
+    settingsManager: SettingsManager.inMemory({}), resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, extensionFactories: [extension] } });
+  ({ session } = await createAgentSessionFromServices({ services, sessionManager: manager, model }));
+  const runner = session.extensionRunner;
+  await runner.emit({ type: "session_start", reason: "resume" });
+  assert(!session.getActiveToolNames().includes("history_image"));
+  await session.prompt("/image-history on");
+  assert(session.getActiveToolNames().includes("history_image"));
+  const before = await readFile(manager.getSessionFile()!, "utf8");
+  const context = await runner.emitContext(manager.buildSessionContext().messages);
+  assert(!JSON.stringify(context).includes(image.data));
+  assert(JSON.stringify(context).includes(`${id}:0`));
+  const result = await runner.getToolDefinition("history_image")!.execute("lookup", { reference: `${id}:0` }, undefined, undefined, runner.createContext());
+  assert.deepEqual(result.content[1], image);
+  assert.equal(await readFile(manager.getSessionFile()!, "utf8"), before);
+  await session.prompt("/image-history off");
+  assert(!session.getActiveToolNames().includes("history_image"));
+  const full = await runner.emitContext(manager.buildSessionContext().messages);
+  assert(JSON.stringify(full).includes(image.data));
+  console.log("native image deferral, retrieval, activation and unchanged history verified");
+} finally { session?.dispose(); await rm(root, { recursive: true, force: true }); }
