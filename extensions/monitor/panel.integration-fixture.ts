@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { SnapshotPanel } from "../../lib/transcript/snapshot-panel.ts";
+import { monitorBlocks } from "./panel.ts";
+import { createMonitor, pauseMonitor } from "./monitor.ts";
+initTheme("dark", false);
+const handlers = new Map<string, Function>();
+const events: any[] = [];
+const panel = new SnapshotPanel({ on: (name: string, handler: Function) => handlers.set(name, handler), events: { emit: (_: string, value: unknown) => events.push(value) } } as never, "monitor", "monitors · snapshot");
+const prompt = "Long reminder ".repeat(30) + "unique-search-target";
+const task = pauseMonitor(createMonitor({ command: prompt, intervalMs: 60000, condition: "change", maxRuns: 100 }), "Interrupted turn");
+assert(monitorBlocks([task])[1]!.body.includes(prompt));
+assert(monitorBlocks([task])[1]!.body.includes("Interrupted turn"));
+assert(monitorBlocks([])[0]!.body.includes("No monitors are configured"));
+const notices: string[] = [];
+await panel.open({ mode: "rpc", ui: { notify: (text: string) => notices.push(text) } } as never, monitorBlocks([task]));
+assert(notices[0]!.includes(prompt));
+for (const event of ["session_start", "session_tree", "session_shutdown"]) {
+  let closed = 0;
+  await panel.open({ mode: "tui", ui: { custom: async (factory: Function) => {
+    const view = factory({ terminal: { rows: 24, columns: 80 }, requestRender() {} }, { fg: (_: string, s: string) => s, bg: (_: string, s: string) => s, bold: (s: string) => s }, { matches: () => false, getKeys: () => [] }, () => closed++);
+    assert(view.render(80).join("\n").includes("Command monitors"), "Snapshot opens at its overview, not the bottom of the last command");
+    assert(!view.render(160).join("\n").includes("t thinking"));
+    assert(!view.render(160)[0].includes("Transcript"));
+    view.handleInput("\x1b[F");
+    assert(!view.render(160)[0].includes("following"));
+    view.handleInput("\x1b[H");
+    for (const width of [1, 20, 80]) assert(view.render(width).every((line: string) => visibleWidth(line) <= width));
+    view.handleInput("/");
+    for (const char of "unique-search-target") view.handleInput(char);
+    assert(view.render(80).join("\n").includes("unique-search-target"));
+    handlers.get(event)!();
+  } } } as never, monitorBlocks([task]));
+  assert.equal(closed, 1);
+  assert.equal(events.at(-1).open, false);
+}
+const unsafe = { ...task, command: "printf `literal`\n\x1b[31mwide 界\x1b[0m", lastExitCode: 0 };
+const block = monitorBlocks([unsafe])[1]!;
+assert(block.body.includes("printf `literal`\nwide 界"));
+assert(!block.body.includes("\x1b"));
+assert(block.body.includes("Last exit: 0"));
+assert(monitorBlocks([task])[1]!.body.includes("Exit status unknown"));
+console.log("monitor panel verified");

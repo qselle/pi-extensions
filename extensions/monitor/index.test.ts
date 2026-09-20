@@ -5,6 +5,7 @@ import monitorExtension from "./index.ts";
 type Handler = (event: any, ctx: any) => any;
 
 class MockPi {
+  events = { emit() {} };
   handlers = new Map<string, Handler[]>();
   commands = new Map<string, any>();
   tools = new Map<string, any>();
@@ -47,6 +48,23 @@ function install(pi: MockPi) {
     runCommand: (command, args, cwd, timeout, signal) => pi.exec(command, args, { cwd, timeout, signal }),
   });
 }
+
+test("monitor view exposes full commands in RPC without running a check", async () => {
+  const pi = new MockPi();
+  const ctx = { ...context(pi), mode: "rpc" };
+  const command = "printf ".repeat(50) + "full-command-tail";
+  const job = { ...createMonitor({ command, intervalMs: 60000, condition: "change", maxRuns: 20 }), status: "paused", nextRunAt: null };
+  pi.entries.push({ type: "custom", customType: "monitor-state", data: { version: 1, jobs: [job] } });
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("monitor").handler("view", ctx);
+  expect(ctx.notifications.at(-1)).toContain(command);
+  expect(ctx.notifications.at(-1)).toContain("Checks: 0/20");
+  expect(pi.executions).toHaveLength(0);
+  expect(pi.sent).toHaveLength(0);
+  expect(pi.commands.get("monitor").getArgumentCompletions("v")).toEqual([{ value: "view", label: "view" }]);
+  await pi.emit("session_shutdown", {}, ctx);
+});
 
 test("runs explicit shell commands but keeps a change baseline silent", async () => {
   const pi = new MockPi();
@@ -130,4 +148,62 @@ test("an interrupted final alert can resume and expires only after settlement", 
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "expired", runs: 1 });
   await pi.emit("session_shutdown", {}, ctx);
+});
+
+for (const completion of ["result", "error"] as const) {
+  test(`pause/resume discards a cancelled check's late ${completion} before starting a fresh check`, async () => {
+    const pi = new MockPi();
+    const ctx = context(pi);
+    type Result = typeof pi.result;
+    const checks: Array<{ signal?: AbortSignal; resolve: (value: Result) => void; reject: (error: Error) => void }> = [];
+    monitorExtension(pi as any, { runCommand: (_command, _args, _cwd, _timeout, signal) => new Promise((resolve, reject) => checks.push({ signal, resolve, reject })) });
+    await pi.emit("session_start", {}, ctx);
+    try {
+      await pi.commands.get("monitor").handler("10s --on always -- delayed-check", ctx);
+      await Bun.sleep(15);
+      expect(checks).toHaveLength(1);
+      const id = pi.entries.at(-1).data.jobs[0].id;
+      await pi.commands.get("monitor").handler(`pause ${id}`, ctx);
+      await pi.commands.get("monitor").handler(`resume ${id}`, ctx);
+      expect(checks[0]!.signal!.aborted).toBe(true);
+      // Keep the old process pending even though it has received cancellation.
+      await Bun.sleep(15);
+      expect(checks).toHaveLength(1);
+      if (completion === "result") checks[0]!.resolve({ code: 1, killed: true, stdout: "stale", stderr: "" });
+      else checks[0]!.reject(new Error("late cancellation failure"));
+      await Bun.sleep(15);
+      expect(checks).toHaveLength(2);
+      expect(pi.sent).toHaveLength(0);
+      expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "active", runs: 0 });
+      expect(pi.entries.at(-1).data.jobs[0].lastSignature).toBeUndefined();
+      checks[1]!.resolve({ code: 0, killed: false, stdout: "fresh", stderr: "" });
+      await Bun.sleep(15);
+      expect(pi.sent).toHaveLength(1);
+      expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ runs: 1, lastExitCode: 0 });
+      await pi.emit("agent_start", {}, ctx);
+      const [context] = await pi.emit("context", { messages: [{ role: "custom", ...pi.sent[0].message }] }, ctx);
+      expect(context.messages[0].content).toContain("fresh");
+      expect(context.messages[0].content).not.toContain("stale");
+    } finally {
+      await pi.emit("session_shutdown", {}, ctx);
+      for (const check of checks) check.resolve({ code: 143, killed: true, stdout: "", stderr: "" });
+    }
+  });
+}
+
+test("model stop aborts an explicitly selected in-flight monitor", async () => {
+  const pi = new MockPi(); pi.waitForAbort = true;
+  const ctx = context(pi);
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  try {
+    await pi.commands.get("monitor").handler("10s -- long-check", ctx);
+    await Bun.sleep(15);
+    const id = pi.entries.at(-1).data.jobs[0].id;
+    await pi.tools.get("monitor_stop").execute("stop", { monitor_id: id }, undefined, undefined, ctx);
+    await Bun.sleep(15);
+    expect(pi.aborted).toBe(true);
+    expect(pi.sent).toHaveLength(0);
+    expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "stopped", runs: 0 });
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
 });
