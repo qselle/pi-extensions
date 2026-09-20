@@ -42,7 +42,7 @@ No new model tool is needed for topic management.
 
 ## Verification
 
-The final implementation passed 1,136 tests on both macOS and Linux ARM64, with
+The reviewed implementation passed 1,142 tests on both macOS and Linux ARM64, with
 zero failures and one expected opt-in macOS power-assertion skip. Tests include
 native Pi title/topic events, fork isolation, shutdown cleanup, exact reply/topic
 correlation, concurrent readers and two separate processes sharing a fake Telegram
@@ -52,6 +52,25 @@ Clean consumer installs on both platforms ran a real native PTY and loaded/shut
 down all 38 extensions in both orders without network requests from extension
 startup. Typechecking and package validation passed. No live Telegram messages
 were sent during development; live service behavior and Windows remain unverified.
+
+## Pre-push review
+
+The 39 unpushed commits were reviewed for lifecycle, session state, UI integration,
+research requests, subprocess cleanup and packaging. Three reproduced regressions
+were corrected, with six additional tests:
+
+- Workflow controls now remain available for activation after repeated tree
+  navigation, even when the extension already hid them on startup.
+- A child being resumed cannot restart work after close, interrupt, cancellation
+  or session shutdown; its startup process is stopped and cleaned up.
+- Fixed Telegram destination configuration also disables name synchronization
+  of an automatic topic restored from earlier session metadata.
+
+The regressions were reproduced before correction. Full macOS/Linux suites and
+packaged extension loading passed afterward. The earlier clean consumer install
+checks remain applicable: dependency versions and package configuration did not
+change in this review. Live Telegram and Herdr UI behavior still need verification;
+the tests use local fake services. Hosted CI will first run after pushing.
 
 ## Commit policy
 
