@@ -31,8 +31,9 @@ While a chat runs, [`overlay-stack`](../overlay-stack/) shows a card and the foo
 
 ## Dependencies and limitations
 
-- Uses Pi's public extension, session, model, and TUI APIs plus `complete()` from `@earendil-works/pi-ai/compat`.
+- Uses Pi's public extension, session, model, and TUI APIs including Pi 0.86.1's authenticated `ctx.modelRegistry.streamSimple()`.
 - Requires [`overlay-stack`](../overlay-stack/); optionally uses [`session-title`](../session-title/).
 - No third-party runtime packages.
-- Requires the configured model provider.
+- Requires the configured model provider. Provider overrides, authentication refresh,
+  headers and custom streaming implementations are resolved by Pi.
 - Workspace controls require the interactive TUI.

@@ -76,3 +76,8 @@ for (const width of [0, 1, 12, 28, 40, 80]) for (const expanded of [false, true]
   assert(lines.every((line) => !line.includes("�")));
 }
 console.log("context integration verified");
+
+const persistedPrompt = { type: "message", message: { role: "system", content: "Current instructions", timestamp: 0 } };
+const promptReport = analyzeContext({ entries: [persistedPrompt], systemPrompt: "Current instructions" }, piEstimators);
+assert.equal(promptReport.conversation.total, 0, "persisted system prompts must not be counted twice");
+assert(promptReport.system.total > 0);

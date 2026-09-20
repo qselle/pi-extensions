@@ -24,12 +24,12 @@ interface OpenedSession {
 }
 
 interface SessionManagerHost {
-  listAll(onProgress?: (loaded: number, total: number) => void): Promise<SessionInfo[]>;
+  listAll(onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<SessionInfo[]>;
   open(path: string): OpenedSession;
 }
 
 export interface SessionSearchExtensionOptions {
-  listSessions?: (onProgress?: (loaded: number, total: number) => void) => Promise<SessionInfo[]>;
+  listSessions?: (onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal) => Promise<SessionInfo[]>;
   openSession?: (path: string) => OpenedSession;
   search?: typeof searchSessions;
   selectCurrent?: typeof selectCurrentProjectSessions;
@@ -44,7 +44,7 @@ export default function sessionSearchExtension(
   // Namespace access remains test-order safe when another extension test installs
   // a deliberately partial process-wide mock of the Pi package.
   const hostSessionManager = (CodingAgent as unknown as { SessionManager?: SessionManagerHost }).SessionManager;
-  const listSessions = options.listSessions ?? ((onProgress) => requireSessionManager(hostSessionManager).listAll(onProgress));
+  const listSessions = options.listSessions ?? ((onProgress, signal) => requireSessionManager(hostSessionManager).listAll(onProgress, signal));
   const openSession = options.openSession ?? ((path) => requireSessionManager(hostSessionManager).open(path));
   const search = options.search ?? searchSessions;
   const selectCurrent = options.selectCurrent ?? selectCurrentProjectSessions;
@@ -94,7 +94,7 @@ export default function sessionSearchExtension(
         setStatus(ctx, "loading saved sessions…");
         const sessions = await listSessions((loaded, total) => {
           if (current() && (loaded === total || loaded % 25 === 0)) setStatus(ctx, `loading sessions ${loaded}/${total}…`);
-        });
+        }, controller.signal);
         if (!current()) return;
         const selection = selectScope(sessions, parsed, ctx.cwd, selectCurrent);
         if (selection.sessions.length === 0) {
@@ -199,7 +199,7 @@ export default function sessionSearchExtension(
           if (copied) ctx.ui.notify("Matching excerpt copied.", "info");
           else {
             ctx.ui.setEditorText(selected.snippet);
-            ctx.ui.notify("No supported clipboard command was available; excerpt placed in the editor.", "warning");
+            ctx.ui.notify("Clipboard unavailable; excerpt placed in the editor.", "warning");
           }
           return;
         }

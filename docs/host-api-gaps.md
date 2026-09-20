@@ -1,13 +1,13 @@
 # Public host API gaps
 
-The repository requires public Pi extension APIs. Inspection of Pi 0.85.1's
+The repository requires public Pi extension APIs. Inspection of Pi 0.86.1's
 extension declarations confirms a Markdown source transformer and custom-entry
 renderers, but no documented native code-fence renderer, grammar registration or
 transparent image-payload storage adapter. These proposals are design work, not
 implemented or submitted upstream changes.
 
-The current upstream [extension API declarations](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/extensions/types.ts)
-were also checked during the completion-gate review. The rendering registrations
+The released [extension API declarations](https://github.com/earendil-works/pi/blob/v0.86.1/packages/coding-agent/src/core/extensions/types.ts)
+were checked again during the [0.86 release audit](pi-0.86-audit.md). The rendering registrations
 still expose Markdown transformation and custom message/entry rendering rather
 than the native fence and storage contracts described here. Upgrading blindly is
 not evidence that these capabilities become available.

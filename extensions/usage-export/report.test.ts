@@ -2,6 +2,14 @@ import { expect, test } from "bun:test";
 import { buildReport, formatReport } from "./report.ts";
 const usage = { input: 20, output: 10, cacheRead: 5, cacheWrite: 3, totalTokens: 38, cost: { total: 0.01 } };
 const assistant = { type: "message", id: "a", timestamp: "2026-09-19T00:00:00Z", message: { role: "assistant", provider: "example", model: "model", stopReason: "stop", usage, content: [{ type: "text", text: "private response" }] } };
+test("exports cache-warming usage with its provider, model and category exactly once", () => {
+  const warm = { type: "usage", kind: "cache_warm", id: "warm", provider: "example", model: "warm-model", usage, note: "private note" };
+  const report = buildReport([assistant, warm, warm], "branch");
+  expect(report.rows).toHaveLength(2);
+  expect(report.rows[1]).toMatchObject({ source: "cache_warm", provider: "example", model: "warm-model", cost: 0.01, cacheRead: 5, stopReason: null });
+  expect(report.totals.cost.known).toBe(0.02);
+  expect(formatReport(report, "json")).not.toContain("private note");
+});
 test("allowlists usage and metadata while retaining nested and summary costs", () => {
   const report = buildReport([
     assistant, assistant,

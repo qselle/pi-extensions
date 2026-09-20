@@ -80,3 +80,17 @@ test("invalidation picks up newly recorded usage", () => {
   cache.invalidate();
   expect(cache.get(() => entries)).toEqual({ input: 150, output: 15, cost: 0.03 });
 });
+
+test("a changed branch leaf picks up idle cache-warming usage without an assistant event", () => {
+  const cache = new UsageTotalsCache();
+  const entries: unknown[] = [assistant(100, 10, 0.02)];
+  let scans = 0;
+  const read = () => { scans++; return entries; };
+  expect(cache.get(read, "response").cost).toBe(0.02);
+  entries.push({ type: "usage", kind: "cache_warm", usage: { input: 1, output: 1, cost: { total: 0.001 } } });
+  expect(cache.get(read, "warm")).toEqual({ input: 101, output: 11, cost: 0.021 });
+  cache.get(read, "warm");
+  expect(scans).toBe(2);
+  entries.pop();
+  expect(cache.get(read, "response").cost).toBe(0.02);
+});

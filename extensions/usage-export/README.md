@@ -20,6 +20,8 @@ JSON includes the export scope, generation time, records, and totals with a sepa
 
 - Uses Pi's public session API and Node filesystem APIs; no third-party dependencies.
 - Works in interactive and headless command contexts; cross-platform. Filesystem permissions depend on the platform.
+- Pi 0.86 standalone usage entries, including cache warming, retain their category
+  in `source` and their provider/model attribution. They are counted once per entry.
 - Exports a snapshot of entries already recorded when the command runs. In-flight responses are not included. Whole-session scope includes abandoned branches; it does not scan other sessions or child-session files.
 - Nested model usage appears only when the calling tool records it. Its original provider/model attribution may be unavailable, so those fields remain blank.
 - Costs are Pi's recorded USD estimates, not invoices. Unknown fields are not inferred, and token totals are not reconstructed from partial categories.

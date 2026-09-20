@@ -1,5 +1,9 @@
-import { complete } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+
 import { TITLE_SYSTEM_PROMPT, normalizeGeneratedTitle } from "./engine.ts";
+
+export type TitleCompletion = (...args: Parameters<ModelRegistry["streamSimple"]>) => Promise<AssistantMessage>;
 
 /** Titles are a few words; anything longer is the model ignoring instructions. */
 const MAX_OUTPUT_TOKENS = 24;
@@ -22,17 +26,7 @@ export interface TitleRequestContext {
   model?: { provider: string; id: string; reasoning?: boolean };
   modelRegistry: {
     find(provider: string, id: string): unknown;
-    getApiKeyAndHeaders(model: unknown): Promise<{
-      ok: boolean;
-      error?: string;
-      apiKey?: string;
-      /**
-       * Pi's `ProviderHeaders`: a `null` value is a deletion marker for a default
-       * header, so it must be forwarded to pi-ai unchanged rather than filtered.
-       */
-      headers?: Record<string, string | null>;
-      env?: Record<string, string>;
-    }>;
+    streamSimple: ModelRegistry["streamSimple"];
   };
   sessionManager?: { getSessionId?: () => string | undefined };
 }
@@ -44,7 +38,7 @@ export interface RequestTitleOptions {
   override?: string;
   signal?: AbortSignal;
   /** Injectable for tests. */
-  completion?: typeof complete;
+  completion?: TitleCompletion;
 }
 
 /**
@@ -54,7 +48,7 @@ export interface RequestTitleOptions {
  */
 export async function requestTitle(options: RequestTitleOptions): Promise<TitleResult> {
   const { ctx, prompt } = options;
-  const run = options.completion ?? complete;
+  const run: TitleCompletion = options.completion ?? ((...args) => ctx.modelRegistry.streamSimple(...args).result());
   const models: any[] = [];
   let overrideFound = false;
 
@@ -82,29 +76,21 @@ export async function requestTitle(options: RequestTitleOptions): Promise<TitleR
   for (const model of models) {
     if (options.signal?.aborted) return { error: "aborted" };
     try {
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (!auth.ok) {
-        lastError = auth.error || `no credentials for ${model.provider}/${model.id}`;
-        continue;
-      }
-
       const response: any = await run(
         model,
         {
           systemPrompt: TITLE_SYSTEM_PROMPT,
           messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-        } as any,
+        },
         {
-          apiKey: auth.apiKey,
-          headers: auth.headers,
-          env: auth.env,
           signal: options.signal,
           maxTokens: MAX_OUTPUT_TOKENS,
-          ...(model.reasoning ? { reasoning: "off" } : {}),
+          // Omit reasoning to request no optional thinking; Pi maps this to
+          // each model's supported Off behavior ("off" is not a stream level).
           // A distinct routing id keeps this one-off prompt out of the main
           // session's prompt cache.
           sessionId: `${ctx.sessionManager?.getSessionId?.() ?? "session"}:title`,
-        } as any,
+        },
       );
 
       if (options.signal?.aborted || response?.stopReason === "aborted") return { error: "aborted" };

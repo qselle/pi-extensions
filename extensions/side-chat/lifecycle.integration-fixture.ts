@@ -8,12 +8,24 @@ let authResolve: ((value: any) => void) | undefined;
 let delayAuth = false;
 let completions = 0;
 const model = { provider: "test", id: "test", api: "test" };
-const ctx = { hasUI: false, model, modelRegistry: { find: () => model, getApiKeyAndHeaders: () => delayAuth ? new Promise((resolve) => { authResolve = resolve; }) : Promise.resolve({ ok: true }) }, sessionManager: { getBranch: () => entries, getSessionId: () => "test" }, ui: { setStatus() {} } };
+const ctx = { hasUI: false, model, modelRegistry: { find: () => model, streamSimple: (_model: any, _context: any, options: any) => {
+  const stream = new AssistantMessageEventStream();
+  void (async () => {
+    if (delayAuth) await new Promise((resolve) => { authResolve = resolve; });
+    if (options.signal.aborted) {
+      stream.push({ type: "error", reason: "aborted", error: { ...model, role: "assistant", content: [], stopReason: "aborted" } as any });
+    } else {
+      completions++;
+      stream.push({ type: "done", reason: "stop", message: { ...model, role: "assistant", content: [{ type: "text", text: "Answer" }], stopReason: "stop" } as any });
+    }
+    stream.end();
+  })();
+  return stream;
+} }, sessionManager: { getBranch: () => entries, getSessionId: () => "test" }, ui: { setStatus() {} } };
 const titles: Array<{ signal: AbortSignal; resolve: (value: any) => void }> = [];
 const store = register(pi as any, {
   registerCard: (() => ({ invalidate() {}, unregister() {} })) as any,
   titleConfig: { enabled: true },
-  completion: (async () => { completions++; return { stopReason: "stop", content: [{ type: "text", text: "Answer" }] }; }) as any,
   requestTitle: (async (options: any) => new Promise((resolve) => titles.push({ signal: options.signal, resolve }))) as any,
 });
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));

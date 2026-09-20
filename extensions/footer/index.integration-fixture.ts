@@ -87,6 +87,7 @@ function createContext(mode: string) {
     isIdle: () => idle,
     getContextUsage: () => ({ tokens: 28_200, contextWindow: 258_000, percent: 6 }),
     sessionManager: {
+      getLeafId: () => String(branch.length),
       getBranch: () => {
         branchScans++;
         return branch;
@@ -164,6 +165,14 @@ assert.equal(session.scans(), 3);
 fire("session_tree", session.ctx);
 footer.render(200);
 assert.equal(session.scans(), 4);
+
+// Idle cache warming produces a usage entry without an assistant event.
+session.branch.push({ type: "usage", kind: "cache_warm", usage: { input: 7, output: 1, cost: { total: 0.004 } } });
+const afterWarm = footer.render(200).join("");
+assert(afterWarm.includes("↓132"), afterWarm);
+assert.equal(session.scans(), 5);
+footer.render(200);
+assert.equal(session.scans(), 5);
 
 // Extension statuses (ctx.ui.setStatus) render on their own line, sorted by key,
 // so replacing pi's footer no longer hides them.

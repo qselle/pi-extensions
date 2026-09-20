@@ -6,9 +6,9 @@ function context(available: string[] = ["anthropic/claude-haiku-4-5"], authOk = 
     model: { provider: "amazon-bedrock", id: "opus-5", reasoning: true },
     modelRegistry: {
       find: (provider, id) => (available.includes(`${provider}/${id}`) ? { provider, id } : undefined),
-      getApiKeyAndHeaders: async () => (authOk
-        ? { ok: true, apiKey: "k", headers: { h: "1" }, env: {} }
-        : { ok: false, error: "no credentials" }),
+      streamSimple: (() => ({ result: async () => authOk
+        ? { stopReason: "stop", content: [{ type: "text", text: "Registry title" }] }
+        : { stopReason: "error", content: [], errorMessage: "no credentials" } })) as never,
     },
     sessionManager: { getSessionId: () => "sess-1" },
   };
@@ -47,37 +47,25 @@ describe("requestTitle", () => {
     expect(seen.request.systemPrompt).toContain("Reply only with a specific noun phrase");
     expect(seen.request.messages[0].content[0].text).toBe("p");
     expect(seen.options.maxTokens).toBe(24);
-    expect(seen.options.reasoning).toBe("off");
+    expect(seen.options.reasoning).toBeUndefined();
     // Must not share the main session's prompt cache.
     expect(seen.options.sessionId).toBe("sess-1:title");
-    expect(seen.options.apiKey).toBe("k");
+    expect(seen.options.apiKey).toBeUndefined();
   });
 
-  test("forwards provider headers unchanged, including null deletion markers", async () => {
-    const base = context();
+  test("uses the configured registry by default with provider-neutral options", async () => {
+    const ctx = context();
     let seen: any;
-    await requestTitle({
-      ctx: {
-        ...base,
-        modelRegistry: {
-          ...base.modelRegistry,
-          // Pi 0.84 returns ProviderHeaders, where null deletes a default header.
-          getApiKeyAndHeaders: async () => ({
-            ok: true,
-            apiKey: "k",
-            headers: { "x-keep": "1", "x-drop": null },
-            env: {},
-          }),
-        },
-      },
-      prompt: "p",
-      completion: (async (_model: any, _request: any, options: any) => {
-        seen = options;
-        return { content: [{ type: "text", text: "A title" }] };
-      }) as never,
-    });
-
-    expect(seen.headers).toEqual({ "x-keep": "1", "x-drop": null });
+    ctx.modelRegistry.streamSimple = ((model: any, request: any, options: any) => {
+      seen = { model, request, options };
+      return { result: textResponse("Configured provider title") };
+    }) as never;
+    const result = await requestTitle({ ctx, prompt: "p" });
+    expect(result.title).toBe("Configured provider title");
+    expect(seen.options).toMatchObject({ maxTokens: 24, sessionId: "sess-1:title" });
+    expect(seen.options.reasoning).toBeUndefined();
+    expect(seen.options.apiKey).toBeUndefined();
+    expect(seen.request.systemPrompt).toContain("Reply only with a specific noun phrase");
   });
 
   test("uses the active session model by default, regardless of other catalogue models", async () => {

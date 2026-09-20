@@ -29,5 +29,9 @@ The report is a non-context transcript entry. It stores labels and counts, not c
 ## Dependencies and limitations
 
 - Uses Pi's public extension, session, tool, context, and token-estimation APIs.
+- Pi 0.86 transcript system messages are excluded from conversation totals because
+  the current prompt and tool schemas are already counted separately. Historical
+  prompt/tool revisions retained by a provider are not separately estimated; the
+  authoritative host total can therefore differ. Cache-warming usage is not context.
 - No third-party packages or external services.
 - Cross-platform; detailed rendering requires the TUI.

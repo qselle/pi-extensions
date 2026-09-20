@@ -22,6 +22,7 @@ const factory: CreateAgentSessionRuntimeFactory = async (options) => {
 let runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>> | undefined;
 try {
   const manager = SessionManager.create(root, join(root, "sessions"));
+  manager.appendMessage({ role: "system", content: "Persistent system constraint", sections: { project: "Keep this project rule" }, timestamp: 0 });
   manager.appendMessage({ role: "user", content: "Original objective: finish everything. " + "older evidence ".repeat(2000), timestamp: Date.now() });
   manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Verified old evidence." }], api: model.api, provider: model.provider, model: model.id, stopReason: "stop", timestamp: Date.now(),
     usage: { input: 90000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 90100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
@@ -44,7 +45,9 @@ try {
   assert.equal(compaction.fromHook, true);
   assert.equal(compaction.details.noSummary, true);
   const fresh = manager.buildSessionContext().messages;
-  assert.equal(fresh.length, 1);
+  assert.equal(fresh.length, 2);
+  assert.equal(fresh[0]!.role, "system");
+  assert(JSON.stringify(fresh[0]).includes("Persistent system constraint"));
   assert(!JSON.stringify(fresh).includes("older evidence"));
   const request = await runner.emitContext(fresh);
   assert(JSON.stringify(request).includes("review implementation evidence"));
@@ -52,7 +55,8 @@ try {
   assert(historyMatches(entries, "older evidence").matches.length > 0);
   assert((await readFile(manager.getSessionFile()!, "utf8")).startsWith(before));
   const reopened = SessionManager.open(manager.getSessionFile()!);
-  assert.equal(reopened.buildSessionContext().messages.length, 1);
+  assert.equal(reopened.buildSessionContext().messages.length, 2);
+  assert(JSON.stringify(reopened.buildSessionContext().messages[0]).includes("Keep this project rule"));
   manager.appendMessage({ role: "user", content: "Continue now", timestamp: Date.now() });
   assert(JSON.stringify(manager.buildSessionContext().messages).includes("Continue now"));
   await assert.rejects(command.handler("reset", runner.createCommandContext()), /stale/);

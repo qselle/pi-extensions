@@ -1,15 +1,15 @@
-import { streamSimple, type complete } from "@earendil-works/pi-ai/compat";
 import {
   buildSessionContext,
   convertToLlm,
   serializeConversation,
   type ExtensionAPI,
   type ExtensionContext,
+  type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
 import { buildTitlePrompt, provisionalTitle } from "../session-title/engine.ts";
 import { loadConfig as loadTitleConfig } from "../session-title/index.ts";
-import { requestTitle } from "../session-title/request.ts";
+import { requestTitle, type TitleCompletion } from "../session-title/request.ts";
 import {
   metaRecord,
   restoreSideChats,
@@ -50,8 +50,8 @@ export interface SideChatExtensionOptions {
   /** Injectable for tests. */
   titleConfig?: { enabled?: boolean; model?: string; refreshEvery?: number };
   requestTitle?: typeof requestTitle;
-  completion?: typeof complete;
-  stream?: typeof streamSimple;
+  completion?: TitleCompletion;
+  stream?: ModelRegistry["streamSimple"];
 }
 
 export default function registerSideChat(pi: ExtensionAPI, options: SideChatExtensionOptions = {}): SideChatStore {
@@ -69,15 +69,10 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     if (!ctx) throw new Error("Side chat has no active session");
     const model = ctx.modelRegistry.find(chat.model.provider, chat.model.id);
     if (!model) throw new Error(`Model ${modelLabel(chat.model)} is not available`);
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (signal.aborted) throw new Error("Side chat cancelled");
-    if (!auth.ok) throw new Error(auth.error);
 
     const context = { systemPrompt: chat.systemPrompt, messages: toApiMessages(chat) };
     const request = {
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-        env: auth.env,
         signal,
         reasoning: "low" as const,
         maxTokens: MAX_OUTPUT_TOKENS,
@@ -86,7 +81,9 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     let response;
     if (options.completion) response = await options.completion(model, context, request);
     else {
-      const events = (options.stream ?? streamSimple)(model, context, request);
+      const events = options.stream
+        ? options.stream(model, context, request)
+        : ctx.modelRegistry.streamSimple(model, context, request);
       let publishedAt = 0;
       for await (const event of events) {
         if (signal.aborted) break;

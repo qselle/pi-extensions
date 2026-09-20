@@ -77,6 +77,8 @@ stops future rollover but does not undo a committed boundary.
   branch's in-memory messages and scans full message text before excerpting.
 - Known questionnaire secret values are redacted from notes and retrieved text;
   this is literal matching, not general credential detection. Avoid storing secrets.
+- Pi 0.86 prompt/tool state survives the native compaction boundary, including
+  a no-summary journal rollover and disk reload.
 - Uses Pi's normal session persistence. If a session has not yet produced an
   assistant message, Pi may not have flushed its file yet.
 - Pi must be able to prepare compaction and resolve the selected model's

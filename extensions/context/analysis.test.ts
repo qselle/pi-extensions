@@ -16,6 +16,17 @@ function analyze(input: AnalyzeInput) {
   return analyzeContext(input, estimate);
 }
 
+test("transcript-backed prompt and tool records do not double count the current configuration", () => {
+  const report = analyze({
+    systemPrompt: "x".repeat(400),
+    entries: [message("system", 100), message("system", 25), message("user", 7),
+      { type: "usage", kind: "cache_warm", tokens: 1000 }],
+  });
+  expect(report.system.total).toBe(100);
+  expect(report.conversation.total).toBe(7);
+  expect(report.conversation.buckets.map(bucket => bucket.id)).toEqual(["user"]);
+});
+
 test("splits the system prompt into named parts and attributes the remainder to pi", () => {
   const report = analyze({
     // 400 chars => 100 tokens measured for the whole prompt.

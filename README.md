@@ -4,7 +4,7 @@ A collection of optional extensions for the [Pi coding agent](https://github.com
 
 ## Install
 
-Requires Pi 0.85.1 (supported host line: 0.85.x). Use Node.js for interactive PTY
+Requires Pi 0.86.1 (supported host line: 0.86.x). Use Node.js for interactive PTY
 jobs; Bun supports pipe jobs. macOS and Linux ARM64 are tested; Windows remains
 unverified. Shared internal code is packaged under `lib/` and does not register
 additional extensions.
@@ -84,6 +84,9 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`web-search`](extensions/web-search/) | Keyless Exa search, optional keyed providers, and bounded ax page reading |
 
 See each extension's README for commands, configuration, and limitations. The differences between `loop`, `monitor`, and `schedule` are covered in the [automation comparison](docs/automation-study.md).
+
+The [Pi 0.86 release audit](docs/pi-0.86-audit.md) records compatibility findings
+and updates for every extension.
 
 ## Development
 

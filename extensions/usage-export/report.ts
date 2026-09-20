@@ -47,10 +47,10 @@ export function buildReport(entries: Iterable<unknown>, scope: UsageReport["scop
     const identity = typeof entry.id === "string" ? entry.id : undefined;
     if (identity && seen.has(identity)) continue;
     if (identity) seen.add(identity);
-    const message = assistant ? entry.message : child;
+    const message = assistant ? entry.message : child ?? (entry.type === "usage" ? entry : undefined);
     rows.push({
       entryId: id, timestamp: text(entry.timestamp),
-      source: child ? "subagent" : entry.type === "message" ? (assistant ? "assistant" : "toolResult") : entry.type,
+      source: child ? "subagent" : entry.type === "message" ? (assistant ? "assistant" : "toolResult") : entry.type === "usage" ? text(entry.kind) ?? "usage" : entry.type,
       provider: text(message?.provider), model: text(message?.model), stopReason: text(message?.stopReason),
       input: numeric(usage?.input), output: numeric(usage?.output),
       cacheRead: numeric(usage?.cacheRead), cacheWrite: numeric(usage?.cacheWrite),

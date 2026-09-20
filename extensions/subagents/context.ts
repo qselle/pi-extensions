@@ -1,12 +1,12 @@
 import { mkdtemp, rm, mkdir, copyFile, lstat, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, basename, dirname } from "node:path";
-import { complete } from "@earendil-works/pi-ai/compat";
 import {
   SessionManager,
   buildSessionContext,
   convertToLlm,
   serializeConversation,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { safeParentMessages } from "./context-model.ts";
 
@@ -35,13 +35,12 @@ export function parentMessages(ctx: any): any[] {
   return safeParentMessages(context);
 }
 
-export async function summarizeParent(ctx: any, messages: any[], signal?: AbortSignal): Promise<string> {
+export async function summarizeParent(ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">, messages: any[], signal?: AbortSignal): Promise<string> {
   if (messages.length === 0) return "";
   if (!ctx.model || !ctx.modelRegistry) throw new Error("Summary context requires an active model and model registry");
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-  if (!auth.ok) throw new Error(`Unable to authenticate context summarization: ${auth.error}`);
+  if (signal?.aborted) throw new Error("Context summarization cancelled");
   const transcript = serializeConversation(convertToLlm(messages));
-  const response = await complete(ctx.model, {
+  const response = await ctx.modelRegistry.streamSimple(ctx.model, {
     messages: [{
       role: "user",
       content: [{
@@ -60,12 +59,12 @@ export async function summarizeParent(ctx: any, messages: any[], signal?: AbortS
       timestamp: Date.now(),
     }],
   }, {
-    apiKey: auth.apiKey,
-    headers: auth.headers,
-    env: auth.env,
+    sessionId: `${ctx.sessionManager.getSessionId()}:subagent-summary`,
     maxTokens: SUMMARY_MAX_TOKENS,
     signal,
-  });
+  }).result();
+  if (signal?.aborted || response.stopReason === "aborted") throw new Error("Context summarization cancelled");
+  if (response.stopReason === "error") throw new Error(response.errorMessage || "Context summarization failed");
   const text = response.content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)

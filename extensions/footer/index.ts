@@ -191,7 +191,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 						badges: badgeLabels,
 						status: ctx.isIdle() ? "ready" : "working",
 						usage,
-						totals: totals.get(() => ctx.sessionManager.getBranch()),
+						totals: totals.get(() => ctx.sessionManager.getBranch(), ctx.sessionManager.getLeafId()),
 					});
 					const workspace = workspaceLabel(
 						formatCwd(ctx.cwd, homedir()),

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { stream } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import register from "./index.ts";
-const model = OPENAI_CODEX_MODELS["gpt-5.4"];
+const model = OPENAI_CODEX_MODELS["gpt-5.5"];
 const handlers = new Map<string, any>(); let command: any;
 const notices: string[] = [];
 register({ on: (name: string, fn: any) => handlers.set(name, fn), registerCommand: (_: string, value: any) => { command = value; } } as any);
@@ -11,7 +12,7 @@ const token = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth"
 for (const enabled of [true, false]) {
   await command.handler(enabled ? "on" : "off", ctx);
   let sent = false;
-  const response = stream(model, { messages: [{ role: "user", content: "fixture", timestamp: 0 }] }, {
+  const response = stream(model, normalizeContext({ messages: [{ role: "user", content: "fixture", timestamp: 0 }] }), {
     apiKey: token, transport: "sse", maxRetries: 0,
     onPayload: (payload) => handlers.get("before_provider_request")({ payload }, ctx),
     fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {

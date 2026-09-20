@@ -159,6 +159,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   let bashStyle: BashStyle | undefined;
   const bashDefinition = (): ToolDefinition<any> => ({
     name: "bash", label: "bash",
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
     description: "Execute a managed shell command in the current working directory. Short commands finish inline; after yield_ms (default 1000, maximum 30000) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Optional timeout is in seconds. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use nohup/disown/setsid.",
     promptSnippet: "Execute shell commands; long commands yield managed job IDs for follow-up.",
     promptGuidelines: ["A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful."],

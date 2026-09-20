@@ -76,7 +76,7 @@ remain known to that job during session teardown.
   refreshes per second, with elapsed-time updates for quiet commands. Cancelling
   or finishing the tool detaches its streaming listeners and timers.
 
-- Pi 0.85.1 public shell, tool, session, and overlay APIs; Node.js built-ins;
+- Pi 0.86.1 public shell, tool, session, and overlay APIs; Node.js built-ins;
   [`node-pty`](https://github.com/microsoft/node-pty) 1.1.x for PTY jobs.
   Install package dependencies with install scripts enabled. On macOS the root
   postinstall script repairs the packaged spawn helper’s execute permission.
@@ -98,6 +98,8 @@ remain known to that job during session teardown.
   The job viewer displays sanitized output history, not a full-screen terminal
   emulator. Cursor-moving applications may therefore produce repeated lines.
   Managed `bash` and `job_start` use the same execution service.
+- Managed `bash` preserves Pi 0.86's `strict: "prefer"` JSON-schema sampling
+  preference; Pi falls back on providers without strict-schema support.
 - Pi session/model environment fields are refreshed for each launch.
 - Shutdown waits for cleanup and removes listeners/timers. A shared synchronous
   process-exit reaper is a last resort; no signal handlers override Pi's shutdown.

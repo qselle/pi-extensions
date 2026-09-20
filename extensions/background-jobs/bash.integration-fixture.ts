@@ -30,6 +30,8 @@ try {
     await fire("session_start");
     try {
       const bash = tool("bash");
+      assert.deepEqual(bash.constrainedSampling, { type: "json_schema", strict: "prefer" });
+      for (const name of ["read", "write", "edit"]) assert.deepEqual(tool(name).constrainedSampling, { type: "json_schema", strict: "prefer" });
       assert(bash.parameters.properties.yield_ms, "managed schema must win in either order");
       assert.equal(bash.renderShell, "self", "renderer must be preserved");
       const result = await bash.execute("cwd", { command: "cat cwd-marker", yield_ms: 3000 }, undefined, undefined, ctx);

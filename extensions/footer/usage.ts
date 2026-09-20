@@ -28,7 +28,7 @@ export function entryUsage(entry: unknown): UsageLike | undefined {
     const role = candidate.message?.role;
     return role === "assistant" || role === "toolResult" ? candidate.message?.usage : undefined;
   }
-  if (candidate.type === "branch_summary" || candidate.type === "compaction") return candidate.usage;
+  if (candidate.type === "branch_summary" || candidate.type === "compaction" || candidate.type === "usage") return candidate.usage;
   return undefined;
 }
 
@@ -57,8 +57,12 @@ export function sumUsage(entries: Iterable<unknown>): UsageTotals {
  */
 export class UsageTotalsCache {
   private totals?: UsageTotals;
+  private revision?: string | null;
 
-  get(entries: () => Iterable<unknown>): UsageTotals {
+  get(entries: () => Iterable<unknown>, revision?: string | null): UsageTotals {
+    // Cache warming appends usage outside the ordinary assistant lifecycle.
+    if (this.revision !== revision) this.invalidate();
+    this.revision = revision;
     return (this.totals ??= sumUsage(entries()));
   }
 
