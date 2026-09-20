@@ -208,3 +208,17 @@ describe("project scoping and display", () => {
     expect(sanitizeDisplayText("a\u0000b\u001b[31mc")).toBe("abc");
   });
 });
+
+test("cancelled scans reject instead of reporting unreadable sessions or partial results", async () => {
+  const controller = new AbortController(); controller.abort();
+  await expect(searchSessions([], "query", { signal: controller.signal })).rejects.toThrow();
+  await expect(scanSession({ path: "/does-not-exist" } as SessionInfo, "query", { signal: controller.signal })).rejects.toThrow();
+  const root = await temporaryRoot();
+  const path = join(root, "session.jsonl");
+  await writeFile(path, JSON.stringify({ type: "message", message: { role: "user", content: "query" } }) + "\n");
+  const during = new AbortController();
+  const item = { path, id: "test", cwd: root, created: new Date(), modified: new Date(), messageCount: 1, firstMessage: "query", allMessagesText: "" } as SessionInfo;
+  let completed = 0;
+  await expect(searchSessions([item, item], "query", { concurrency: 1, signal: during.signal, onProgress: () => { completed++; during.abort(); } })).rejects.toThrow();
+  expect(completed).toBe(1);
+});

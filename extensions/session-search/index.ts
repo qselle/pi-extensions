@@ -1,6 +1,6 @@
 import { unlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { ExtensionAPI, SessionInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionInfo } from "@earendil-works/pi-coding-agent";
 import * as CodingAgent from "@earendil-works/pi-coding-agent";
 import { copyText } from "./clipboard.ts";
 import {
@@ -51,6 +51,16 @@ export default function sessionSearchExtension(
   const copy = options.copy ?? copyText;
   const removeFile = options.removeFile ?? ((path) => unlink(path));
 
+  let active: AbortController | undefined;
+  const reset = () => { active?.abort(); active = undefined; };
+  const resetSession = (_event: unknown, ctx: ExtensionContext) => {
+    reset();
+    ctx?.ui.setStatus(STATUS_KEY, undefined);
+  };
+  pi.on("session_start", resetSession);
+  pi.on("session_tree", resetSession);
+  pi.on("session_shutdown", resetSession);
+
   pi.registerCommand("session-search", {
     description: "Search saved Pi sessions: /session-search [--current|--all] <query>",
     getArgumentCompletions: (prefix) => {
@@ -67,20 +77,25 @@ export default function sessionSearchExtension(
         return;
       }
 
+      reset();
+      const controller = new AbortController();
+      active = controller;
+      const current = () => active === controller && !controller.signal.aborted;
       let switched = false;
       try {
         let parsed = parseSessionSearchArgs(args);
         if (!parsed.query) {
           const input = await ctx.ui.input("Search saved Pi sessions", "keywords, optionally --current");
-          if (!input?.trim()) return;
+          if (!current() || !input?.trim()) return;
           parsed = parseSessionSearchArgs(`${parsed.scope === "current" ? "--current " : ""}${input}`);
         }
         if (!parsed.query) return;
 
         setStatus(ctx, "loading saved sessions…");
         const sessions = await listSessions((loaded, total) => {
-          if (loaded === total || loaded % 25 === 0) setStatus(ctx, `loading sessions ${loaded}/${total}…`);
+          if (current() && (loaded === total || loaded % 25 === 0)) setStatus(ctx, `loading sessions ${loaded}/${total}…`);
         });
+        if (!current()) return;
         const selection = selectScope(sessions, parsed, ctx.cwd, selectCurrent);
         if (selection.sessions.length === 0) {
           ctx.ui.notify(
@@ -93,10 +108,12 @@ export default function sessionSearchExtension(
         }
 
         const summary = await search(selection.sessions, parsed.query, {
+          signal: controller.signal,
           onProgress: (completed, total) => {
-            if (completed === total || completed % 8 === 0) setStatus(ctx, `searching sessions ${completed}/${total}…`);
+            if (current() && (completed === total || completed % 8 === 0)) setStatus(ctx, `searching sessions ${completed}/${total}…`);
           },
         });
+        if (!current()) return;
         if (summary.results.length === 0) {
           ctx.ui.notify(noMatchesMessage(parsed, selection, summary), "info");
           return;
@@ -107,7 +124,7 @@ export default function sessionSearchExtension(
           `Session matches for “${parsed.query}” (${summary.results.length})`,
           choices,
         );
-        if (!selectedLabel) return;
+        if (!current() || !selectedLabel) return;
         const selectedIndex = choices.indexOf(selectedLabel);
         const selected = summary.results[selectedIndex];
         if (!selected) return;
@@ -119,7 +136,7 @@ export default function sessionSearchExtension(
           "Put excerpt in editor",
           "Cancel",
         ]);
-        if (!action || action === "Cancel") return;
+        if (!current() || !action || action === "Cancel") return;
 
         if (action === "Resume this session") {
           const currentPath = ctx.sessionManager?.getSessionFile?.();
@@ -134,6 +151,7 @@ export default function sessionSearchExtension(
             },
           });
           if (result.cancelled) {
+            if (!current()) return;
             ctx.ui.notify("Session switch was cancelled.", "warning");
             return;
           }
@@ -162,6 +180,7 @@ export default function sessionSearchExtension(
           });
           if (result.cancelled) {
             const removed = await removeFile(forkPath).then(() => true, () => false);
+            if (!current()) return;
             ctx.ui.notify(
               removed
                 ? "Fork switch was cancelled; the unused fork was removed."
@@ -175,7 +194,9 @@ export default function sessionSearchExtension(
         }
 
         if (action === "Copy matching excerpt") {
-          if (await copy(selected.snippet)) ctx.ui.notify("Matching excerpt copied.", "info");
+          const copied = await copy(selected.snippet);
+          if (!current()) return;
+          if (copied) ctx.ui.notify("Matching excerpt copied.", "info");
           else {
             ctx.ui.setEditorText(selected.snippet);
             ctx.ui.notify("No supported clipboard command was available; excerpt placed in the editor.", "warning");
@@ -185,10 +206,11 @@ export default function sessionSearchExtension(
 
         ctx.ui.setEditorText(selected.snippet);
       } catch (error) {
-        if (!switched) ctx.ui.notify(errorMessage(error), "error");
+        if (!switched && current()) ctx.ui.notify(errorMessage(error), "error");
       } finally {
         // A successful switch tears down this runtime and invalidates its ctx.
-        if (!switched) ctx.ui.setStatus(STATUS_KEY, undefined);
+        if (!switched && current()) ctx.ui.setStatus(STATUS_KEY, undefined);
+        if (active === controller) active = undefined;
       }
     },
   });

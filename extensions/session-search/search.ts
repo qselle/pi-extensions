@@ -46,6 +46,7 @@ export interface SessionSearchSummary {
 }
 
 export interface SessionScanOptions {
+  signal?: AbortSignal;
   maxFileBytes?: number;
   maxLineChars?: number;
 }
@@ -138,6 +139,7 @@ export async function scanSession(
   query: string,
   options: SessionScanOptions = {},
 ): Promise<SessionScanOutcome> {
+  options.signal?.throwIfAborted();
   const terms = queryTerms(query);
   if (terms.length === 0) throw new Error("Session-search query cannot be empty.");
 
@@ -169,8 +171,10 @@ export async function scanSession(
       (entry) => {
         for (const fragment of entryFragments(entry)) consider(fragment);
       },
+      options.signal,
     );
   } catch {
+    options.signal?.throwIfAborted();
     unreadable = true;
   }
 
@@ -201,16 +205,19 @@ export async function searchSessions(
   query: string,
   options: SearchSessionsOptions = {},
 ): Promise<SessionSearchSummary> {
+  options.signal?.throwIfAborted();
   const outcomes = await mapConcurrent(
     sessions,
     options.concurrency ?? SEARCH_CONCURRENCY,
     async (session, index) => {
       const outcome = await scanSession(session, query, options);
+      options.signal?.throwIfAborted();
       options.onProgress?.(index.completed(), sessions.length);
       return outcome;
     },
   );
 
+  options.signal?.throwIfAborted();
   return {
     results: outcomes
       .flatMap((outcome) => outcome.result ? [outcome.result] : [])
@@ -368,8 +375,9 @@ async function readBoundedJsonLines(
   maxFileBytes: number,
   maxLineChars: number,
   onEntry: (entry: unknown) => void,
+  signal?: AbortSignal,
 ): Promise<BoundedLineReadResult> {
-  const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024, signal });
   let consumedBytes = 0;
   let pending = "";
   let droppingOversizedLine = false;
