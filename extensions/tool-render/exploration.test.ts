@@ -122,3 +122,11 @@ describe("display rows", () => {
 		expect(groupState("a")!.rows[0]!.status).toBe("error");
 	});
 });
+
+test("a coalesced failed read preserves the failure instead of a successful range", () => {
+  noteStart("first", "read", { path: "file", offset: 1, limit: 10 });
+  noteEnd("first", false, "10 lines");
+  noteStart("second", "read", { path: "file", offset: 20, limit: 10 });
+  noteEnd("second", true, "failed: Permission denied");
+  expect(groupState("first")!.rows[0]).toMatchObject({ status: "error", suffix: "failed: Permission denied" });
+});

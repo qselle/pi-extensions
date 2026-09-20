@@ -141,6 +141,8 @@ function mergeStatus(calls: Call[]): Status {
 
 /** Suffix for a non-read call: its result count, if known. */
 function readsSuffix(reads: Call[]): string | undefined {
+	const failure = reads.find((read) => read.status === "error");
+	if (failure) return failure.count ?? "failed";
 	const ranges = [...new Set(reads.map((r) => r.range).filter(Boolean) as string[])];
 	if (ranges.length > 0) return `lines ${ranges.join(", ")}`;
 	return reads.map((r) => r.count).find(Boolean); // whole-file read → line count

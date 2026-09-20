@@ -5,8 +5,7 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
-import { fileUri as sharedFileUri, link as osc8Link } from "../hyperlinks/link.ts";
+import { fileUri as sharedFileUri, link as osc8Link, toAbsolutePath } from "../../lib/links.ts";
 
 export type ToolName = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls";
 
@@ -132,7 +131,7 @@ export function boundTail(text: string, maxLines: number): { lines: string[]; om
 
 /** Resolve a (possibly relative) tool path against the session cwd. */
 export function toAbs(p: string, cwd: string): string {
-	return p && isAbsolute(p) ? p : resolve(cwd || ".", p || ".");
+	return toAbsolutePath(p || ".", cwd || ".");
 }
 
 /** file:// URI for an absolute path (percent-encoded, POSIX slashes). */
