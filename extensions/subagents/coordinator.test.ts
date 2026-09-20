@@ -268,3 +268,59 @@ test("events from an exited runtime cannot settle its resumed replacement", asyn
   expect(coordinator.list()[0]!.usage.turns).toBe(0);
   await coordinator.shutdown();
 });
+
+test("closing a child during resume cannot resurrect it or submit another prompt", async () => {
+  const clients: FakeClient[] = [];
+  const gate = deferred();
+  let cleaned = 0;
+  const coordinator = new SubagentCoordinator({ createRuntime: async () => {
+    const client = new FakeClient();
+    if (clients.length) client.startGate = gate.promise;
+    clients.push(client);
+    return { client, cleanup: async () => { cleaned++; }, checkpoint: () => ({ directory: "pi-subagent-context-test", file: "test.jsonl", initialEntryCount: 0, leafId: "leaf" }) };
+  } });
+  coordinator.startSession();
+  await coordinator.spawn(request("durable"));
+  coordinator.restore(await coordinator.suspend());
+  const sending = coordinator.send("durable", "Do more work").then(() => "sent", () => "cancelled");
+  await waitUntil(() => clients[1]?.startCalls === 1);
+  const closing = coordinator.close("durable");
+  gate.resolve();
+  await closing;
+  expect(await sending).toBe("cancelled");
+  expect(coordinator.list()[0]!.status).toBe("closed");
+  expect(clients[1]!.promptCalls).toHaveLength(0);
+  expect(clients[1]!.stopCalls).toBeGreaterThan(0);
+  expect(cleaned).toBe(1);
+  await coordinator.shutdown();
+});
+
+for (const action of ["interrupt", "cancel", "suspend"] as const) {
+  test(`${action} during child resume stops startup before submitting queued work`, async () => {
+    const clients: FakeClient[] = [];
+    const gate = deferred();
+    let cleaned = 0;
+    const coordinator = new SubagentCoordinator({ createRuntime: async () => {
+      const client = new FakeClient();
+      if (clients.length) client.startGate = gate.promise;
+      clients.push(client);
+      return { client, cleanup: async () => { cleaned++; }, checkpoint: () => ({ directory: "pi-subagent-context-test", file: "test.jsonl", initialEntryCount: 0, leafId: "leaf" }) };
+    } });
+    coordinator.startSession();
+    await coordinator.spawn(request("durable"));
+    coordinator.restore(await coordinator.suspend());
+    coordinator.queue("durable", "Queued work");
+    const abort = new AbortController();
+    const sending = coordinator.send("durable", "Continue", undefined, abort.signal).then(() => "sent", () => "cancelled");
+    await waitUntil(() => clients[1]?.startCalls === 1);
+    const stopping = action === "interrupt" ? coordinator.interrupt("durable") : action === "suspend" ? coordinator.suspend() : Promise.resolve(abort.abort());
+    gate.resolve();
+    await stopping;
+    expect(await sending).toBe("cancelled");
+    expect(clients[1]!.promptCalls).toHaveLength(0);
+    expect(clients[1]!.stopCalls).toBeGreaterThan(0);
+    expect(cleaned).toBe(1);
+    expect(coordinator.list()[0]!.queued).toBe(action === "interrupt" ? 0 : 1);
+    await coordinator.shutdown();
+  });
+}
