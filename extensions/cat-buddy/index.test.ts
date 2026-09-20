@@ -272,3 +272,79 @@ test("pauses animation while the terminal cannot display the cat", async () => {
 
   await pi.emit("session_shutdown", {}, ctx);
 });
+
+function lifecycleHarness(lines: string[]) {
+  const pi = new MockPi();
+  let renders = 0;
+  const original = () => ({ render: () => lines, handleInput() {}, invalidate() {}, getText: () => "", setText() {} });
+  let factory: any = original;
+  const ctx = { mode: "tui", ui: {
+    getEditorComponent: () => factory,
+    setEditorComponent: (next: any) => { factory = next; },
+    notify() {},
+  } };
+  catBuddyExtension(pi as any);
+  return { pi, ctx, original, factory: () => factory,
+    create: () => factory({ terminal: { rows: 24 }, requestRender: () => { renders++; } }, editorTheme, keybindings),
+    renders: () => renders };
+}
+
+test("repeated session starts retain one factory and reset working animation", async () => {
+  jest.useFakeTimers();
+  const h = lifecycleHarness(["─".repeat(40), "prompt"]);
+  await h.pi.emit("session_start", {}, h.ctx);
+  const installed = h.factory();
+  const editor = h.create();
+  editor.render(40);
+  await h.pi.emit("agent_start", {}, h.ctx);
+  await h.pi.emit("session_start", {}, h.ctx);
+  expect(h.factory()).toBe(installed);
+  expect(h.create().render(40)).toHaveLength(4);
+  expect(jest.getTimerCount()).toBe(1);
+  await h.pi.emit("session_shutdown", {}, h.ctx);
+  expect(h.factory()).toBe(h.original);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("old editor renders cannot animate or borrow a replacement sprite", async () => {
+  jest.useFakeTimers();
+  const lines = ["─".repeat(40), "prompt"];
+  const h = lifecycleHarness(lines);
+  await h.pi.emit("session_start", {}, h.ctx);
+  const old = h.create();
+  old.render(40);
+  const current = h.create();
+  expect(old.render(40)).toEqual(lines);
+  expect(jest.getTimerCount()).toBe(0);
+  expect(current.render(40)).toHaveLength(4);
+  expect(jest.getTimerCount()).toBe(1);
+  await h.pi.emit("session_shutdown", {}, h.ctx);
+  expect(current.render(40)).toEqual(lines);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("companion preserves status text occupying its docking columns", async () => {
+  const lines = ["─".repeat(26) + "Working 42s" + "─".repeat(3), "prompt"];
+  const h = lifecycleHarness(lines);
+  await h.pi.emit("session_start", {}, h.ctx);
+  const output = h.create().render(40);
+  expect(output.slice(3)).toEqual(lines);
+  expect(output.join("\n")).toContain("Working 42s");
+  await h.pi.emit("session_shutdown", {}, h.ctx);
+});
+
+test("a later editor decorator does not cause duplicate companion installation", async () => {
+  jest.useFakeTimers();
+  const h = lifecycleHarness(["─".repeat(40), "prompt"]);
+  await h.pi.emit("session_start", {}, h.ctx);
+  const installed = h.factory();
+  const outer = (...args: any[]) => installed(...args);
+  h.ctx.ui.setEditorComponent(outer);
+  await h.pi.emit("session_start", {}, h.ctx);
+  expect(h.factory()).toBe(outer);
+  expect(h.create().render(40)).toHaveLength(4);
+  expect(jest.getTimerCount()).toBe(1);
+  await h.pi.emit("session_shutdown", {}, h.ctx);
+  expect(h.factory()).toBe(outer);
+  expect(jest.getTimerCount()).toBe(0);
+});
