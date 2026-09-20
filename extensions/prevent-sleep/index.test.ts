@@ -62,10 +62,63 @@ describe("prevent-sleep", () => {
 		expect(h.spawned[0]!.killed).toBe(true);
 	});
 
-	test("unsupported platform is a no-op (no command, no wake lock)", () => {
-		const h = harness("win32");
+	test.each(["linux", "win32"] as const)("%s is a no-op (no command, handlers, or wake lock)", (platform) => {
+		const h = harness(platform);
 		expect(h.commands["prevent-sleep"]).toBeUndefined();
+		expect(Object.keys(h.handlers)).toEqual([]);
 		h.fire("agent_start");
 		expect(h.spawned).toHaveLength(0);
 	});
+});
+
+test("reports helper startup failure and unexpected exit without claiming an active lock", async () => {
+  const { EventEmitter } = await import("node:events");
+  const handlers = new Map<string, Function>();
+  let command: any;
+  const children: any[] = [];
+  const messages: string[] = [];
+  const pi = { on: (event: string, handler: Function) => handlers.set(event, handler), registerCommand: (_name: string, value: any) => { command = value; } };
+  preventSleep(pi as any, { platform: "darwin", spawn: (() => {
+    const child = new EventEmitter() as any;
+    child.kill = () => true;
+    children.push(child);
+    return child;
+  }) as any });
+  const status = async () => { await command.handler("", { ui: { notify: (message: string) => messages.push(message) } }); return messages.at(-1)!; };
+  handlers.get("agent_start")!();
+  expect(await status()).toContain("starting");
+  children[0].emit("error", new Error("missing binary"));
+  expect(await status()).toContain("unavailable");
+  expect(await status()).not.toContain("idle");
+  handlers.get("agent_start")!();
+  children[1].emit("spawn");
+  expect(await status()).toContain("running");
+  children[1].emit("exit", 1, null);
+  expect(await status()).toContain("code 1");
+  handlers.get("session_shutdown")!();
+  handlers.get("agent_start")!();
+  expect(children).toHaveLength(2);
+});
+
+test("session reset releases an old helper and ignores its late exit", async () => {
+  const { EventEmitter } = await import("node:events");
+  const handlers = new Map<string, Function>();
+  const children: any[] = [];
+  let command: any;
+  let killed = 0;
+  preventSleep({ on: (event: string, handler: Function) => handlers.set(event, handler), registerCommand: (_name: string, value: any) => { command = value; } } as any, {
+    platform: "darwin", spawn: (() => { const child = new EventEmitter() as any; child.kill = () => { killed++; return true; }; children.push(child); return child; }) as any,
+  });
+  handlers.get("agent_start")!();
+  handlers.get("session_start")!();
+  expect(killed).toBe(1);
+  handlers.get("agent_start")!();
+  children[1].emit("spawn");
+  children[0].emit("exit", 1, null);
+  let message = "";
+  await command.handler("", { ui: { notify: (text: string) => { message = text; } } });
+  expect(message).toContain("running");
+  expect(message).not.toContain("unavailable");
+  handlers.get("agent_settled")!();
+  expect(killed).toBe(2);
 });

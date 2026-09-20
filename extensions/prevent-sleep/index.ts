@@ -6,8 +6,8 @@
  * when idle or on shutdown — so a genuinely blocked/paused goal still lets the
  * machine sleep.
  *
- * macOS uses `caffeinate -i -w <pid>`; Linux uses `systemd-inhibit`; other
- * platforms are a no-op. Fully event-driven (no timers). Toggle with
+ * macOS uses `caffeinate -i -w <pid>`; all other platforms are a no-op.
+ * Fully event-driven (no timers). Toggle with
  * `/prevent-sleep on|off`.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -31,25 +31,37 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 	let enabled = true;
 	let working = false;
 	let inhibitor: ChildProcess | undefined;
+	let starting = false;
+	let failure: string | undefined;
+	let closed = false;
 
 	const start = (): void => {
 		if (inhibitor) return;
+		failure = undefined;
+		starting = true;
 		try {
 			const child = spawn(command.cmd, command.args, { stdio: "ignore" });
 			inhibitor = child;
-			const clear = (): void => {
-				if (inhibitor === child) inhibitor = undefined;
+			const clear = (reason: string): void => {
+				if (inhibitor !== child) return;
+				inhibitor = undefined;
+				starting = false;
+				failure = reason;
 			};
-			child.once("error", clear);
-			child.once("exit", clear);
+			child.once("spawn", () => { if (inhibitor === child) starting = false; });
+			child.once("error", () => clear("wake-lock helper could not start; check installation and permissions"));
+			child.once("exit", (code, signal) => clear(`wake-lock helper exited (${signal ?? `code ${code ?? "unknown"}`})`));
 		} catch {
-			inhibitor = undefined; // caffeinate/systemd-inhibit unavailable
+			inhibitor = undefined; // caffeinate unavailable
+			starting = false;
+			failure = "wake-lock helper could not start; check installation and permissions";
 		}
 	};
 
 	const stop = (): void => {
 		const child = inhibitor;
 		inhibitor = undefined;
+		starting = false;
 		try {
 			child?.kill("SIGTERM");
 		} catch {
@@ -58,7 +70,7 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 	};
 
 	const sync = (): void => {
-		if (enabled && working) start();
+		if (!closed && enabled && working) start();
 		else stop();
 	};
 
@@ -73,7 +85,7 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 			} else {
 				const tool = basename(command.cmd);
 				ctx.ui.notify(
-					`Prevent-sleep is ${enabled ? "on" : "off"} — currently ${inhibitor ? `holding the wake lock (${tool}, agent working)` : "idle"}.`,
+					`Prevent-sleep is ${enabled ? "on" : "off"} — ${inhibitor ? `${tool} ${starting ? "starting" : "running"} for the active agent` : failure ? `unavailable: ${failure}` : working && enabled ? "no helper running" : "idle"}.`,
 					"info",
 				);
 			}
@@ -82,7 +94,14 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 
 	// agent_settled is the full run boundary: retries, compaction recovery, and a
 	// self-driving goal's queued continuations stay covered by one assertion.
+	pi.on("session_start", () => {
+		stop();
+		working = false;
+		failure = undefined;
+		closed = false;
+	});
 	pi.on("agent_start", () => {
+		if (closed) return;
 		working = true;
 		sync();
 	});
@@ -92,7 +111,7 @@ export default function preventSleepExtension(pi: ExtensionAPI, deps: Deps = {})
 	});
 	pi.on("session_shutdown", () => {
 		working = false;
-		enabled = false;
+		closed = true;
 		stop();
 	});
 }

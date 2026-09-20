@@ -6,11 +6,8 @@ describe("inhibitCommand", () => {
 		expect(inhibitCommand("darwin", 4242)).toEqual({ cmd: "/usr/bin/caffeinate", args: ["-i", "-w", "4242"] });
 	});
 
-	test("Linux uses systemd-inhibit against idle + sleep", () => {
-		const c = inhibitCommand("linux", 1);
-		expect(c?.cmd).toBe("systemd-inhibit");
-		expect(c?.args).toContain("--what=idle:sleep");
-		expect(c?.args.slice(-2)).toEqual(["sleep", "infinity"]);
+	test("Linux has no inhibitor", () => {
+		expect(inhibitCommand("linux", 1)).toBeUndefined();
 	});
 
 	test("other platforms have no inhibitor (extension no-ops)", () => {
