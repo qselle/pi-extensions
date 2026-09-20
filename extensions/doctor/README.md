@@ -42,6 +42,7 @@ Reports are not saved or sent to the model.
 
 ## Dependencies and limitations
 
+- The supported host check accepts Pi 0.86.1 through 0.86.x.
 - Pi public tool inventory, command, shell, and UI APIs; Node.js filesystem APIs.
 - Uses the shared `lib/transcript` viewer and secure Telegram configuration reader;
   enabling those UI extensions is not required.

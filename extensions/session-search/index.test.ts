@@ -268,7 +268,7 @@ for (const event of ["session_start", "session_tree", "session_shutdown"]) {
       let signal: AbortSignal | undefined;
       const delay = async () => { entered(); await gate; };
       sessionSearchExtension(pi as any, {
-        listSessions: async (progress) => { if (stage === "list") { await delay(); progress?.(1, 1); } return [session()]; },
+        listSessions: async (progress, listingSignal) => { signal = listingSignal; if (stage === "list") { await delay(); progress?.(1, 1); } return [session()]; },
         search: async (_sessions, _query, options) => { signal = options?.signal; if (stage === "search") { await delay(); options?.onProgress?.(1, 1); } return summary([searchResult()]); },
         copy: async () => { if (stage === "clipboard") await delay(); return false; },
       });
@@ -282,7 +282,7 @@ for (const event of ["session_start", "session_tree", "session_shutdown"]) {
       expect(h.switchCalls).toEqual([]);
       expect(h.notifications).toEqual([]);
       expect(h.statuses).toHaveLength(count);
-      if (signal) expect(signal.aborted).toBe(true);
+      expect(signal?.aborted).toBe(true);
     });
   }
 }

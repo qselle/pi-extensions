@@ -18,7 +18,7 @@ through Pi's extension configuration to return to the host presentation.
 
 ## Dependencies and limitations
 
-- Pi 0.85.1 public Markdown transformer and language mapping APIs; `marked` is a
+- Pi 0.86.1 public Markdown transformer and language mapping APIs; `marked` is a
   declared runtime dependency, matching the parser version used by Pi's TUI.
 - Handles top-level fenced blocks. Nested list/quote blocks, indented code, HTML
   literals, CRLF documents and unknown filename types are left as supplied.

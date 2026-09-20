@@ -34,7 +34,7 @@ manager.appendCustomEntry("loop-state", encodeLoopSnapshot([
 ]));
 const runtime = await createAgentSessionRuntime(async ({ cwd, agentDir, sessionManager }) => {
   const services = await createAgentSessionServices({ cwd, agentDir,
-    settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "0.85.1", enableInstallTelemetry: false, enableAnalytics: false,
+    settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "0.86.1", enableInstallTelemetry: false, enableAnalytics: false,
       compaction: { enabled: false }, theme: join(repo, "themes/gruvbox-dark.json"), tuiMode: "fullscreen", hideThinkingBlock: true }),
     resourceLoaderOptions: { additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noContextFiles: true } });
   const loaded = services.resourceLoader.getExtensions();

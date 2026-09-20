@@ -144,7 +144,8 @@ test("Mistral credentials are reported as explicit-only without exposing their v
 test("host and access diagnostics use metadata without printing raw config or resolving credentials", async () => {
   const report = await diagnose({ ...input, hostVersion: "0.85.0", modelAuthConfigured: false, modelConfigInvalid: true, bindingConflicts: 2, env: { PI_EXA_ACCESS: "api-key" } }, good);
   for (const id of ["host-version", "model-auth", "model-config", "keybindings", "search-keys"]) expect(report.find((row) => row.id === id)?.status).toBe("warn");
-  const valid = await diagnose({ ...input, hostVersion: "0.85.1", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "present-but-unused" } }, good);
+  const valid = await diagnose({ ...input, hostVersion: "0.86.1", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "present-but-unused" } }, good);
+  expect(valid.find((row) => row.id === "host-version")?.status).toBe("ok");
   expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("keyless");
   expect(JSON.stringify(valid)).not.toContain("present-but-unused");
 });

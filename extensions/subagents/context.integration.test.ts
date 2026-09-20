@@ -21,7 +21,9 @@ async function verify() {
   const root = await mkdtemp(join(tmpdir(), "pi-subagents-context-parent-"));
   try {
     const parent = SessionManager.create(root, root);
+    parent.appendMessage({ role: "system", content: "Parent instructions", sections: { project: "Initial constraint" }, timestamp: 0 });
     parent.appendMessage({ role: "user", content: "Parent requirement", timestamp: Date.now() });
+    parent.appendMessage({ role: "system", content: "", sections: { project: "Updated constraint" }, toolsRemoved: [{ name: "old_tool" }], timestamp: 1 });
     parent.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Parent decision" }],
@@ -51,7 +53,8 @@ async function verify() {
     const forkSession = SessionManager.open(fork.sessionFile, fork.directory, root);
     const forkText = JSON.stringify(forkSession.buildSessionContext().messages);
     if (!forkText.includes("Parent requirement") || !forkText.includes("Parent decision")) throw new Error("fork context missing parent messages");
-    if (fork.inheritedMessages !== 2) throw new Error("fork inherited message count is wrong");
+    if (fork.inheritedMessages !== 4) throw new Error("fork inherited message count is wrong");
+    if (!forkText.includes("Parent instructions") || !forkText.includes("Updated constraint") || !forkText.includes("old_tool")) throw new Error("fork dropped transcript prompt/tool state");
     await fork.cleanup();
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -24,7 +24,10 @@ remaining context disappears. On extremely small widths the context label takes
 precedence. Context is green below 75% used, yellow from 75%, and red from 90%;
 unknown measurements use a muted color.
 
-Usage is scanned once and cached until a message, compaction, or branch change invalidates it. Totals include assistant responses, nested model usage on tool results, summaries, and compactions.
+Usage is cached until a lifecycle event or the session branch leaf changes. Totals
+include assistant responses, nested model usage on tool results, summaries,
+compactions and Pi 0.86 cache-warming usage. Idle warming costs appear on the next
+footer render without waiting for another assistant response.
 
 The terminal title shows the session and project. A low-frequency Braille spinner is active only while Pi is working. Attention UI such as `questionnaire` temporarily owns the title and the footer restores the appropriate active or idle title afterward.
 

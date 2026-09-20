@@ -275,6 +275,10 @@ function classify(entry: unknown): EntryKind[] {
   const message = candidate.message;
   if (!message) return [];
   switch (message.role) {
+    // Pi 0.86 persists prompts and tool declarations in the transcript. The
+    // current prompt and schemas already have their own sections in this report.
+    case "system":
+      return [];
     case "user":
       return [{ id: "user", label: "user messages" }];
     case "assistant":

@@ -79,6 +79,6 @@ Tasks and follow-ups are limited to 16,000 characters; wait timeouts to 300 seco
 ## Dependencies and limitations
 
 - Uses Pi's public extension, session, model, tool, TUI, and RPC APIs plus host-provided `typebox`.
-- Requires the configured model provider; `summary` context makes an additional model call.
+- Requires the configured model provider; `summary` context makes an additional model call through Pi's authenticated model registry, including configured custom providers. Failed or cancelled summaries are rejected. Fork context preserves Pi 0.86 transcript prompt/tool updates.
 - Validated on macOS and Linux. Windows remains unverified. Cleanup uses Unix process groups or Windows `taskkill`.
 - Tool orchestration works in non-interactive modes; the overlay and transcript viewer require the TUI.

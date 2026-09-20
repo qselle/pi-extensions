@@ -74,7 +74,7 @@ Side-chat titles do not rename Herdr tabs.
 
 ## Dependencies and limitations
 
-- Uses Pi's extension, session-name, model, and lifecycle APIs plus `complete()` from `@earendil-works/pi-ai/compat`.
+- Uses Pi's extension, session-name, model, and lifecycle APIs including Pi 0.86.1's authenticated `ctx.modelRegistry.streamSimple()`.
 - No third-party packages.
 - Requires access to the active model provider; a configured override may use another provider.
 - Cross-platform; title generation works outside the TUI.
