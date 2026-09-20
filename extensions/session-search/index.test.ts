@@ -4,6 +4,8 @@ import sessionSearchExtension from "./index.ts";
 import type { SessionSearchResult, SessionSearchSummary } from "./search.ts";
 
 class MockPi {
+  handlers = new Map<string, any>();
+  on(name: string, handler: any) { this.handlers.set(name, handler); }
   commands = new Map<string, any>();
   tools: any[] = [];
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
@@ -255,3 +257,32 @@ describe("selected result actions", () => {
     expect(h.statuses.at(-1)).toBeUndefined();
   });
 });
+
+for (const event of ["session_start", "session_tree", "session_shutdown"]) {
+  for (const stage of ["list", "search", "picker", "clipboard"]) {
+    test(`${event} invalidates delayed ${stage} results without stale UI writes`, async () => {
+      const pi = new MockPi(); const h = context({ actions: ["<first>", "Copy matching excerpt"] });
+      let release!: () => void; let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      let signal: AbortSignal | undefined;
+      const delay = async () => { entered(); await gate; };
+      sessionSearchExtension(pi as any, {
+        listSessions: async (progress) => { if (stage === "list") { await delay(); progress?.(1, 1); } return [session()]; },
+        search: async (_sessions, _query, options) => { signal = options?.signal; if (stage === "search") { await delay(); options?.onProgress?.(1, 1); } return summary([searchResult()]); },
+        copy: async () => { if (stage === "clipboard") await delay(); return false; },
+      });
+      if (stage === "picker") h.ctx.ui.select = async (_title: string, choices: string[]) => { await delay(); return choices[0]; };
+      const pending = pi.commands.get("session-search").handler("router", h.ctx);
+      await started;
+      const count = h.statuses.length;
+      pi.handlers.get(event)({}, { ui: { setStatus() {} } });
+      release(); await pending;
+      expect(h.editor).toEqual([]);
+      expect(h.switchCalls).toEqual([]);
+      expect(h.notifications).toEqual([]);
+      expect(h.statuses).toHaveLength(count);
+      if (signal) expect(signal.aborted).toBe(true);
+    });
+  }
+}

@@ -15,11 +15,13 @@ export function clipboardCommands(
   if (platform === "darwin") return [{ command: "pbcopy", args: [] }];
   if (platform === "win32") return [{ command: "clip.exe", args: [] }];
   if (platform === "linux") {
-    return [
-      { command: "wl-copy", args: [] },
+    const candidates: ClipboardCommand[] = [];
+    if (environment.WAYLAND_DISPLAY?.trim()) candidates.push({ command: "wl-copy", args: [] });
+    if (environment.DISPLAY?.trim()) candidates.push(
       { command: "xclip", args: ["-selection", "clipboard"] },
       { command: "xsel", args: ["--clipboard", "--input"] },
-    ];
+    );
+    return candidates;
   }
   return [];
 }
