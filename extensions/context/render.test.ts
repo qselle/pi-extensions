@@ -55,9 +55,9 @@ test("leads with the figure that actually drives compaction", () => {
 
 test("falls back to the estimate and omits figures pi has not provided", () => {
   expect(summaryLine(report({ reported: undefined })))
-    .toBe("Used 28,200 / 258,000 (11%)");
+    .toBe("Estimated 28,200 / 258,000 (11%)");
   expect(summaryLine(report({ reported: undefined, window: 0 })))
-    .toBe("Used 28,200");
+    .toBe("Estimated 28,200");
 });
 
 test("orders regions by weight so the window hog is the first thing read", () => {
@@ -183,4 +183,10 @@ test("degrades to a single line when the terminal is too narrow for a table", ()
   expect(lines).toHaveLength(1);
   expect(lines[0].length).toBeLessThanOrEqual(20);
   expect(lines[0]).toContain("Context");
+});
+
+
+test("reported zero remains authoritative and a zero-column viewport renders nothing", () => {
+  expect(summaryLine(report({ reported: 0 }))).toBe("Used 0 / 258,000 (0%)");
+  expect(renderReport(report(), plain, 0)).toEqual([]);
 });

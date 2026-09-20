@@ -7,10 +7,11 @@
  *   3. a share column, so the row that is eating the window is obvious
  *   4. heaviest regions first
  *
- * Free of pi-tui imports on purpose: rows are built and measured as plain text,
- * then coloured at the end, so the layout maths never counts ANSI.
+ * Rows use Pi display-column measurement and slicing, then receive colors, so
+ * wide glyphs and combining characters do not shift numeric columns.
  */
 
+import { visibleWidth, truncateToWidth, sliceByColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { Bucket, ContextReport, Section } from "./analysis.ts";
 
 export interface ReportTheme {
@@ -58,15 +59,18 @@ function sharePercent(tokens: number, total: number): string {
  * estimate is reconciled underneath the table instead of competing up here.
  */
 export function summaryLine(report: ContextReport): string {
-  const used = report.reported && report.reported > 0 ? report.reported : report.estimated;
+  const measured = report.reported !== undefined;
+  const used = measured ? report.reported! : report.estimated;
+  const label = measured ? "Used" : "Estimated";
   return report.window > 0
-    ? `Used ${formatCount(used)} / ${formatCount(report.window)} (${sharePercent(used, report.window)})`
-    : `Used ${formatCount(used)}`;
+    ? `${label} ${formatCount(used)} / ${formatCount(report.window)} (${sharePercent(used, report.window)})`
+    : `${label} ${formatCount(used)}`;
 }
 
 export function renderReport(report: ContextReport, theme: ReportTheme, width: number, expanded = false): string[] {
+  if (width <= 0) return [];
   const safeWidth = Math.max(1, Math.floor(width));
-  if (safeWidth < MIN_WIDTH) return [clip(`Context ${summaryLine(report)}`, safeWidth)];
+  if (safeWidth < MIN_WIDTH) return [clipPlain(`Context ${summaryLine(report)}`, safeWidth)];
 
   const header = clip(
     `${theme.fg("accent", "◆")} ${theme.bold("Context")}  ${theme.fg("muted", summaryLine(report))}`,
@@ -76,13 +80,14 @@ export function renderReport(report: ContextReport, theme: ReportTheme, width: n
   if (rows.length === 0) return [header];
 
   const labelWidth = Math.min(
-    Math.max(...rows.map((row) => row.indent * 2 + row.label.length)),
+    Math.max(...rows.map((row) => row.indent * 2 + visibleWidth(row.label))),
     Math.max(12, Math.min(MAX_LABEL_WIDTH, safeWidth - VALUE_WIDTH - SHARE_WIDTH - 1)),
   );
 
   const lines = [header];
   for (const row of rows) {
-    const label = clip(`${" ".repeat(row.indent * 2)}${row.label}`, labelWidth).padEnd(labelWidth);
+    const clippedLabel = clipPlain(`${" ".repeat(row.indent * 2)}${row.label}`, labelWidth);
+    const label = clippedLabel + " ".repeat(Math.max(0, labelWidth - visibleWidth(clippedLabel)));
     const value = row.value.padStart(VALUE_WIDTH);
     const share = (row.share ?? "").padStart(SHARE_WIDTH);
     const detail = row.detail ? `  ${row.detail}` : "";
@@ -116,7 +121,7 @@ function buildRows(report: ContextReport, expanded: boolean): Row[] {
   }
 
   rows.push({ kind: "footnote", indent: 0, label: "estimated total", value: formatCount(basis) });
-  if (report.reported !== undefined && report.reported > 0) {
+  if (report.reported !== undefined) {
     rows.push({
       kind: "footnote",
       indent: 0,
@@ -186,7 +191,7 @@ function colorRow(row: Row, plainLine: string, labelWidth: number, theme: Report
   const [labelColor, valueColor, shareColor] = rowColors(row);
   const valueEnd = labelWidth + VALUE_WIDTH;
   const shareEnd = valueEnd + SHARE_WIDTH;
-  const cut = (from: number, to?: number) => plainLine.slice(Math.min(from, plainLine.length), to === undefined ? undefined : Math.min(to, plainLine.length));
+  const cut = (from: number, to?: number) => sliceByColumn(plainLine, from, Math.max(0, (to ?? visibleWidth(plainLine)) - from));
   const segments: Array<[string, string]> = [
     [labelColor, cut(0, labelWidth)],
     [valueColor, cut(labelWidth, valueEnd)],
@@ -207,18 +212,9 @@ function rowColors(row: Row): [string, string, string] {
 }
 
 function clip(text: string, width: number): string {
-  if (width <= 0) return "";
-  const plain = stripAnsi(text);
-  if (plain.length <= width) return text;
-  // Rows are assembled from plain parts, so a plain-text clip is exact.
-  return `${plain.slice(0, Math.max(0, width - 1))}${ELLIPSIS}`;
+  return width <= 0 ? "" : truncateToWidth(text, width, ELLIPSIS);
 }
 
 function clipPlain(text: string, width: number): string {
-  if (width <= 0) return "";
-  return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}${ELLIPSIS}`;
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\u001b\[[0-9;]*m/g, "");
+  return stripTerminalSequences(clip(text, width));
 }

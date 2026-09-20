@@ -7,6 +7,8 @@ import {
   type CustomMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import { analyzeContext } from "./analysis.ts";
+import { renderReport } from "./render.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { piEstimators } from "./index.ts";
 
 const entry: CustomMessageEntry = {
@@ -65,4 +67,12 @@ assert.deepEqual(
   new Set(["assistant-reasoning", "assistant-answers", "assistant-tool-calls"]),
 );
 
+const unicodeReport = analyzeContext({ entries: [], systemPrompt: "text" }, piEstimators);
+unicodeReport.system = { total: 123, buckets: [{ id: "unicode", label: "界🌍é".repeat(20), tokens: 123 }] };
+const theme = { fg: (_: string, text: string) => `\x1b[2m${text}\x1b[0m`, bold: (text: string) => text };
+for (const width of [0, 1, 12, 28, 40, 80]) for (const expanded of [false, true]) {
+  const lines = renderReport(unicodeReport, theme, width, expanded);
+  assert(lines.every((line) => visibleWidth(line) <= width));
+  assert(lines.every((line) => !line.includes("�")));
+}
 console.log("context integration verified");

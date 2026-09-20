@@ -254,3 +254,12 @@ test("renders an empty report rather than throwing on a malformed entry", () => 
 
   expect(card.render(60)[0]).toContain("Context");
 });
+
+
+test("reported zero is retained and unavailable or invalid totals stay unknown", () => {
+  const host = new MockPi();
+  for (const tokens of [0, null, undefined, NaN, Infinity, -1]) {
+    const report = collectReport(host, commandContext({ getContextUsage: () => ({ tokens, contextWindow: 1000 }) }), estimators, () => undefined);
+    expect(report.reported).toBe(tokens === 0 ? 0 : undefined);
+  }
+});
