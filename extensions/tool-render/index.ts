@@ -223,6 +223,21 @@ function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: a
 	return summary ? [head, ...branchBody(theme, [theme.fg("muted", summary)], width)] : [head];
 }
 
+/** Highlight before wrapping so strings and heredocs retain their shell context. */
+function highlightCommand(command: string, theme: Theme): string {
+	let colored = command;
+	// Bound parser work for unusually large native Bash calls. The managed tool
+	// already limits commands to this size; longer commands keep a plain preview.
+	if (command.length <= 16_000) {
+		try { colored = highlightCode(command, "bash").join("\n"); }
+		catch { /* A highlighting failure must not hide the command. */ }
+	}
+	// Restore the base foreground after highlighted tokens, without painting over
+	// their colors or allowing a token color to leak into the following output.
+	const base = theme.getFgAnsi?.("text") ?? "\x1b[39m";
+	return theme.fg("text", colored.replace(/\x1b\[39m/g, base));
+}
+
 function makeRenderCall(name: ToolName) {
 	return (args: any, theme: Theme, ctx: any): Component => {
 		// Exploration tools show nothing on the call line; the grouped block (or a
@@ -237,13 +252,16 @@ function makeRenderCall(name: ToolName) {
 			const verb = theme.bold(theme.fg("text", verbText));
 			if (name === "bash") {
 				const command = new PlainOutput().push(String(a?.command ?? "")).trim();
+				if (!command) return [`${bullet(theme, ctx)} ${verb}`];
+				const highlighted = highlightCommand(command, theme);
 				if (command.includes("\n") || visibleWidth(command) > Math.max(1, width - verbText.length - 3)) {
 					const inner = Math.max(1, width - 4);
-					const rows = wrapTextWithAnsi(command, inner);
+					const rows = wrapTextWithAnsi(highlighted, inner);
 					const limit = ctx?.expanded ? 128 : 4;
-					return [`${bullet(theme, ctx)} ${verb} command`, ...rows.slice(0, limit).map((line, index) => `${index ? "    " : "  $ "}${theme.fg("text", line)}`),
+					return [`${bullet(theme, ctx)} ${verb} command`, ...rows.slice(0, limit).map((line, index) => `${index ? "    " : "  $ "}${line}`),
 						...(rows.length > limit ? [`    ${theme.fg("dim", `… ${rows.length - limit} command lines · ${expansionHint()}`)}`] : [])];
 				}
+				return [`${bullet(theme, ctx)} ${verb} ${highlighted}`];
 			}
 			const target = targetFor(name, a);
 			if (!target) return [`${bullet(theme, ctx)} ${verb}`];
