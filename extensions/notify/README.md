@@ -2,7 +2,7 @@
 
 Sends a desktop notification and terminal bell when a turn finishes or Pi needs questionnaire input.
 
-Notifications are suppressed while the terminal is focused and while an active [`goal`](../goal/) is continuing. Identical notifications within five seconds are deduplicated.
+Notifications are suppressed while the terminal is focused. Routine turn-complete notifications are also suppressed while an active [`goal`](../goal/) is continuing; questionnaire attention notifications remain available. Goal status follows live changes and restored session branches in either extension load order. Identical notifications within five seconds are deduplicated.
 
 ## Usage
 

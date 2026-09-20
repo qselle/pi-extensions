@@ -13,10 +13,12 @@
  * self-driving `goal` is active, dedupes identical pings within 5s, and is fully
  * event-driven (no timers). Toggle with `/notify` or ~/.pi/agent/notify.json.
  */
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { decodeGoalEntry } from "../goal/goal.ts";
+import { GOAL_CHANGED_EVENT } from "../goal/events.ts";
 import {
 	bellSequence,
 	isDuplicate,
@@ -86,7 +88,7 @@ function failureText(result: unknown): string | undefined {
 const projectOf = (cwd: unknown, fallback: string): string =>
 	basename(String(cwd ?? "").trim()) || fallback;
 
-export default function notifyExtension(pi: ExtensionAPI): void {
+export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (title: string, body: string) => void } = {}): void {
 	let cfg = loadConfig();
 	const dedupe: DedupeState = {};
 	let focusAware = false;
@@ -99,6 +101,7 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 	let notifiedThisRun = false;
 
 	const deliver = (title: string, body: string): void => {
+		if (options.deliver) { options.deliver(title, body); return; }
 		if (cfg.bell) {
 			try {
 				process.stdout.write(bellSequence(!!process.env.TMUX));
@@ -162,7 +165,17 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	const restoreGoal = (ctx: ExtensionContext) => {
+		goalActive = false;
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (entry.type !== "custom" || entry.customType !== "goal-state") continue;
+			const state = decodeGoalEntry(entry.data);
+			if (state) goalActive = state.goal?.status === "active";
+		}
+	};
+	pi.on("session_tree", (_event, ctx) => restoreGoal(ctx));
 	pi.on("session_start", (_event, ctx) => {
+		restoreGoal(ctx);
 		project = projectOf(ctx.cwd, "pi");
 		finalResponse = "";
 		lastFailure = undefined;
@@ -233,11 +246,10 @@ export default function notifyExtension(pi: ExtensionAPI): void {
 		else send(`${project}: done`, finalResponse || "Turn complete.");
 	});
 
-	// Best-effort: quiet routine turn-complete pings while a self-driving goal
-	// runs (goal loops produce many turn boundaries). Harmless if the goal
-	// extension never emits this event.
+	// Quiet routine turn-complete pings while a goal runs; restoration above
+	// handles either extension load order and branches without a live event.
 	try {
-		pi.events.on("goal:changed", (data: unknown) => {
+		pi.events.on(GOAL_CHANGED_EVENT, (data: unknown) => {
 			const status = data && typeof data === "object" ? (data as { status?: unknown }).status : undefined;
 			goalActive = status === "active";
 		});
