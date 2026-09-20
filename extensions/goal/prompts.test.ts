@@ -35,7 +35,7 @@ test("reports structured progress, usage, and remaining budget", () => {
         { content: "Implement <main>", status: "complete" },
         { content: "Run tests & inspect output", status: "in_progress" },
       ],
-      progress: { complete: 1, total: 2 },
+      progress: { complete: 1, total: 2, cancelled: 0 },
       progressSummary: "Implementation is ready",
       stallReason: null,
       blocker: null,

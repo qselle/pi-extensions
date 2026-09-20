@@ -1,6 +1,7 @@
 import type { GoalState } from "./goal.ts";
 
 export const GOAL_COMPLETED_EVENT = "goal:completed";
+export const GOAL_CHANGED_EVENT = "goal:changed";
 
 export interface GoalCompletedEvent {
   readonly version: 1;

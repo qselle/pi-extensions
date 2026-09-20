@@ -66,7 +66,7 @@ test("allows only one current progress check", () => {
 test("reports structured progress and identifies the current check", () => {
   const updated = reportGoalProgress(goal(), checks, "Implementation is complete", 200);
   expect(updated.progressSummary).toBe("Implementation is complete");
-  expect(goalCheckProgress(updated)).toEqual({ complete: 1, total: 3 });
+  expect(goalCheckProgress(updated)).toEqual({ complete: 1, total: 3, cancelled: 0 });
   expect(currentGoalCheck(updated)?.content).toBe("Verify the behavior");
   expect(goalChecksComplete(updated)).toBe(false);
   expect(goalChecksComplete(reportGoalProgress(updated, checks.map((check) => ({ ...check, status: "complete" }))))).toBe(true);
@@ -169,4 +169,14 @@ test("formats elapsed time and tokens compactly", () => {
   expect(formatDuration((24 * 60 + 2) * 60_000)).toBe("1d 0h 2m");
   expect(formatTokens(63_876)).toBe("63.9K");
   expect(formatTokens(1_250)).toBe("1.3K");
+});
+
+test("cancelled checks are distinguished from verified completion", () => {
+  const state = reportGoalProgress(goal(), [
+    { content: "Verified", status: "complete" },
+    { content: "User removed", status: "cancelled" },
+    { content: "Still required", status: "in_progress" },
+  ]);
+  expect(goalCheckProgress(state)).toEqual({ complete: 1, total: 2, cancelled: 1 });
+  expect(goalChecksComplete(state)).toBe(false);
 });

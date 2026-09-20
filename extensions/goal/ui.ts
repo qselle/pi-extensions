@@ -33,6 +33,7 @@ export class GoalWidget implements Component {
     const progress = goalCheckProgress(goal);
     const metadata = [
       progress.total > 0 ? `${progress.complete}/${progress.total}` : undefined,
+      progress.cancelled > 0 ? `${progress.cancelled} cancelled` : undefined,
       formatDuration(elapsed),
       goal.tokenBudget === null
         ? undefined
@@ -95,6 +96,7 @@ export function renderGoalOverlayBody(
   const elapsed = currentElapsed(goal, activeRunStartedAt);
   body.push(theme.fg("dim", [
     progress.total > 0 ? `${progress.complete}/${progress.total} validation` : undefined,
+    progress.cancelled > 0 ? `${progress.cancelled} cancelled` : undefined,
     `${formatDuration(elapsed)} active`,
     `${goal.turns} ${goal.turns === 1 ? "run" : "runs"}`,
     goal.continuations > 0 ? `${goal.continuations} cont.` : undefined,
@@ -144,6 +146,7 @@ export class GoalPanel implements Component {
       formatDuration(elapsed),
       `${this.goal.turns} ${this.goal.turns === 1 ? "run" : "runs"}`,
       progress.total > 0 ? `${progress.complete}/${progress.total} checks` : undefined,
+      progress.cancelled > 0 ? `${progress.cancelled} cancelled` : undefined,
     ].filter(Boolean).join(" · ");
     lines.push(panelLine(`${styledStatus(this.goal.status, this.theme)} ${this.theme.fg("dim", `· ${meta}`)}`, innerWidth, border));
     lines.push(panelLine("", innerWidth, border));
