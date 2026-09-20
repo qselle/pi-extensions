@@ -1,10 +1,13 @@
+import { deferredTools } from "../../lib/deferred-tools.ts";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { SnapshotPanel } from "../../lib/transcript/snapshot-panel.ts";
 import { loadDefaultLoopPrompt } from "./defaults.ts";
+import { loopBlocks } from "./panel.ts";
 import { formatDuration, parseDuration, parseLoopCommand } from "./interval.ts";
 import {
   MAX_ACTIVE_LOOPS,
@@ -54,6 +57,8 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function loopExtension(pi: ExtensionAPI): void {
+  const controls = deferredTools(pi, ["loop_schedule", "loop_stop", "get_loops"]);
+  const panel = new SnapshotPanel(pi, "loop", "loops · snapshot");
   const jobs = new Map<string, LoopJob>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pendingLoopId: string | undefined;
@@ -87,6 +92,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   const liveJobs = () => [...jobs.values()].filter((job) => job.status === "active" || job.status === "paused");
 
   const updateStatus = (ctx: ExtensionContext) => {
+    if (jobs.size) controls.activate();
     const active = activeJobs();
     if (active.length === 0) {
       ctx.ui.setStatus("loop", undefined);
@@ -246,7 +252,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   pi.registerCommand("loop", {
     description: "Run a prompt on a fixed or model-chosen cadence: /loop [<interval>] <prompt>",
     getArgumentCompletions: (prefix) => {
-      const actions = ["status", "pause", "resume", "stop", "stop all"];
+      const actions = ["status", "view", "pause", "resume", "stop", "stop all"];
       const items = actions
         .filter((action) => action.startsWith(prefix.toLowerCase()))
         .map((action) => ({ value: action, label: action }));
@@ -254,6 +260,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
     },
     handler: async (args, ctx) => {
       const input = args.trim();
+      if (input === "view") {
+        const snapshot = [...jobs.values()];
+        const defaultPrompt = snapshot.some((job) => job.promptSource === "default" && (job.status === "active" || job.status === "paused"))
+          ? loadDefaultLoopPrompt(cwd, undefined, projectTrusted) : undefined;
+        return panel.open(ctx, loopBlocks(snapshot, { runningId: runningLoopId, pendingId: pendingLoopId, defaultPrompt }));
+      }
       if (input === "status" || input === "list") {
         ctx.ui.notify(formatLoopList([...jobs.values()]), "info");
         return;
@@ -434,6 +446,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   const restore = (ctx: ExtensionContext) => {
+    controls.initialize();
     closed = false;
     cwd = typeof ctx.cwd === "string" ? ctx.cwd : process.cwd();
     projectTrusted = ctx.isProjectTrusted?.() ?? false;

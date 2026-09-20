@@ -6,6 +6,7 @@ const { default: loopExtension } = await import("./index.ts");
 type Handler = (event: any, ctx: any) => any;
 
 class MockPi {
+  events = { emit() {} };
   handlers = new Map<string, Handler[]>();
   commands = new Map<string, any>();
   tools = new Map<string, any>();
