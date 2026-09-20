@@ -306,3 +306,59 @@ test("substitutes issued handles into later tool calls and blocks stale ones", a
   expect(blocked.reason).toContain("no longer valid");
   expect(stale.input.command).toBe(`echo ${handle}`);
 });
+
+for (const event of ["session_tree", "session_start", "session_shutdown"]) {
+  test(`${event} cancels a pending questionnaire without leaking its answer`, async () => {
+    const pi = new MockPi();
+    questionsExtension(pi as any, { telegramService: null });
+    const titles: string[] = [];
+    const ctx = terminalContext(titles);
+    let component: any;
+    ctx.ui.custom = (factory: any) => new Promise((resolve) => {
+      component = factory({ requestRender() {} }, theme, keybindings, resolve);
+    });
+    const running = pi.tool.execute("call", { questions: [{ id: "secret", question: "Token?", secret: true }] }, new AbortController().signal, undefined, ctx);
+    component.handleInput("s");
+    pi.fire(event, {});
+    // A disposed component/provider may still deliver input; it must not win.
+    component.handleInput("\r");
+    const result = await running;
+    expect(result.details.interrupted).toBe(true);
+    expect(result.details.answers).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("[[secret:");
+    expect(titles.at(-1)).toBe("pi");
+    pi.fire("session_shutdown", {});
+  });
+}
+
+test("an old questionnaire cleanup does not clear a newer attention title", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { telegramService: null });
+  const titles: string[] = [];
+  const ctx = terminalContext(titles);
+  const components: any[] = [];
+  ctx.ui.custom = (factory: any) => new Promise((resolve) => components.push(factory({ requestRender() {} }, theme, keybindings, resolve)));
+  const params = { questions: [{ id: "choice", question: "Pick", options: ["Yes"] }] };
+  const old = pi.tool.execute("old", params, new AbortController().signal, undefined, ctx);
+  pi.fire("session_tree", {});
+  const current = pi.tool.execute("new", params, new AbortController().signal, undefined, ctx);
+  await old;
+  expect(titles.at(-1)).toContain("Input needed");
+  components[1].handleInput("\r");
+  expect((await current).details.answers[0].answer).toBe("Yes");
+  pi.fire("session_shutdown", {});
+});
+
+test("an already aborted questionnaire opens no input and leaves the title alone", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { telegramService: null });
+  const titles: string[] = [];
+  const ctx = terminalContext(titles);
+  ctx.ui.custom = () => { throw new Error("must not open input"); };
+  const controller = new AbortController();
+  controller.abort();
+  const result = await pi.tool.execute("call", { questions: [{ id: "q", question: "Continue?" }] }, controller.signal, undefined, ctx);
+  expect(result.details.interrupted).toBe(true);
+  expect(titles).toEqual([]);
+  pi.fire("session_shutdown", {});
+});

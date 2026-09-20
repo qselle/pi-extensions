@@ -27,6 +27,8 @@ Terminal controls:
 
 Questions run in order and replace the editor while active. The answer is stored in the tool result.
 
+Session changes and shutdown cancel pending input channels. Late replies are discarded, and cleanup from an old questionnaire cannot reset the attention title of a question in the new session. Already-aborted requests do not open input channels.
+
 Telegram:
 
 When [`telegram`](../telegram/) is configured, non-secret questions are sent after its configured delay. Terminal and Telegram answers race; the first valid answer wins and closes the other channel. Telegram failures do not disable terminal input.
@@ -37,7 +39,7 @@ Secret answers:
 
 Set `secret: true` for masked terminal input. The tool result receives an opaque handle instead of the value. A later tool call can use that handle; the extension substitutes the value in memory before execution.
 
-Secret values are never persisted and handles expire on shutdown or branch change. Stale handles block the tool call. Tool output can still reveal a substituted value, so use commands that do not echo secrets. Secret questions are terminal-only; Telegram receives only a redacted notice.
+Secret values are never persisted and handles expire on shutdown, branch change, or a new session start. Stale handles block the tool call. Tool output can still reveal a substituted value, so use commands that do not echo secrets. Secret questions are terminal-only; Telegram receives only a redacted notice.
 
 ## Dependencies and limitations
 

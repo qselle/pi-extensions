@@ -10,6 +10,18 @@ import { randomBytes } from "node:crypto";
 const HANDLE_ID_CHARS = 64;
 const HANDLE_PATTERN = /\[\[secret:[A-Za-z0-9._-]{1,64}#[0-9a-f]{8}\]\]/g;
 
+const VAULTS = Symbol.for("@qselle/pi-extensions.active-secret-vaults.v1");
+const activeVaults = ((globalThis as Record<PropertyKey, unknown>)[VAULTS] ??= new Set<SecretVault>()) as Set<SecretVault>;
+
+/** In-process redaction consumers only. Never serialize these values or expose them as a tool. */
+export function registerSecretVault(vault: SecretVault): () => void {
+  activeVaults.add(vault);
+  return () => { activeVaults.delete(vault); };
+}
+export function knownSecretValues(): string[] {
+  return [...new Set([...activeVaults].flatMap((vault) => vault.redactionValues()))];
+}
+
 export const SECRET_HANDLE_HINT =
   "Secret answers are returned as handles. Copy a handle verbatim into later tool arguments; Pi substitutes the real value at execution time and keeps it out of the transcript.";
 
@@ -52,6 +64,8 @@ export class SecretVault {
   has(handle: string): boolean {
     return this.values.has(handle);
   }
+
+  redactionValues(): string[] { return [...this.values.values()].filter(Boolean); }
 
   /** Stores a secret answer and returns the handle that stands in for it. */
   issue(questionId: string, value: string): string {
