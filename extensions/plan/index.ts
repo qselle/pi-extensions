@@ -1,17 +1,20 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
+import { toolText } from "../../lib/tool-ui.ts";
+import { PlainOutput } from "../../lib/output.ts";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
 import {
   MAX_PLAN_ITEMS,
+  MAX_PLAN_DEPTH,
   createPlanState,
   decodePlanEntry,
   planIsActive,
   planResponse,
   replacePlan,
   type PlanEntry,
-  type PlanItem,
+  type PlanItemInput,
   type PlanState,
 } from "./plan.ts";
 import {
@@ -31,22 +34,24 @@ import {
 
 const ENTRY_TYPE = "plan-state";
 
-const PlanItemParameters = Type.Object({
-  step: Type.String({ description: "A concise, concrete execution step." }),
-  status: StringEnum(["pending", "in_progress", "completed", "cancelled"] as const),
+const itemParameters = (depth: number): TSchema => Type.Object({
+  step: Type.String({ description: "A concise execution step or group name." }),
+  status: Type.Optional(StringEnum(["pending", "in_progress", "completed", "cancelled"] as const, { description: "Required for leaf steps. Group status is derived from children." })),
+  ...(depth < MAX_PLAN_DEPTH ? { children: Type.Optional(Type.Array(itemParameters(depth + 1), { minItems: 1, maxItems: MAX_PLAN_ITEMS })) } : {}),
 });
+const PlanItemParameters = itemParameters(1);
 
 const UpdatePlanParameters = Type.Object({
   explanation: Type.Optional(Type.String({ description: "A short rationale when the plan changes." })),
   plan: Type.Array(PlanItemParameters, {
     maxItems: MAX_PLAN_ITEMS,
-    description: "The complete current plan. This replaces the previous list.",
+    description: "The complete current plan, with optional nested children. Up to 3 levels and 40 total nodes. Exactly one leaf step is in progress. This replaces the previous tree.",
   }),
 });
 
 interface UpdatePlanInput {
   explanation?: string;
-  plan: PlanItem[];
+  plan: PlanItemInput[];
 }
 
 interface PlanToolDetails {
@@ -64,6 +69,7 @@ interface TransientPlanMessage {
 
 export default function planExtension(pi: ExtensionAPI): void {
   let plan = createPlanState();
+  let generation = 0;
 
   const overlayCard = registerOverlayCard({
     id: "plan",
@@ -77,13 +83,10 @@ export default function planExtension(pi: ExtensionAPI): void {
     renderBody: (width, maxHeight, theme) => renderPlanOverlayBody(plan, width, maxHeight, theme),
   });
 
-  const persist = () => {
-    const entry: PlanEntry = { version: 1, plan };
+  const commit = (next: PlanState) => {
+    const entry: PlanEntry = { version: next.items.some((item) => item.children) ? 2 : 1, plan: next };
     pi.appendEntry(ENTRY_TYPE, entry);
-  };
-
-  const save = () => {
-    persist();
+    plan = next;
     overlayCard.invalidate();
   };
 
@@ -92,10 +95,12 @@ export default function planExtension(pi: ExtensionAPI): void {
       ctx.ui.notify("No plan is set.", "info");
       return;
     }
+    const version = generation;
+    const snapshot = plan;
     const confirmed = await ctx.ui.confirm("Clear plan?", "The tactical execution plan will be removed.");
-    if (!confirmed) return;
-    plan = createPlanState();
-    save();
+    if (!confirmed || version !== generation) return;
+    if (snapshot !== plan) { ctx.ui.notify("Plan changed while confirming. Review the current plan before clearing it.", "warning"); return; }
+    commit(createPlanState());
     ctx.ui.notify("Plan cleared.", "info");
   };
 
@@ -105,11 +110,13 @@ export default function planExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    const version = generation;
+    const snapshot = plan;
     pi.events.emit(OVERLAY_MODAL_EVENT, { id: "plan-panel", open: true });
     let action: PlanPanelAction;
     try {
       action = await ctx.ui.custom<PlanPanelAction>(
-        (_tui, theme, _keybindings, done) => new PlanPanel(plan, theme, done),
+        (tui, theme, _keybindings, done) => new PlanPanel(plan, theme, done, () => tui.requestRender(), () => tui.terminal.rows),
         {
           overlay: true,
           overlayOptions: {
@@ -121,10 +128,10 @@ export default function planExtension(pi: ExtensionAPI): void {
         },
       );
     } finally {
-      pi.events.emit(OVERLAY_MODAL_EVENT, { id: "plan-panel", open: false });
+      if (version === generation) pi.events.emit(OVERLAY_MODAL_EVENT, { id: "plan-panel", open: false });
     }
 
-    if (action === "clear") await clearPlan(ctx);
+    if (version === generation && snapshot === plan && action === "clear") await clearPlan(ctx);
   };
 
   pi.registerCommand("plan", {
@@ -152,17 +159,19 @@ export default function planExtension(pi: ExtensionAPI): void {
     parameters: UpdatePlanParameters,
     promptGuidelines: PLAN_PROMPT_GUIDELINES,
     async execute(_toolCallId, params: UpdatePlanInput) {
-      plan = replacePlan(plan, params.plan, params.explanation);
-      save();
+      commit(replacePlan(plan, params.plan, params.explanation));
       return {
         content: [{ type: "text", text: planToolResponse(plan) }],
         details: { plan } satisfies PlanToolDetails,
       };
     },
-    renderCall: (_args, theme) => new Text(`${theme.fg("accent", "◆")} ${theme.bold("Updating plan")}`, 0, 0),
-    renderResult: (result, _options, theme) => {
+    renderShell: "self",
+    renderCall: () => new Text("", 0, 0),
+    renderResult: (result, options, theme, context) => {
+      if (context?.isError) return toolText(theme.fg("error", new PlainOutput().push(result.content.filter(part => part.type === "text").map(part => part.text).join("\n")).slice(0, 1200)), true);
+      if (options.isPartial) return new Text(theme.fg("accent", "• Updating plan…"), 0, 0);
       const details = result.details as PlanToolDetails | undefined;
-      return new PlanToolResult(details?.plan ?? createPlanState(), theme);
+      return new PlanToolResult(details?.plan ?? createPlanState(), theme, options.expanded);
     },
   });
 
@@ -188,6 +197,7 @@ export default function planExtension(pi: ExtensionAPI): void {
   });
 
   const restore = (ctx: ExtensionContext) => {
+    generation++;
     plan = createPlanState();
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
@@ -200,5 +210,5 @@ export default function planExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_compact", () => overlayCard.invalidate());
-  pi.on("session_shutdown", () => overlayCard.unregister());
+  pi.on("session_shutdown", () => { generation++; overlayCard.unregister(); });
 }

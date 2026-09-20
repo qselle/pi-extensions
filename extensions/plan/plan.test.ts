@@ -77,7 +77,7 @@ test("computes progress and selects the live step", () => {
 test("restores only valid versioned state", () => {
   const plan = replacePlan(createPlanState(10), activeItems, "Working", 20);
   expect(decodePlanEntry({ version: 1, plan })).toEqual({ version: 1, plan });
-  expect(decodePlanEntry({ version: 2, plan })).toBeUndefined();
+  expect(decodePlanEntry({ version: 3, plan })).toBeUndefined();
   expect(decodePlanEntry({ version: 1, plan: { ...plan, items: [{ step: "Broken", status: "pending" }] } })).toBeUndefined();
   expect(decodePlanEntry(null)).toBeUndefined();
 });
@@ -93,4 +93,28 @@ test("returns structured plan state to commands and tools", () => {
       updatedAt: 25,
     },
   });
+});
+
+test("nested groups derive progress from leaves without double-counting parents", () => {
+  const plan = replacePlan(createPlanState(), [
+    { step: "Build", status: "completed", children: [{ step: "Implement", status: "completed" }, { step: "Verify", status: "in_progress" }] },
+    { step: "Ship", children: [{ step: "Verify", status: "pending" }, { step: "Deprecated route", status: "cancelled" }] },
+  ]);
+  expect(plan.items[0]?.status).toBe("in_progress");
+  expect(plan.items[1]?.status).toBe("pending");
+  expect(planStats(plan.items)).toMatchObject({ total: 4, finished: 2, completed: 1, cancelled: 1, inProgress: 1 });
+  expect(currentPlanItem(plan)?.step).toBe("Verify");
+  expect(decodePlanEntry({ version: 2, plan })).toEqual({ version: 2, plan });
+});
+test("nested plans enforce depth, total size and one current leaf", () => {
+  expect(() => validatePlanItems([{ step: "A", children: [{ step: "B", children: [{ step: "C", children: [{ step: "D", status: "in_progress" }] }] }] }])).toThrow("3 levels");
+  expect(() => validatePlanItems([{ step: "A", children: [] }])).toThrow("at least one");
+  expect(() => validatePlanItems([{ step: "A", children: [{ step: "a", status: "in_progress" }] }, { step: "B", children: [{ step: "b", status: "in_progress" }] }])).toThrow("Only one");
+  expect(() => validatePlanItems(Array.from({ length: 5 }, (_, i) => ({ step: `Group ${i}`, children: Array.from({ length: 8 }, (_, j) => ({ step: `Child ${j}`, status: "completed" as const })) })))).toThrow("40 groups");
+});
+test("cancelled children remain distinct from successfully completed work", () => {
+  const plan = replacePlan(createPlanState(), [{ step: "Removed", children: [{ step: "Unused", status: "cancelled" }] }, { step: "Delivered", children: [{ step: "Build", status: "completed" }, { step: "Unused", status: "cancelled" }] }]);
+  expect(plan.items[0]?.status).toBe("cancelled");
+  expect(plan.items[1]?.status).toBe("completed");
+  expect(planStats(plan.items)).toMatchObject({ completed: 1, cancelled: 2, total: 3 });
 });
