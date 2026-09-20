@@ -63,6 +63,20 @@ test("balanced and fast work without a session ID; structured and JSON-text resu
   }
 });
 
+test("keyless search preserves path case, category and freshness without using configured account keys", async () => {
+  const fixture = server({ call: (init) => {
+    const args = JSON.parse(String(init.body)).params.arguments;
+    expect(args).toMatchObject({ maxAgeHours: 0, category: "news", includeDomains: ["docs.example.com/API"], excludeDomains: ["docs.example.com/API/old"] });
+    return rpc(payload([{ url: "https://docs.example.com/API/current" }, { url: "https://docs.example.com/API/old/item" }]));
+  } });
+  const result = await searchWeb({ query: "q", domains: [" DOCS.EXAMPLE.COM/API "], exclude_domains: ["docs.example.com/API/old"], category: "news", max_age_hours: 0 }, undefined, { EXA_API_KEY: "unused" }, fixture.request);
+  expect(result.access).toBe("keyless");
+  expect(result.maxAgeHours).toBe(0);
+  expect(result.category).toBe("news");
+  expect(result.results.map((row) => row.url)).toEqual(["https://docs.example.com/API/current"]);
+  expect(JSON.stringify(fixture.calls)).not.toContain("unused");
+});
+
 test("explicit account access selects the direct API and never falls back to anonymous search on failure", async () => {
   for (const status of [200, 401, 429]) {
     const requests: string[] = [];

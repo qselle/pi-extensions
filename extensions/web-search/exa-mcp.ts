@@ -81,6 +81,7 @@ export interface ExaMcpInput {
   category?: string;
   startPublishedDate?: string;
   endPublishedDate?: string;
+  maxAgeHours?: number;
 }
 
 export async function searchExaKeyless(input: ExaMcpInput, signal: AbortSignal, request: Fetch): Promise<unknown> {

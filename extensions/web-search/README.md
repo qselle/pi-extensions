@@ -1,12 +1,12 @@
 # web-search
 
 Web research tools with compact source previews, explicit provider attribution,
-bounded snippets, and an optional local page reader.
+bounded snippets, and local, remote, or explicit local-first page reading.
 
 ## Usage
 
 - `web_search`: query, optional provider (`exa`, `firecrawl`, or `mistral`), limit (1–10), and
-  domain filters (hostnames and their subdomains). Returned URLs are checked
+  domain filters (hostnames, subdomains, and optional path prefixes). Returned URLs are checked
   locally against those filters, even if the provider ignores them. Defaults to
   **Exa without a key**, using its free, rate-limited hosted search. Set `PI_EXA_ACCESS=api-key` together with
   `EXA_API_KEY` to use the direct API. A key alone does not change the default. Firecrawl and Mistral
@@ -24,8 +24,14 @@ bounded snippets, and an optional local page reader.
   At least one bound is required; supplied bounds must be valid `YYYY-MM-DD` dates in order. Exa receives publication
   timestamps spanning those UTC days; Firecrawl receives its calendar date filter.
   Results show the requested window, not a claim of independently verified dates.
-- `web_read`: HTTP(S) URL, mode (`markdown`, `outline`, or CSS `extract`), optional
-  selector, token budget (100–8000, default 2000), and continuation offset.
+- Optional Exa `max_age_hours` controls content retrieval freshness: `0` requests
+  a fresh fetch, `-1` uses cached content only, and `1`–`720` allows that many hours
+  of cache age. Omit it for provider defaults. This is separate from publication
+  dates and is shown as a requested policy, not verified freshness. Other search
+  providers reject it before sending a request.
+- `web_read`: HTTP(S) URL, reader (`ax`, `exa`, or explicit `auto` fallback), mode
+  (`markdown`, `outline`, or CSS `extract`), optional selector, token budget
+  (100–8000, default 2000), and continuation offset.
 - `/web`: reports the default Exa access path and explicitly configured alternative
   providers without exposing keys. This is a configuration check, not a
   connectivity or billing test.
@@ -49,17 +55,67 @@ flag the warning, and expanded output includes its bounded text as untrusted
 provider data. An empty response with a warning is not reported as proof that no
 matches exist. A warning never triggers another request automatically.
 
-Optional `exclude_domains` rejects matching hosts and subdomains locally for all
-providers; Exa also receives the exclusion filter. Optional Exa `category` selects
-`news`, `pdf` or `github`; category labels come from the provider.
+`domains` and `exclude_domains` accept up to ten hostnames or path prefixes each,
+for example `docs.example.com/API`. Paths retain their case and match whole path
+segments: `/API` includes `/API/guide`, but not `/APIs` or `/api`. Subdomains are
+included; lookalike hostname suffixes are not. Protocols, credentials, ports,
+queries and fragments are rejected. Exa receives the full filters; Firecrawl
+receives host hints and Mistral receives source preferences. Every provider's
+returned URLs are checked locally, with exclusion counts visible. Filtering can
+leave fewer results than the requested limit. The extension does not refill the
+list with extra provider calls. Tracking variants (`utm_*`, `fbclid`, `gclid`,
+`dclid`, `msclkid`) and fragments do not consume multiple result slots; distinct
+content query parameters remain distinct and citation URLs are preserved.
 
-`web_read` defaults to local `ax`. Explicit `reader: "exa"` sends the public URL to
-Exa for remote page or PDF extraction using the same access setting as search.
-It never uploads local documents or silently switches readers after an ax failure.
-Remote reads support bounded excerpts only, without CSS selectors, outlines or
-continuation. Account responses retain the provider-reported source URL; keyless
-MCP prose is not promoted to verified redirect metadata. PDF tables, images and
-text may be incomplete, and cached content may be stale.
+Optional Exa `category` selects `news`, `pdf`, `github`, `publication`, `company`,
+`people`, `personal site`, or `financial report`; these are provider-assigned
+categories or hints. Unsupported combinations fail before any request:
+`publication` with domain filters, or `company`/`people` with publication dates or
+excluded domains. To preserve those constraints, omit the category and express
+the source type in the query. Filters are never silently dropped.
+
+For current documentation under a specific path:
+
+```json
+{
+  "query": "TaskGroup cancellation",
+  "domains": ["docs.python.org/3/library"],
+  "exclude_domains": ["docs.python.org/3/library/asyncio-policy.html"],
+  "max_age_hours": 24
+}
+```
+
+`web_read` defaults to local-only `ax`. Select `reader: "auto"` to try ax first
+and, after an ax process/transport failure, empty text, or a recognized short
+access challenge, retry the same public URL once through Exa. The two attempts
+share a 45-second deadline. Auto fallback is limited to Markdown reads without selectors or
+continuation; invalid input, cancellation, structured extraction, and outline
+failures never trigger it. The result identifies both readers and retains a
+sanitized local failure reason. If both attempts fail, the error retains the
+local cause and any remote HTTP status without copying arbitrary error text.
+Empty CSS selections remain valid and never cause a remote fallback. Challenge
+detection recognizes whole short messages such as “Just a moment…”; an article
+discussing access errors is still readable. It does not attempt to classify every
+login page or poor extraction.
+
+Select `reader: "exa"` to go remote immediately for PDFs or sources that reject a
+direct client; access is not guaranteed. Both remote modes use the same Exa access setting as search, which may be
+account-backed only when deliberately configured.
+
+The tool never uploads local documents. Explicit `reader: "ax"` (and the default)
+never shares the URL with Exa. When ax reports an HTTP rejection, errors retain
+only the sanitized status code (for example, HTTP 401); arbitrary stderr is not
+copied into model context. Remote reads support bounded excerpts only, without CSS
+selectors, outlines or continuation. Account responses retain the provider-reported
+source URL; keyless MCP prose is not promoted to verified redirect metadata. PDF
+tables, images and text may be incomplete, and cached content may be stale.
+Both readers reject empty or recognized challenge-only broad reads instead of
+reporting those as page content. A selector requires `mode: "extract"`.
+
+`web_read.max_age_hours` uses the same range as search, but requires explicit
+`reader: "exa"` and API-key access. The keyless fetch tool has no freshness
+parameter and rejects this option; use ax for a direct fetch instead. The account
+mapping follows the [Exa contents API](https://exa.ai/docs/reference/get-contents).
 
 ## Configuration
 
@@ -147,7 +203,10 @@ providers are not retried. No retry changes providers, keys or access policy.
   limits, a 2 MB download cap, and no ax disk cache. Output has a separate 40,000
   character cap because ax permits one oversized item beyond its token budget.
 - Follow extraction metadata or outline stderr continuation notes with `offset`; for a hard character cap,
-  narrow the CSS selector. With caching disabled, a changing page may shift offsets. Non-advancing
+  narrow the CSS selector and repeat at the same offset. Capped selections withhold
+  continuation metadata and stderr hints so unread text is not silently skipped.
+  Remote excerpts that reach their character budget are marked as capped even
+  when the provider truncates them before returning. With caching disabled, a changing page may shift offsets. Non-advancing
   extraction offsets are rejected rather than inviting a repeated-read loop.
 - Local ax page reads are GET-only and accept no credentials or custom headers. They do
   not render JavaScript, bypass logins, or guarantee extraction from every site.
@@ -158,6 +217,8 @@ providers are not retried. No retry changes providers, keys or access policy.
   Markdown, outline, extraction, and distinct extraction pages at returned offsets.
   Live keyless Exa validation on 2026-09-20 returned ax's official documentation
   in balanced mode and Exa sources in fast mode with a domain/date window. These
-  checks establish working requests and source handling, not general retrieval
-  superiority. Direct keyed/paid API calls were not exercised and are not part
+  checks also exercised a documentation path filter plus `max_age_hours: 24`,
+  returning three sources under the requested path, and a capped keyless page read.
+  The public MCP schema was checked for category and freshness support. These
+  checks verify request contracts and source handling. Direct keyed/paid API calls were not exercised and are not part
   of the test suite.
