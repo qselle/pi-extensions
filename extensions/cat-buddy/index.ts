@@ -3,6 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
 import {
   sliceByColumn,
   truncateToWidth,
@@ -64,6 +65,7 @@ class CatSprite {
 
   renderEditor(editor: EditorComponent, render: (width: number) => string[], width: number): string[] {
     const base = render(width);
+    if (this.disposed) return base;
     const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
     this.setEligible(width >= 34 && rows >= 10 && base.length > 0);
     if (!this.visible || !this.eligible) return base;
@@ -78,6 +80,11 @@ class CatSprite {
     const border = base[0]!;
     const borderSegment = sliceByColumn(border, width - CAT_WIDTH - 2, CAT_WIDTH, true);
     const bottom = pose.at(-1)!;
+    // Status text and other editor decorations own their border columns.
+    // Give the cat a separate third row rather than painting over them.
+    if (!/^─+$/u.test(stripVTControlCharacters(borderSegment))) {
+      return [...topRows, padding + color(bottom), ...base];
+    }
     const leadingWidth = bottom.length - bottom.trimStart().length;
     const trailingWidth = Math.max(0, CAT_WIDTH - bottom.length);
     const leadingBorder = sliceByColumn(borderSegment, 0, leadingWidth, true);
@@ -177,14 +184,22 @@ export default function (pi: ExtensionAPI) {
 
   const mount = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
+    // Another decorator may now wrap our factory. Reinstalling in that case
+    // would put two cats (and two timers) into the same editor chain.
+    if (installedFactory) {
+      syncAnimation();
+      return;
+    }
     previousFactory = ctx.ui.getEditorComponent();
+    const wrappedFactory = previousFactory;
     installedFactory = (tui, theme, keybindings) => {
       host?.dispose();
-      const editor = previousFactory?.(tui, theme, keybindings)
+      const editor = wrappedFactory?.(tui, theme, keybindings)
         ?? new CustomEditor(tui, theme, keybindings, { embedWorkingStatus: true });
       const render = editor.render.bind(editor);
-      host = new CatSprite(tui, mode, working, visible);
-      editor.render = (width: number) => host?.renderEditor(editor, render, width) ?? render(width);
+      const sprite = new CatSprite(tui, mode, working, visible);
+      host = sprite;
+      editor.render = (width: number) => sprite.renderEditor(editor, render, width);
       return editor;
     };
     ctx.ui.setEditorComponent(installedFactory);
