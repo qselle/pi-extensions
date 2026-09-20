@@ -7,6 +7,7 @@ import {
   type OverlayOptions,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { bodyBudgets } from "./layout.ts";
 
 const HOST_WIDGET_KEY = "workflow-overlay-host";
 const REGISTRY_KEY = Symbol.for("@qselle/pi-extensions.overlay-stack.v1");
@@ -65,12 +66,15 @@ export function registerOverlayCard(definition: OverlayCardDefinition): OverlayC
   };
 }
 
-function visibleCards(terminalWidth: number, terminalHeight: number): OverlayCardDefinition[] {
+function fitsViewport(card: OverlayCardDefinition, width: number, height: number): boolean {
+  return width >= (card.minTerminalWidth ?? 1) && height >= (card.minTerminalHeight ?? 1);
+}
+
+function visibleCards(terminalWidth: number, terminalHeight: number, includeCompact = false): OverlayCardDefinition[] {
   return [...registry.cards.values()]
     .map(({ definition }) => definition)
     .filter((card) => {
-      if (terminalWidth < (card.minTerminalWidth ?? 1)) return false;
-      if (terminalHeight < (card.minTerminalHeight ?? 1)) return false;
+      if (!includeCompact && !fitsViewport(card, terminalWidth, terminalHeight)) return false;
       try {
         return card.visible();
       } catch {
@@ -105,15 +109,13 @@ export class OverlayStackView implements Component {
 
     const contentWidth = Math.max(1, width - 4);
     const shellRows = cards.length * 2 + Math.max(0, cards.length - 1);
-    let remainingBodyRows = Math.max(0, this.rowBudget() - shellRows);
-    const sections: Array<{ title: string; body: string[] }> = [];
+    const availableBodyRows = Math.max(0, this.rowBudget() - shellRows);
+    const budgets = bodyBudgets(cards.map((card) => card.minBodyHeight ?? 1), availableBodyRows);
+    const sections: Array<{ title: string; body: string[]; card: OverlayCardDefinition; budget: number }> = [];
 
     for (let index = 0; index < cards.length; index++) {
       const card = cards[index]!;
-      const reserved = cards
-        .slice(index + 1)
-        .reduce((total, next) => total + (next.minBodyHeight ?? 1), 0);
-      const available = Math.max(0, remainingBodyRows - reserved);
+      const available = budgets[index]!;
       let body: string[];
       let title: string;
       try {
@@ -124,8 +126,25 @@ export class OverlayStackView implements Component {
       }
       const minimum = card.minBodyHeight ?? 1;
       while (body.length < minimum) body.push("");
-      sections.push({ title, body });
-      remainingBodyRows -= body.length;
+      sections.push({ title, body, card, budget: available });
+    }
+
+    // Short cards lend unused rows to cards that filled their share. Renderers
+    // may use the larger budget to replace an overflow summary with more detail.
+    let spare = availableBodyRows - sections.reduce((sum, section) => sum + section.body.length, 0);
+    const full = sections.filter((section) => section.body.length >= section.budget);
+    for (let index = 0; index < full.length && spare > 0; index++) {
+      const section = full[index]!;
+      const extra = Math.ceil(spare / (full.length - index));
+      const budget = section.body.length + extra;
+      try {
+        const body = section.card.renderBody(contentWidth, budget, this.theme).slice(0, budget);
+        // A second render must not lose content if a state change shrank it.
+        if (body.length > section.body.length) {
+          spare -= body.length - section.body.length;
+          section.body = body;
+        }
+      } catch { /* Keep the valid first rendering. */ }
     }
 
     return sections.flatMap((section, index) => [
@@ -137,6 +156,37 @@ export class OverlayStackView implements Component {
   }
 
   invalidate(): void {}
+
+  /** Cards excluded by viewport size retain a small, non-overlapping status row. */
+  renderCompact(width: number): string[] {
+    const limit = Math.min(3, Math.max(0, Math.floor((this.terminalHeight - 6) / 4)));
+    if (width <= 0 || !limit) return [];
+    const cards = visibleCards(this.terminalWidth, this.terminalHeight, true)
+      .filter((card) => !fitsViewport(card, this.terminalWidth, this.terminalHeight));
+    const rows: string[] = [];
+    let shown = 0;
+    const available = cards.length > limit && limit > 1 ? limit - 1 : limit;
+    for (const card of cards) {
+      if (rows.length >= available) break;
+      try {
+        const title = truncateToWidth(card.title(this.theme), Math.min(24, Math.max(8, Math.floor(width * 0.35))), "…");
+        const bodyWidth = width - visibleWidth(title) - 3;
+        const body = bodyWidth > 0 ? card.renderBody(bodyWidth, 1, this.theme)[0] : undefined;
+        rows.push(truncateToWidth(body ? `${title}${this.theme.fg("dim", " · ")}${body}` : title, width, "…"));
+        shown++;
+      } catch { /* A broken card must not hide the remaining workflow state. */ }
+    }
+    const remaining = cards.length - shown;
+    if (remaining > 0 && rows.length) {
+      const more = this.theme.fg("dim", `+${remaining} more workflow${remaining === 1 ? "" : "s"}`);
+      if (rows.length < limit) rows.push(truncateToWidth(more, width, "…"));
+      else {
+        const badge = this.theme.fg("dim", ` · +${remaining}`);
+        rows[rows.length - 1] = truncateToWidth(rows.at(-1)!, Math.max(0, width - visibleWidth(badge)), "…") + truncateToWidth(badge, width, "");
+      }
+    }
+    return rows;
+  }
 
   private rowBudget(): number {
     return Math.max(1, Math.floor(this.terminalHeight * MAX_HEIGHT_RATIO));
@@ -182,8 +232,10 @@ class OverlayStackHost implements Component {
     this.stopListening = () => registry.listeners.delete(listener);
   }
 
-  render(): string[] {
-    return [];
+  render(width: number): string[] {
+    if (this.hidden || this.disposed) return [];
+    this.view.setViewport(this.tui.terminal?.columns ?? width, this.tui.terminal?.rows ?? 24);
+    return this.view.renderCompact(width);
   }
 
   invalidate(): void {

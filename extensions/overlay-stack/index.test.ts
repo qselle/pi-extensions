@@ -69,6 +69,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   const goal = registerOverlayCard({
     id: "test-goal",
     order: 5,
+    minTerminalWidth: 72,
     visible: () => true,
     title: () => " Goal active ",
     renderBody: () => ["Durable objective", "1/2 validation"],
@@ -102,6 +103,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
 
   await pi.emit("session_start", { reason: "startup" }, ctx);
   const tui = {
+    terminal: { columns: 120, rows: 40 },
     showOverlay(component: unknown, overlayOptions: unknown) {
       overlay = component;
       options = overlayOptions;
@@ -109,7 +111,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
     },
     requestRender() { renders += 1; },
   };
-  widget(tui, theme);
+  const host = widget(tui, theme);
 
   expect(options.anchor).toBe("top-right");
   expect(options.nonCapturing).toBe(true);
@@ -120,14 +122,20 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   expect(lines.findIndex((line: string) => line.includes("Goal active")))
     .toBeLessThan(lines.findIndex((line: string) => line.includes("Plan 1/3")));
   expect(lines.every((line: string) => line.length <= options.width)).toBe(true);
+  expect(host.render(120)).toEqual([]);
+  tui.terminal.columns = 60;
+  expect(host.render(60).join("\n")).toContain("Durable objective");
 
   pi.shortcuts.get("ctrl+shift+o").handler(ctx);
   expect(hidden.at(-1)).toBe(true);
+  expect(host.render(60)).toEqual([]);
   pi.shortcuts.get("ctrl+shift+o").handler(ctx);
   expect(hidden.at(-1)).toBe(false);
+  expect(host.render(60).join("\n")).toContain("Durable objective");
 
   pi.events.emit("workflow-overlay:modal", { id: "test", open: true });
   expect(hidden.at(-1)).toBe(true);
+  expect(host.render(60)).toEqual([]);
   pi.events.emit("workflow-overlay:modal", { id: "test", open: false });
   expect(hidden.at(-1)).toBe(false);
 
@@ -143,6 +151,8 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   expect(renders).toBe(rendersAfterHide + 1);
 
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+  host.dispose();
+  expect(host.render(60)).toEqual([]);
   goal.unregister();
   plan.unregister();
 });
@@ -171,4 +181,49 @@ test("omits lower-priority cards that cannot fit the terminal", () => {
   expect(output).not.toContain("Second");
   first.unregister();
   second.unregister();
+});
+
+test("large cards share available rows and reclaim space from short cards", () => {
+  const handles = ["A", "B", "C"].map((id, order) => registerOverlayCard({
+    id: `fair-${id}`, order, visible: () => true, title: () => id,
+    renderBody: (_width, rows) => Array.from({ length: id === "B" ? 1 : rows }, (_, i) => `${id}${i}`),
+  }));
+  try {
+    const view = new OverlayStackView(theme);
+    view.setViewport(100, 30); // 24 rows: 8 frame/spacing rows and 16 body rows.
+    const lines = view.render(40);
+    expect(lines.length).toBe(24);
+    const count = (id: string) => lines.filter((line) => line.includes(` ${id}`)).length;
+    expect(count("A")).toBe(8);
+    expect(count("B")).toBe(1);
+    expect(count("C")).toBe(7);
+  } finally { for (const handle of handles) handle.unregister(); }
+});
+
+test("narrow viewports retain active workflow summaries without duplicating fitting cards", () => {
+  const handles = [
+    registerOverlayCard({ id: "compact-plan", order: 10, minTerminalWidth: 72, minTerminalHeight: 12,
+      visible: () => true, title: () => "Plan 1/3", renderBody: (_width, rows) => { expect(rows).toBe(1); return ["● Active task"]; } }),
+    registerOverlayCard({ id: "compact-jobs", order: 40, minTerminalWidth: 90, minTerminalHeight: 12,
+      visible: () => true, title: () => "Jobs", renderBody: () => ["● Running build"] }),
+  ];
+  try {
+    const view = new OverlayStackView(theme);
+    view.setViewport(60, 28);
+    expect(view.renderCompact(60).join("\n")).toContain("Active task");
+    expect(view.renderCompact(60).join("\n")).toContain("Running build");
+    view.setViewport(80, 28);
+    expect(view.renderCompact(80).join("\n")).not.toContain("Plan");
+    expect(view.renderCompact(80).join("\n")).toContain("Jobs");
+    view.setViewport(100, 28);
+    expect(view.renderCompact(100)).toEqual([]);
+    view.setViewport(60, 10);
+    const short = view.renderCompact(60);
+    expect(short).toHaveLength(1);
+    expect(short[0]).toContain("Active task");
+    expect(short[0]).toContain("+1");
+    for (const width of [0, 1, 2, 8, 12, 40]) expect(view.renderCompact(width).every((line) => line.length <= width)).toBe(true);
+    view.setViewport(60, 8);
+    expect(view.renderCompact(60)).toEqual([]);
+  } finally { for (const handle of handles) handle.unregister(); }
 });
