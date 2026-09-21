@@ -1,11 +1,3 @@
-/**
- * Pure titling logic: prompt signal detection, prompt assembly, and model-output
- * normalization. No pi/tui imports, so it is fully unit-testable.
- *
- * A conversation is titled once from its first meaningful request. Nothing
- * re-titles it automatically, so there is no refresh policy or stored state.
- */
-
 export const MAX_TITLE_WORDS = 4;
 export const MAX_TITLE_CHARS = 48;
 const MAX_ANCHOR_CHARS = 600;
@@ -23,11 +15,7 @@ const FILLER = new Set([
   "do", "does", "did", "how", "what", "why", "when", "should", "let", "lets", "just", "now",
 ]);
 
-/**
- * Normalizes a model-produced title: single line, no quotes or trailing period,
- * word- and char-capped. Returns undefined when the result is empty or generic,
- * so a bad answer leaves the existing name alone.
- */
+/** Bound and normalize model titles; reject empty or generic results. */
 export function normalizeTitle(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   let title = raw
@@ -67,11 +55,7 @@ export function normalizeGeneratedTitle(raw: unknown): string | undefined {
   ));
 }
 
-/**
- * A compact local label used by side chats and to detect whether a main-session
- * prompt carries enough signal to title. Main sessions never display this
- * heuristic text.
- */
+/** Heuristic title for side chats; main sessions use it only to detect a substantive prompt. */
 export function provisionalTitle(prompt: string, maxWords = 4): string | undefined {
   const cleaned = prompt
     .replace(/```[\s\S]*?```/g, " ")
@@ -88,10 +72,6 @@ export function provisionalTitle(prompt: string, maxWords = 4): string | undefin
   return normalizeTitle(chosen.join(" "));
 }
 
-/**
- * The first request that actually says something. Sessions often open with
- * "hello", which is worthless as evidence of the objective.
- */
 export function pickAnchor(texts: readonly string[]): string | undefined {
   for (const text of texts) {
     if (provisionalTitle(text)) return text;
@@ -112,10 +92,7 @@ function clip(text: string, limit: number): string {
   return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }
 
-/**
- * Assembles the bounded prompt from user text only: never assistant output, tool
- * results, diffs, or reasoning.
- */
+/** Include user text only, excluding assistant output, tools, and reasoning. */
 export function buildTitlePrompt(userTexts: readonly string[]): string {
   const anchor = pickAnchor(userTexts);
   const parts: string[] = [];

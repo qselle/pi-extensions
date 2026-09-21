@@ -1,10 +1,3 @@
-/**
- * Pure formatting + layout helpers for the footer.
- *
- * Deliberately free of pi/tui imports so they stay trivially unit-testable and
- * so `widthOf` can be swapped for an ANSI-aware measurer at render time.
- */
-
 export interface ContextUsageLike {
 	tokens: number | null;
 	contextWindow: number;
@@ -66,21 +59,16 @@ export function formatCost(n: number): string {
 	return n < 0.01 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`;
 }
 
-/**
- * Display a model id with its effort. The id is shown as-is (routing prefix and
- * provider kept), e.g. "global.anthropic.claude-opus-4-8".
- */
 export function displayModelId(id: string | undefined): string {
 	return id?.trim() || "no-model";
 }
 
-/** Model plus reasoning effort, Codex-style: "global.anthropic.claude-opus-4-8 max". Effort "off" is omitted. */
+/** Omit the reasoning label when effort is off. */
 export function modelLabel(id: string | undefined, effort: string | undefined): string {
 	const name = displayModelId(id);
 	return effort && effort !== "off" ? `${name} ${effort}` : name;
 }
 
-/** Collapse the home prefix to ~ for readability. */
 export function formatCwd(cwd: string, home: string | undefined): string {
 	if (!cwd) return "";
 	if (home && (cwd === home || cwd.startsWith(`${home}/`) || cwd.startsWith(`${home}\\`))) {
@@ -101,10 +89,6 @@ export interface FooterInput {
 	totals: UsageTotals;
 }
 
-/**
- * Build the left-hand information cells. The workspace is laid out separately
- * so it can remain anchored to the right instead of drifting with token totals.
- */
 export function buildCells(input: FooterInput): Cell[] {
 	const { session, model, badges = [], status, usage, totals } = input;
 	const usedPercent = usage?.percent ?? null;
@@ -132,7 +116,6 @@ export function buildCells(input: FooterInput): Cell[] {
 	return cells.filter((cell) => cell.text.length > 0);
 }
 
-/** Right-hand workspace label. Kept separate so renderers can right-align it. */
 export function workspaceLabel(dir: string, branch?: string | null): string {
 	return branch ? `${dir} · ${branch}` : dir;
 }
@@ -274,24 +257,12 @@ export function compactInlineText(value: unknown, maxCharacters: number): string
 		: `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
 
-/**
- * Flatten one status text onto a single line.
- *
- * Mirrors pi's own footer sanitizer: newlines, tabs, and carriage returns become
- * spaces, runs of spaces collapse, and the result is trimmed. Styling is left
- * intact because extensions colour their own status text.
- */
+/** Flatten whitespace while preserving extension-supplied colors. */
 export function sanitizeStatusText(text: string): string {
 	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
 }
 
-/**
- * The extension status line, built from `ctx.ui.setStatus()` entries.
- *
- * Sorted by key so the order is stable regardless of which extension reported
- * first, matching pi's built-in footer. Returns "" when nothing is reported, in
- * which case the caller omits the line entirely.
- */
+/** Sort by owner key to keep status order stable. */
 export function statusLine(statuses: Iterable<readonly [string, string]> | undefined, separator = " · "): string {
 	if (!statuses) return "";
 	return [...statuses]

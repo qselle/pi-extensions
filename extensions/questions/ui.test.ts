@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { normalizeQuestions } from "./model.ts";
 import { QuestionPrompt, type QuestionPromptResult } from "./ui.ts";
 

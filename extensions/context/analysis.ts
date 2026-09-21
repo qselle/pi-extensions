@@ -1,20 +1,3 @@
-/**
- * Context attribution.
- *
- * Deliberately free of pi imports: the estimators are injected, so this module
- * is pure data in, plain numbers out, and its tests never depend on the
- * process-wide module mocks other suites install.
- *
- * Tokens live in three different places in a request, and conflating them is
- * what makes a single "system prompt" figure misleading:
- *
- *   1. the system prompt string   (base prompt, guidelines, tool snippets,
- *                                  context files, skills, appended text)
- *   2. the tool schemas           (sent as the request's tool array, not as
- *                                  part of the prompt text)
- *   3. the conversation           (the entries that survive compaction)
- */
-
 export interface Bucket {
   id: string;
   label: string;
@@ -51,7 +34,6 @@ export interface ContextReport {
 }
 
 export interface Estimators {
-  /** Tokens for a plain string. */
   text: (value: string) => number;
   /** Tokens for one session entry; pi's own estimator in production. */
   entry: (entry: unknown) => number;
@@ -66,7 +48,6 @@ export interface ToolLike {
 export interface AnalyzeInput {
   /** Entries carrying their projected content after compaction and context edits. */
   entries?: readonly unknown[];
-  /** The current system prompt string. */
   systemPrompt?: string;
   tools?: readonly ToolLike[];
   selectedTools?: readonly string[];
@@ -111,13 +92,7 @@ export function analyzeContext(input: AnalyzeInput, estimate: Estimators): Conte
   };
 }
 
-/**
- * The system prompt string, itemized.
- *
- * The total is the measured prompt rather than the sum of the parts, so the
- * unattributed remainder shows up as pi's base prompt instead of silently
- * disappearing.
- */
+/** Measure the whole prompt; attribute the remainder to Pi's base prompt. */
 function systemSection(input: AnalyzeInput, estimate: Estimators): Section {
   const total = estimate.text(input.systemPrompt ?? "");
   const buckets: Bucket[] = [];
@@ -190,12 +165,7 @@ interface ConversationResult {
   entries: Bucket[];
 }
 
-/**
- * Conversation entries, grouped by kind.
- *
- * Custom context messages are grouped per `customType` rather than lumped
- * together, because that is what makes an extension's own injections visible.
- */
+/** Group extension context by customType to expose each extension's contribution. */
 function conversationSection(entries: readonly unknown[], estimate: Estimators): ConversationResult {
   const grouped = new Map<string, Bucket & { count: number }>();
   const individual: Bucket[] = [];
@@ -376,10 +346,7 @@ function addBucket(buckets: Bucket[], id: string, label: string, tokens: number,
   }
 }
 
-/**
- * Labels come from file paths, skill names, tool names, and customTypes, so they
- * are untrusted terminal input. Flatten them before they are persisted or drawn.
- */
+/** Sanitize untrusted labels before persisting or rendering them. */
 export function sanitizeLabel(value: string): string {
   return value
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
@@ -391,11 +358,7 @@ export function sanitizeLabel(value: string): string {
     .trim();
 }
 
-/**
- * Readable label for a context file: relative to the session when possible, then
- * home-relative, else just the file name. Absolute paths are long enough to push
- * every number off the right edge of the table.
- */
+/** Prefer session-relative paths, then home-relative paths, then filenames. */
 export function shortenPath(path: string, cwd?: string, home?: string): string {
   if (!path) return "context file";
   const normalized = path.replace(/\\/g, "/");

@@ -26,4 +26,3 @@ All images in the latest user message and subsequent tool results remain availab
 - Original session messages are never rewritten. Turning the mode off restores normal context behavior for images still in Pi's active context; it does not undo native compaction.
 - References are valid only on a branch containing the source entry. Retrieval cannot recover deleted session data or access another session's images.
 - The displayed count describes transformed image parts in the last context pass, not provider token savings. Actual image accounting depends on the selected model.
-- Native runtime tests verify activation, reversible context changes, retrieval and unchanged original history. The fixture does not call a vision provider.

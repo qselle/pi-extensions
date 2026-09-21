@@ -1,4 +1,4 @@
-import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   matchesKey,
@@ -45,11 +45,6 @@ export interface WorkspaceInitial {
 
 type ViewMode = "list" | "chat";
 
-/**
- * Interactive side-chat workspace: a navigable list of chats plus a per-chat
- * transcript with an embedded follow-up input. Reads chats live from the store
- * so background answers appear as they land.
- */
 export class SideChatWorkspace implements Component, Focusable {
   private mode: ViewMode = "list";
   private activeId?: string;
@@ -66,7 +61,6 @@ export class SideChatWorkspace implements Component, Focusable {
   constructor(
     private readonly callbacks: WorkspaceCallbacks,
     private readonly theme: Theme,
-    private readonly keybindings: KeybindingsManager,
     private readonly tui: TUI,
     private readonly done: () => void,
     initial?: WorkspaceInitial,
@@ -110,8 +104,6 @@ export class SideChatWorkspace implements Component, Focusable {
     if (this.mode === "chat" && this.activeChat()) this.handleChatInput(data);
     else this.handleListInput(data);
   }
-
-  // ── list view ────────────────────────────────────────────────────────────
 
   private renderList(width: number, height: number): string[] {
     const chats = this.callbacks.list();
@@ -212,8 +204,6 @@ export class SideChatWorkspace implements Component, Focusable {
     const index = chats.findIndex((chat) => chat.id === this.activeId);
     return index >= 0 ? index : 0;
   }
-
-  // ── chat view ────────────────────────────────────────────────────────────
 
   private renderChat(width: number, height: number): string[] {
     const chat = this.activeChat()!;
@@ -353,9 +343,6 @@ export class SideChatWorkspace implements Component, Focusable {
   }
 }
 
-// ── shared rendering helpers ─────────────────────────────────────────────────
-
-/** Overlay-card body: compact, ambient view of side chats during a long job. */
 export function renderSideCard(chats: readonly SideChat[], width: number, maxHeight: number, theme: Theme): string[] {
   if (width <= 0 || maxHeight <= 0) return [];
   const ordered = [...chats].sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
@@ -370,7 +357,6 @@ export function renderSideCard(chats: readonly SideChat[], width: number, maxHei
   return lines.slice(0, maxHeight);
 }
 
-/** Renderer for a promoted side answer surfaced into the main transcript. */
 export function renderPromotedMessage(content: string, theme: Theme): Component {
   const body = content.trim() || "(empty)";
   return {

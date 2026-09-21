@@ -1,15 +1,3 @@
-/**
- * codex-prompt — adds a flat Codex-style `›` input prompt to pi's editor
- * (keeping the editor's `─` rules).
- *
- * Safety model: decorates only the current editor's `render` method — all input
- * handling, keybindings, history, autocomplete, and paste behavior stay on the
- * wrapped editor, so typing can never break. The transform falls back to the
- * original rendering on any error, so the worst case is cosmetic. Reversible
- * via `~/.pi/agent/codex-prompt.json`
- * `{ "enabled": false }` or `/codex-prompt off` + `/reload`.
- */
-
 import { CustomEditor, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { accentColor, parseAccent, readSettings, writeSettings } from "./config.ts";

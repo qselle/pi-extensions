@@ -27,4 +27,4 @@ or account setting is changed by this extension.
 - Changes apply to future requests, not a request already in flight. Independent side-chat/title calls and child processes do not inherit this override.
 - Status means requested, not confirmed. The public response hook does not expose the response body tier for independent verification. Pi's recorded cost estimates remain adapter-dependent; use provider billing for authoritative costs.
 - Turning this override off does not force standard pricing if the API project itself defaults to fast processing.
-- Cross-platform. Unit tests and a native Codex adapter test use no network calls. The adapter test verifies the serialized tier through an injected SSE transport; live paid-provider validation remains outstanding.
+- Cross-platform. Tests use an injected transport; live paid-provider behavior is unverified.

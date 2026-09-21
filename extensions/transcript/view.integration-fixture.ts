@@ -69,7 +69,6 @@ const commands = new Map<string, any>();
 const handlers = new Map<string, Function>();
 const events: any[] = [];
 let panel: TranscriptView;
-let finished!: () => void;
 extension({
   registerCommand: (name: string, value: unknown) => commands.set(name, value),
   registerShortcut() {},
@@ -79,7 +78,7 @@ extension({
 tui.terminal.rows = 30;
 const saved: any[] = [];
 const context = { mode: "tui", sessionManager: { getBranch: () => saved, getEntries: () => saved }, ui: {
-  notify() {}, custom: (factory: Function) => new Promise<void>((resolve) => { finished = resolve; panel = factory(tui, theme, keys, resolve); }),
+  notify() {}, custom: (factory: Function) => new Promise<void>((resolve) => { panel = factory(tui, theme, keys, resolve); }),
 } };
 const opened = commands.get("transcript").handler("", context);
 const message = { role: "assistant", content: [{ type: "text", text: "final result" }] };

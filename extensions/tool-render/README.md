@@ -19,7 +19,7 @@ Replaces Pi's built-in tool cards with compact headlines, bounded output, groupe
 /tool-render on|off   Save the setting; run /reload to apply it
 ```
 
-This extension changes rendering. Normally execution, parameters, and result details come from Pi's built-in definitions. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. The extensions negotiate through Pi's public event bus in either load order; the job ID and status remain visible when output is collapsed. The tools use the active session directory after session changes.
+This extension changes rendering. Normally execution, parameters, and result details come from Pi's built-in definitions. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. Job IDs and status remain visible when output is collapsed. The tools use the active session directory after session changes.
 
 Shell commands use your theme's Bash syntax colors for keywords, built-ins,
 strings, variables and comments. Highlighting applies to both inline commands
@@ -40,21 +40,13 @@ The setting is stored in `$PI_CODING_AGENT_DIR/tool-render.json` as `{"enabled":
 
 ## Dependencies and limitations
 
-- Long or multiline shell commands wrap into a bounded command block; expansion
-  reveals additional lines. Foreground managed commands stream output while
-  waiting. Failed exploration calls remain visible even when successful calls are
-  grouped, and bounded error text wraps so the actionable cause is readable.
+Long or multiline shell commands wrap into a bounded block; expand it for more lines.
 
 - Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs.
 - Shell highlighting uses Pi's Bash grammar; embedded Python, JavaScript and other
   heredoc bodies are not separately parsed. Commands over 16,000 characters and
   highlighting failures use plain text, retaining the normal preview limits.
-- Imports the [`hyperlinks`](../hyperlinks/) helper module; no third-party packages.
+- Uses shared link helpers in [`lib/links.ts`](../../lib/links.ts); no third-party packages.
 - Interactive TUI only; cross-platform.
 - Pi reports a one-time startup warning for each intentionally overridden built-in tool.
 - Compact `read` output omits inline image previews.
-
-The combined package is checked through Pi's real resource loader in both load
-orders. Managed jobs is the sole `bash` owner when present; tool rendering supplies
-its style without registering a second executor. Standalone tool-render registers
-its `bash` override at session start, after executor owners have loaded.

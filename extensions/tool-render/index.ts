@@ -1,25 +1,3 @@
-/**
- * tool-render — restyles pi's built-in tools into Codex-style transcript blocks:
- *
- *   • Ran bun test
- *     └ 12 pass  0 fail
- *
- *   • Edited src/auth.ts (+1 -1)
- *     41 - return a - b
- *     41 + return a + b
- *
- * A subtle `•` status bullet + bold verb + target on line 1, then the output or
- * diff indented under a dim `└` branch. The command/path is shown once (in the
- * headline) — never duplicated.
- *
- * Safety: execution is untouched (each tool spreads the exported
- * createXToolDefinition, preserving execute/params/details); only rendering
- * changes. Every line is width-fit and each component catches its own errors, so
- * a display bug degrades to one plain line rather than crashing the TUI.
- * Reversible via ~/.pi/agent/tool-render.json { "enabled": false } or
- * /tool-render off + /reload. No monkey-patching.
- */
-
 import {
 	createBashToolDefinition,
 	createEditToolDefinition,
@@ -69,14 +47,11 @@ const BULLET = "•";
 const BRANCH = "└";
 const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
 
-/** Hard-fit a (possibly ANSI-colored) line to `width`; never returns wider.
- *  Truncation can cut a hyperlink open (the opener has zero visible width, so it
- *  survives while the terminator is dropped), which would swallow every later
- *  line into the link. closeDanglingLink repairs that. */
+/** Truncation can drop an OSC 8 terminator; close it before rendering the next line. */
 const fit = (s: string, width: number): string =>
 	closeDanglingLink(visibleWidth(s) <= width ? s : truncateToWidth(s, width, "…"));
 
-/** A width-safe component: re-fits on resize and can never throw out of render(). */
+/** Fit each render to the current width and fall back to plain text on errors. */
 class Lines implements Component {
 	constructor(
 		private readonly build: (width: number) => string[],
@@ -94,13 +69,10 @@ class Lines implements Component {
 	invalidate(): void {}
 }
 
-/** Subtle status bullet: red on error, otherwise muted (Codex keeps it quiet). */
 function bullet(theme: Theme, ctx: any): string {
 	return theme.fg(ctx?.isError ? "error" : "muted", BULLET);
 }
 
-/** Indent detail lines under a dim `└` branch (Codex style): first line gets the
- *  branch, the rest align beneath it. Content is fit to the remaining width. */
 function branchBody(theme: Theme, contentLines: string[], width: number): string[] {
 	const inner = Math.max(1, width - 4);
 	const first = `${theme.fg("dim", `  ${BRANCH} `)}`;
@@ -108,7 +80,6 @@ function branchBody(theme: Theme, contentLines: string[], width: number): string
 	return contentLines.map((line, i) => (i === 0 ? first : rest) + fit(line, inner));
 }
 
-/** bash: output only (the command is already in the headline), bounded. */
 function bashBody(result: any, opts: any, theme: Theme, width: number, isError = false): string[] {
 	const { text } = resultText(result);
 	if (text.trim().length === 0) return isError ? branchBody(theme, [theme.fg("error", "failed")], width) : [];
@@ -126,8 +97,6 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 	return branchBody(theme, body, width);
 }
 
-/** Codex-style diff: line-numbered, syntax-highlighted, with a full-width
- *  green/red background wash on added/removed lines. */
 function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, expanded: boolean): string[] {
 	if (rows.length === 0) return [];
 	const gw = gutterWidth(rows);
@@ -161,15 +130,13 @@ function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, ex
 	return lines;
 }
 
-/** `(+A -B)` count label — additions green, removals red, parens dim (Codex). */
 function countLabel(theme: Theme, added: number, removed: number): string {
 	const parts = [theme.fg("toolDiffAdded", `+${added}`)];
 	if (removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${removed}`));
 	return `${theme.fg("dim", "(")}${parts.join(" ")}${theme.fg("dim", ")")}`;
 }
 
-/** `• Edited path (+A -B)` headline for edit/write (rendered result-side so the
- *  count can come from the patch). Omits the count when `count` is undefined. */
+/** Render edit/write headlines with the result so patch counts are available. */
 function diffHeadline(
 	name: ToolName,
 	theme: Theme,
@@ -192,7 +159,6 @@ function diffHeadline(
 	return parts.join(" ");
 }
 
-/** The grouped `• Explored` block (one leader renders it; followers render empty). */
 function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, width: number): string[] {
 	const dot = theme.fg(active ? "accent" : "muted", BULLET);
 	const title = theme.bold(theme.fg("text", active ? "Exploring" : "Explored"));
@@ -208,7 +174,6 @@ function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, wid
 	return lines;
 }
 
-/** Fallback for an ungrouped exploration call (e.g. after reload): headline + summary. */
 function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: any, width: number): string[] {
 	const verb = theme.bold(theme.fg("text", verbFor(name)));
 	const target = targetFor(name, ctx?.args);

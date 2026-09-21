@@ -50,10 +50,7 @@ export default function hyperlinksExtension(
   pi: ExtensionAPI,
   options: HyperlinksExtensionOptions = {},
 ): void {
-  // The hyperlink mode is process-global state shared with the extensions that
-  // render links, so it is applied per session and handed back on shutdown
-  // rather than mutated once at load time. Otherwise a mode configured for one
-  // project would linger after /resume enters a project that configures none.
+  // Restore the shared mode at session boundaries so project settings do not leak.
   let appliedMode: HyperlinkMode | undefined;
   let restoreMode: HyperlinkMode | undefined;
 

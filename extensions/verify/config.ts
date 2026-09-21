@@ -4,7 +4,6 @@ import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 10 * 60_000;
-/** Approximate token budget for injected output, matching Codex's hook default. */
 export const DEFAULT_SPILL_TOKEN_LIMIT = 2_500;
 
 export interface VerifyCheck {

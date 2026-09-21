@@ -14,7 +14,7 @@ Ctrl+Shift+O               Toggle all workflow cards
 
 The extension records a file before its first mutation in a run and compares that baseline with its latest contents. Reverted files disappear from the card. The completed summary is stored as non-context session state and restored per branch after reload, resume, or tree navigation.
 
-Concurrent baseline requests share one read, and stale refresh completions cannot replace newer results. Restoration follows branch entry order even after clock changes. Home-relative tool paths (`~/…`) resolve against the user home directory.
+Home-relative tool paths (`~/…`) resolve against the user home directory.
 
 Hiding the card does not stop tracking. Visibility itself resets on reload.
 

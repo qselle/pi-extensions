@@ -33,5 +33,4 @@ rewinding. If the session changes while the picker is open, choose again.
   continuation messages, tool output, and other branches are excluded.
 - Pi's editor API restores text, not image attachments. Image counts appear in
   the picker and the new session warns you to reattach images before sending.
-- Fork cancellation by another extension is honored. Fresh session context is
-  used after replacement, so stale contexts cannot write into the old runtime.
+- Other extensions can cancel the fork.

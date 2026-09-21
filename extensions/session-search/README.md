@@ -15,8 +15,6 @@ Without a query, the command opens an input prompt. Use `--` before a literal te
 
 Current-project scope compares nearest Git roots, including sessions started in subdirectories while excluding nested repositories. Outside Git, it requires the exact working directory.
 
-Search and actions:
-
 Search covers session metadata, user and assistant text, tool calls and results, shell commands, errors, summaries, visible custom messages, and model changes. It excludes thinking, images, and plain extension-state entries.
 
 Every distinct query term must match. Exact phrases, per-entry matches, titles, user messages, summaries, and recent sessions rank higher.
@@ -44,11 +42,7 @@ OSC 52. If Pi reports failure, the excerpt is placed in the editor.
 | Excerpt | 360 characters |
 | Query | 300 characters / 32 terms |
 
-Starting another search or navigating/shutting down cancels both Pi session
-discovery and the active file scan.
-Delayed picker answers, progress callbacks and clipboard fallbacks cannot modify a
-replacement session. A clipboard operation already started may finish,
-but cannot fall back into another session's editor.
+Starting another search, switching sessions, or shutting down cancels the scan and discards stale selections.
 
 Malformed and oversized entries are skipped and reported. Search is lexical, not semantic. It reads local session files and has no network access. Results enter model context only if you submit an excerpt or resume/fork the session.
 

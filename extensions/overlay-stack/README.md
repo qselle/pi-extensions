@@ -21,12 +21,7 @@ and are not duplicated below. `/overlay hide` hides both presentations.
 
 Cards are ordered by priority and sized to the live terminal. Lower-priority cards are omitted if the stack would exceed 80% of terminal height. Visibility resets on reload or a new session.
 
-Visible cards receive an equal share of extra body rows after their minimum
-heights are reserved. Short cards lend unused space to larger cards, so an early
-card cannot starve all later cards. A card renderer may be called twice in one
-frame with different budgets and should render without side effects.
-
-There is no timer. Redraws occur when card state or terminal dimensions change.
+Cards share available rows; short cards leave space for larger ones. Renderers may be called twice with different budgets and must have no side effects.
 
 ## Dependencies and limitations
 

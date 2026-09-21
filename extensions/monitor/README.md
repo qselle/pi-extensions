@@ -33,9 +33,6 @@ refresh; session navigation closes the panel. In RPC mode it prints the same ful
 details. Viewing a monitor does not run its command or wake the model. Captured
 command output is not retained in the panel; an unobserved exit status stays unknown.
 
-Snapshots open at the overview. Home/End move to the top/bottom; live-follow and
-thinking controls are reserved for the transcript viewer.
-
 ## Dependencies and limitations
 
 - 4 active or paused monitors.
@@ -47,10 +44,7 @@ thinking controls are reserved for the transcript viewer.
 
 The full command is stored in session state. Do not include secrets. Interruptions and provider errors pause the monitor. A wakeup does not grant permission for unrelated external or destructive actions.
 
-Pausing or stopping cancels an in-flight check. If you resume before that process
-settles, the fresh check waits for it; cancelled output cannot update the baseline,
-consume a check from the run limit, or trigger an alert. `monitor_stop` also cancels
-an in-flight command when a monitor ID is supplied.
+Pausing or stopping cancels an in-flight check. Resuming waits for that process to settle; cancelled results do not consume the run limit or trigger an alert.
 
 - Uses Pi's public extension API and host-provided `typebox`.
 - No third-party runtime packages.

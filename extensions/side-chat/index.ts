@@ -25,7 +25,7 @@ import {
   toApiMessages,
 } from "./prompts.ts";
 import { errorMessage, SideChatStore, type SideRunResult } from "./store.ts";
-import { DEFAULT_SIDE_CHAT_TITLE, modelLabel, type SideChat, type SideContextMode, type SideModelRef } from "./types.ts";
+import { modelLabel, type SideChat, type SideContextMode, type SideModelRef } from "./types.ts";
 import { formatSideUsage, normalizeSideUsage } from "./usage.ts";
 import {
   renderPromotedMessage,
@@ -262,9 +262,9 @@ export default function registerSideChat(pi: ExtensionAPI, options: SideChatExte
     pi.events.emit(OVERLAY_MODAL_EVENT, { id: WORKSPACE_MODAL_ID, open: true });
     try {
       await ctx.ui.custom<void>(
-        (tui, theme, keybindings, done) => {
+        (tui, theme, _keybindings, done) => {
           workspaceCloser = done;
-          const workspace = new SideChatWorkspace(callbacks(ctx), theme, keybindings, tui, done, initial);
+          const workspace = new SideChatWorkspace(callbacks(ctx), theme, tui, done, initial);
           workspaceRefresh = () => {
             workspace.refresh();
             tui.requestRender();

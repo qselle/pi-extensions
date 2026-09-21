@@ -1,11 +1,3 @@
-/**
- * Pure per-turn statistics for the separator rule: accumulation, derived values,
- * and width-aware label assembly. No pi/tui imports, so it is unit-testable.
- *
- * Number formatting and the priority-drop layout are reused from the footer, so
- * a token count or cost reads identically in both places.
- */
-
 import { fitCells, formatCost, formatPercent, formatTokens } from "../footer/format.ts";
 
 /** Human duration: 45s, 2m 4s, 1h 20m. */
@@ -117,8 +109,7 @@ export function statCells(seconds: number | undefined, stats: TurnStats | undefi
   if (stats.output > 0) tokens.push(`↑${formatTokens(stats.output)}`);
   if (tokens.length > 0) cells.push({ text: tokens.join(" "), priority: 2 });
 
-  // Cache writes cost ~12x a read, so a write-heavy turn is the expensive one and
-  // is surfaced with the same priority as cost rather than being dropped early.
+  // Keep cache writes visible alongside cost; write-heavy turns can be expensive.
   const hitRate = cacheHitRate(stats);
   if (stats.cacheWrite > 0 && stats.cacheRead > 0) {
     cells.push({ text: `cache ${formatPercent(hitRate)} +${formatTokens(stats.cacheWrite)}`, priority: 3 });

@@ -77,4 +77,4 @@ Goal text, non-secret questions, and Telegram-entered answers leave the local ma
 - Uses Pi's public extension API, built-in `fetch`, filesystem APIs, and the Telegram Bot API.
 - Runtime dependency: `proper-lockfile` for shared poll ownership and stale-lease recovery.
 - Supports macOS, Linux, and Windows with outbound HTTPS access.
-- Automated tests cover native Pi metadata/events, separate processes sharing a fake Telegram server, topic routing, cancellation and recovery on macOS/Linux. Live Telegram delivery and Windows remain unverified.
+- Tests use local fake services on macOS/Linux. Live Telegram delivery and Windows remain unverified.

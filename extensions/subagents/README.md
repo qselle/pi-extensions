@@ -19,7 +19,7 @@ The `subagents` tool supports:
 
 Concurrent `spawn` calls start in parallel. Names are case-insensitively unique for the parent session.
 
-Context and runtime:
+### Context and runtime
 
 `spawn.context` accepts:
 
@@ -31,11 +31,11 @@ Children inherit the working directory, active tools except `subagents`, project
 
 Children share the working tree. Parallel writers must use disjoint files; the parent is responsible for reviewing their changes.
 
-Completion and UI:
+### Results and persistence
 
 Completed children deliver one bounded result to the parent unless a `wait` call already owns it. Running children appear in [`overlay-stack`](../overlay-stack/), and `/subagents` opens a live transcript. Child usage is shown separately in the footer and stored as non-context parent session entries.
 
-Session transitions invalidate pending transcript selections and close an open viewer. A stale selection cannot open a child transcript in the replacement session. [`usage-export`](../usage-export/) includes recorded child token categories and costs without exporting child task text or names.
+[`usage-export`](../usage-export/) includes recorded child usage without exporting task text or names.
 
 Closed-child transcripts retain the latest 500 entries in memory until the parent
 runtime ends. Persisted parents keep child conversation files under
@@ -45,9 +45,7 @@ stopped children and unread final results; it never starts a model call. `send`
 explicitly resumes from a copy of the saved conversation. Older branch checkpoints
 do not include later child turns. `/subagents` can inspect saved transcripts.
 
-Closing, interrupting, or leaving the session also cancels a resume still starting
-up. Cancelling a `send` before dispatch starts no child turn and keeps queued input
-for a later explicit send; `interrupt` intentionally clears that input.
+Closing, interrupting, or leaving the session cancels a pending resume. Cancelling `send` before dispatch preserves queued input; `interrupt` clears it.
 
 Queue-only messages survive a normal reload. `interrupt` discards this inbox and
 clears the RPC input queue before and after aborting. Submitted queued messages
@@ -79,6 +77,6 @@ Tasks and follow-ups are limited to 16,000 characters; wait timeouts to 300 seco
 ## Dependencies and limitations
 
 - Uses Pi's public extension, session, model, tool, TUI, and RPC APIs plus host-provided `typebox`.
-- Requires the configured model provider; `summary` context makes an additional model call through Pi's authenticated model registry, including configured custom providers. Failed or cancelled summaries are rejected. Fork context preserves Pi 0.86 transcript prompt/tool updates.
+- Requires the configured model provider; `summary` context makes an additional model call through Pi's authenticated model registry, including configured custom providers. Failed or cancelled summaries are rejected. Fork context preserves transcript prompt/tool updates.
 - Validated on macOS and Linux. Windows remains unverified. Cleanup uses Unix process groups or Windows `taskkill`.
 - Tool orchestration works in non-interactive modes; the overlay and transcript viewer require the TUI.

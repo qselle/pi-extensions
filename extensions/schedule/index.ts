@@ -275,7 +275,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
 
   pi.registerTool({
     name: "schedule_stop", label: "Stop Schedule", description: "Stop the persistent scheduled task that owns the current turn, or a specified task.", parameters: StopParameters,
-    async execute(_id, params, _signal, _update, ctx) {
+    async execute(_id, params) {
       const result = await mutate(async () => {
         if (closed || !lease) throw new Error("This session does not own the schedule queue.");
         const generation = lifecycle;

@@ -1,31 +1,18 @@
-/**
- * Pure delivery helpers for the notify extension: native-banner command
- * construction (with AppleScript escaping), the terminal-bell sequence,
- * focus-report parsing, preview truncation, and dedup. No pi/tui/node imports,
- * so it is fully unit-testable; the actual spawn/stdout writes live in index.ts.
- */
-
 export interface NotifyCommand {
 	cmd: string;
 	args: string[];
 }
 
-/** Collapse whitespace and truncate to `limit` with an ellipsis. */
 export function preview(text: string, limit = 140): string {
 	const s = (text ?? "").replace(/\s+/g, " ").trim();
 	return s.length > limit ? `${s.slice(0, Math.max(0, limit - 1))}…` : s;
 }
 
-/** Escape a string for an AppleScript double-quoted literal. */
 function escapeAppleScript(s: string): string {
 	return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-/**
- * Build the argv for a native OS banner, or undefined on unsupported platforms.
- * Args are passed to spawn() without a shell, so only the AppleScript string
- * literal needs escaping (macOS); notify-send takes the strings verbatim.
- */
+/** spawn uses an argument vector; only the AppleScript literal needs escaping. */
 export function notifyCommand(platform: NodeJS.Platform, title: string, body: string): NotifyCommand | undefined {
 	const t = preview(title, 120);
 	const b = preview(body, 200);
@@ -50,13 +37,7 @@ function oscField(s: string): string {
 	return (s ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
 }
 
-/**
- * A terminal-owned desktop notification via an OSC escape, or undefined if the
- * terminal isn't known to support one. Ghostty/WezTerm use OSC 777 (title +
- * body); iTerm2 uses OSC 9 (body only). Because the terminal posts it, clicking
- * the notification focuses that terminal window (unlike osascript, which posts
- * from Script Editor). Wrapped in tmux passthrough when inside tmux.
- */
+/** Use OSC 777 for Ghostty/WezTerm and OSC 9 for iTerm2, with tmux passthrough. */
 export function notificationEscape(
 	env: NodeJS.ProcessEnv,
 	title: string,
@@ -100,7 +81,6 @@ export function parseFocusReports(
 	return { data: rest, focused: next, changed };
 }
 
-/** Notify only when the terminal isn't known to be focused. */
 export function shouldEmit(focusAware: boolean, focused: boolean): boolean {
 	return !focusAware || !focused;
 }

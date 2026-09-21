@@ -64,7 +64,6 @@
     "!extensions/**/*benchmark.ts",
     "themes/*.json",
     "scripts/prepare-pty.mjs",
-    "docs/*.md",
     "README.md",
     "LICENSE"
   ]

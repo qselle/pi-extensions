@@ -45,7 +45,7 @@ try {
   start.renderResult(running, options, theme, renderContext);
   start.renderResult(running, options, theme, renderContext);
   const original = tools.get("job_output").renderResult(running, options, theme).render(100).join("\n");
-  const write = await tools.get("job_write").execute("write", { id: running.details.id, text: "hello\n", eof: true });
+  await tools.get("job_write").execute("write", { id: running.details.id, text: "hello\n", eof: true });
   const waited = await tools.get("job_wait").execute("wait", { id: running.details.id, cursor: 0, wait_ms: 3000 });
   assert.equal(waited.details.status, "completed");
   assert(waited.content[0].text.includes("hello"));

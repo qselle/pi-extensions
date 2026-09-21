@@ -1,16 +1,3 @@
-/**
- * context — see where the context window actually goes.
- *
- * `/context` reports three regions separately, because they are billed from
- * different places in a request: the system prompt string, the tool schemas, and
- * the conversation that survived compaction. Extension injections are itemized
- * per `customType`, so `goal`, `plan`, and `memory` show their own footprint.
- *
- * Token figures use the same chars/4 heuristic as pi's own estimator, so they
- * agree with the compaction decisions that actually affect a session. The
- * provider's own count is shown alongside when pi has one.
- */
-
 import { estimateTokens, getLastAssistantUsage, type ExtensionAPI, type SessionEntry, type SessionProjection } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ProviderUsage, type ToolLike } from "./analysis.ts";
@@ -25,7 +12,6 @@ function estimateText(value: string): number {
   return Math.ceil(value.length / 4);
 }
 
-/** Production estimators: pi's own for messages, its heuristic for loose text. */
 export const piEstimators: Estimators = {
   text: estimateText,
   entry: (entry: unknown) => {
@@ -62,7 +48,6 @@ export const piEstimators: Estimators = {
   },
 };
 
-/** Reads the provider's usage components for the last response. */
 export type LastUsageReader = (entries: readonly unknown[]) => Partial<ProviderUsage> | undefined;
 
 const readPiLastUsage: LastUsageReader = (entries) => {
@@ -89,7 +74,6 @@ interface SystemPromptOptionsLike {
   customPrompt?: string;
 }
 
-/** The slice of the command context this extension reads, kept narrow for tests. */
 export interface ContextCommandContext {
   mode?: string;
   cwd?: string;
@@ -112,12 +96,7 @@ export interface ContextHost {
   getActiveTools?: () => readonly string[];
 }
 
-/**
- * Builds the report from what pi currently has loaded.
- *
- * Only *active* tools are measured: an inactive registered tool costs nothing
- * because its schema is never sent.
- */
+/** Only active tools contribute schemas to model context. */
 export function collectReport(
   host: ContextHost,
   ctx: ContextCommandContext,
@@ -182,7 +161,6 @@ export function collectReport(
   }, estimate);
 }
 
-/** Renders at the width pi gives it, so the table adapts to the terminal. */
 class ReportCard {
   constructor(
     private readonly report: ContextReport,

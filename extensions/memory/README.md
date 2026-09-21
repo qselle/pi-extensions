@@ -18,8 +18,6 @@ Memory is disabled by default.
 
 Run `/memory enable`, then `/reload`, to expose the model tool. Disabling blocks access immediately but does not delete stored records.
 
-Agent tool:
-
 The `memory` tool supports `status`, `search`, `read`, `remember`, and `forget`. Model-initiated writes and deletes require confirmation by default. Slash commands count as direct user intent and work without a dialog.
 
 Search reads the current project and global scope. It returns IDs and bounded snippets; `read` fetches one record. Project records from other repositories are never included.
@@ -56,8 +54,6 @@ Files are versioned JSON and may be inspected or backed up. Writes use atomic re
 - Common credential and private-key patterns are rejected, but detection is not complete. Review text before saving it.
 - Global records are intentionally visible from every project.
 - `forget` removes a record from the current file, not from backups or filesystem snapshots.
-
-There is no network access, telemetry, embedding service, or automatic session analysis.
 
 - Uses Pi's public extension API, Node.js standard-library modules, and host-provided `typebox`.
 - No third-party runtime packages or external services.

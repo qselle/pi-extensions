@@ -27,9 +27,7 @@ Agent tools:
 
 Only one check may be in progress. Completion is rejected while a non-cancelled check is unfinished. The same blocker must be reported in three consecutive goal runs before the goal stops as blocked.
 
-Cancelled checks are displayed separately and excluded from the completion fraction. They are not evidence of success: the goal prompt requires cancellation to reflect a user-approved scope change, and requires verification of the full original objective before completion. These semantic requirements rely on the agent's audit; the extension cannot prove real-world task success from checklist status alone.
-
-Actions from a panel, editor, or confirmation are discarded if the goal changes or the session switches while the dialog is open. A dialog completing after shutdown cannot restart automatic continuation.
+Cancelled checks are excluded from completion totals. Cancelling a check requires a user-approved scope change; the agent must still verify the objective before completing the goal.
 
 Continuation waits for Pi to be idle with no queued user input. Interruptions pause the goal; provider failures and budget limits stop automatic work. Goal context is expanded only for the active turn, while session history stores small state markers. State follows session branches.
 

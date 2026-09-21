@@ -9,17 +9,12 @@ import {
   type SideUsage,
 } from "./types.ts";
 
-/** Result of a single background generation. */
 export interface SideRunResult {
   text: string;
   usage?: SideUsage;
 }
 
-/**
- * Runs one model turn for a chat. Reads the chat's current messages/pending
- * question, honors the abort signal, and returns the answer plus usage.
- * Throwing (or an aborted signal) marks the turn failed.
- */
+/** A thrown error or aborted signal marks the turn failed. */
 export type SideRunModel = (chat: SideChat, signal: AbortSignal, onText: (text: string) => void) => Promise<SideRunResult>;
 
 export interface SideChatHooks {
@@ -54,11 +49,7 @@ export interface CreateChatOptions {
 
 const DEFAULT_MAX_TURNS = 60;
 
-/**
- * In-memory registry of side chats. Generation runs in the background with an
- * independent AbortController per chat, so a chat never touches the main agent
- * turn and multiple chats can generate concurrently.
- */
+/** Each chat has its own AbortController and can generate independently. */
 export class SideChatStore {
   private readonly chats = new Map<string, SideChat>();
   private readonly order: string[] = [];
@@ -77,7 +68,6 @@ export class SideChatStore {
     this.maxTurns = Math.max(2, options.maxTurns ?? DEFAULT_MAX_TURNS);
   }
 
-  /** All chats in stable creation order. */
   list(): SideChat[] {
     return this.order.map((id) => this.chats.get(id)).filter((chat): chat is SideChat => Boolean(chat));
   }
@@ -125,7 +115,6 @@ export class SideChatStore {
     return chat;
   }
 
-  /** Queue a follow-up question and start a background generation. */
   send(id: string, text: string): boolean {
     const chat = this.chats.get(id);
     if (!chat || chat.status === "generating") return false;
@@ -144,7 +133,6 @@ export class SideChatStore {
     return true;
   }
 
-  /** Retry a failed generation using the still-pending question. */
   retry(id: string): boolean {
     const chat = this.chats.get(id);
     if (!chat || chat.status === "generating" || !chat.pending) return false;

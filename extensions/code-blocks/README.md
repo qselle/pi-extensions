@@ -29,5 +29,4 @@ through Pi's extension configuration to return to the host presentation.
   and stripped of terminal controls. Code text itself is never reformatted.
 - Retains Pi's native fence borders, wrapping and theme colors. The public hook
   does not provide a custom code-block renderer or grammar registration; adding
-  an unsupported grammar such as Zig needs a host API extension. This extension
-  does not pretend another language's grammar is Zig highlighting.
+  an unsupported grammar such as Zig needs a host API extension.

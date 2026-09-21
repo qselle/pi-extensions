@@ -18,7 +18,7 @@ Replaces the editor's two-space gutter with a flat `›` prompt and gives the pr
 /codex-prompt accent #83a598   Use a fixed hex color; #abc also works
 ```
 
-Run `/reload` after changing an accent. Only rendering is wrapped. Keybindings, history, autocomplete, paste, multiline input, and other editor decorators remain unchanged. Rendering falls back to Pi's editor if the transform fails. Theme changes are reflected at render time, and Pi's underlying border color is preserved.
+Run `/reload` after changing an accent. The extension wraps rendering and falls back to Pi's editor if the transform fails. Input handling and other editor decorators are preserved.
 
 ## Configuration
 

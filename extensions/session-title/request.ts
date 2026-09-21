@@ -21,7 +21,6 @@ export interface TitleResult {
   error?: string;
 }
 
-/** The slice of ExtensionContext this module needs, kept narrow for testing. */
 export interface TitleRequestContext {
   model?: { provider: string; id: string; reasoning?: boolean };
   modelRegistry: {
@@ -37,15 +36,10 @@ export interface RequestTitleOptions {
   /** "provider/model" override from config. */
   override?: string;
   signal?: AbortSignal;
-  /** Injectable for tests. */
   completion?: TitleCompletion;
 }
 
-/**
- * Runs one bounded titling request on a cheap model. Never throws: titling is
- * cosmetic, so every failure is returned as an error string for `/title status`
- * instead of disturbing the session.
- */
+/** Return failures for /title status without interrupting the main turn. */
 export async function requestTitle(options: RequestTitleOptions): Promise<TitleResult> {
   const { ctx, prompt } = options;
   const run: TitleCompletion = options.completion ?? ((...args) => ctx.modelRegistry.streamSimple(...args).result());

@@ -1,12 +1,3 @@
-/**
- * session-title — names a session once from its first meaningful request.
- *
- * Titling starts beside the main request, uses the active model by default, and
- * never blocks the agent turn. Existing and manually assigned names always win.
- * The bounded request has its own routing id, so it never enters the main
- * session's context or disturbs its prompt cache.
- */
-
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";

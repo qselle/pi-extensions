@@ -50,13 +50,3 @@ and remain readable.
 - A crash or session change before settlement does not fabricate a completed
   summary. Interrupted responses are counted when the run subsequently settles.
 - Cross-platform; expanded rows clip to the viewport width.
-
-A native Pi runtime test uses a synthetic provider for a two-response tool run,
-then verifies disk persistence, reload, command dispatch without another model
-call, exclusion from model context and narrow-width rendering. No paid provider
-requests are made by this test.
-
-The runtime test also exercises Pi's provider-request callback and streamed text
-and tool-call events. It verifies that both responses receive timing samples,
-tool execution stays outside the streaming windows, and measurements survive
-disk reload. An active `/turn-stats` report is labeled “Turn in progress”.

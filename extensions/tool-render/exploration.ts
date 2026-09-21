@@ -1,27 +1,10 @@
-/**
- * Groups consecutive exploration tool calls (read/grep/find/ls) into one
- * Codex-style "Explored" block. A global registry tracks a run of calls: the
- * first call is the leader (renders the whole block) and the rest render empty
- * (a self-shell tool that renders nothing is dropped by pi, spacer included). A
- * run closes on any non-exploration tool or a new assistant message.
- *
- * Display detail (pure, so it stays unit-testable):
- *   - reads show a line range (`foo.ts · lines 10-40`) when the call is chunked,
- *     otherwise a line count (`foo.ts · 42 lines`) once the result lands;
- *   - grep/find/ls show a result count (`"verify(" · 7 matches`);
- *   - consecutive reads of the same file coalesce into one row, merging ranges
- *     (`foo.ts · lines 1-40, 101-200`).
- *
- * Live only: on reload the runtime registry is empty, so each call falls back to
- * a standalone block (grouping isn't reconstructed from the session).
- */
+/** The first call renders the group; followers render empty. Grouping is live-only. */
 import { shortPath } from "./render.ts";
 
 export const EXPLORATION_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
 
 export type Status = "pending" | "done" | "error";
 
-/** One derived detail from a call's args (no result yet). */
 export interface Activity {
 	verb: string;
 	detail: string;
@@ -29,7 +12,6 @@ export interface Activity {
 	range?: string; // chunked reads: "10-40"
 }
 
-/** A fully-formatted row ready to render (verb + detail + optional dim suffix). */
 export interface DisplayRow {
 	verb: string;
 	detail: string;
@@ -56,7 +38,6 @@ const callToGroup = new Map<string, string>();
 let currentId: string | undefined;
 let seq = 0;
 
-/** Range label for a chunked read, e.g. "10-40" (offset+limit), or undefined. */
 export function readRange(args: any): string | undefined {
 	const offset = Number.isInteger(args?.offset) ? args.offset : undefined;
 	const limit = Number.isInteger(args?.limit) ? args.limit : undefined;
@@ -66,7 +47,6 @@ export function readRange(args: any): string | undefined {
 	return undefined;
 }
 
-/** Verb + detail for an exploration tool call, or undefined if it isn't one. */
 export function activityFor(name: string, args: any): Activity | undefined {
 	const a = args ?? {};
 	if (name === "read" && typeof a.path === "string") {
@@ -79,7 +59,6 @@ export function activityFor(name: string, args: any): Activity | undefined {
 	return undefined;
 }
 
-/** Register a starting exploration call, joining the current run or opening one. */
 export function noteStart(id: string, name: string, args: any): void {
 	if (callToGroup.has(id)) return;
 	const act = activityFor(name, args);
@@ -95,7 +74,6 @@ export function noteStart(id: string, name: string, args: any): void {
 	g.rerender?.();
 }
 
-/** Mark a call finished, recording its result summary (e.g. "42 lines"). */
 export function noteEnd(id: string, isError: boolean, count?: string): void {
 	const g = groupOf(id);
 	const c = g?.calls.find((x) => x.id === id);
@@ -106,7 +84,6 @@ export function noteEnd(id: string, isError: boolean, count?: string): void {
 	}
 }
 
-/** Close the current run so later exploration calls start a fresh block. */
 export function closeGroup(): void {
 	if (!currentId) return;
 	const g = groups.get(currentId);
@@ -139,7 +116,6 @@ function mergeStatus(calls: Call[]): Status {
 	return "done";
 }
 
-/** Suffix for a non-read call: its result count, if known. */
 function readsSuffix(reads: Call[]): string | undefined {
 	const failure = reads.find((read) => read.status === "error");
 	if (failure) return failure.count ?? "failed";
@@ -181,7 +157,6 @@ export function groupState(id: string | undefined): { rows: DisplayRow[]; active
 	return { rows: toDisplayRows(calls), active: g.accepting || calls.some((c) => c.status === "pending") };
 }
 
-/** Clear all state (call on a new session). */
 export function resetExploration(): void {
 	groups.clear();
 	callToGroup.clear();

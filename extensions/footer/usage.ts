@@ -1,11 +1,3 @@
-/**
- * Branch usage accounting for the footer.
- *
- * Deliberately free of pi-tui imports so it stays trivially unit-testable, and
- * separate from `format.ts` because this part reads session entries rather than
- * formatting strings.
- */
-
 import type { UsageTotals } from "./format.ts";
 
 interface UsageLike {
@@ -14,13 +6,7 @@ interface UsageLike {
   cost?: { total?: number };
 }
 
-/**
- * Usage attributable to a single session entry.
- *
- * Mirrors pi's built-in footer, which counts assistant usage, tool-result usage
- * (nested model calls made by tools such as subagents or side-chat), and the
- * usage recorded on branch summaries and compactions.
- */
+/** Include assistant, nested tool, summary, and compaction usage. */
 export function entryUsage(entry: unknown): UsageLike | undefined {
   if (!entry || typeof entry !== "object") return undefined;
   const candidate = entry as { type?: string; message?: { role?: string; usage?: UsageLike }; usage?: UsageLike };
@@ -32,7 +18,6 @@ export function entryUsage(entry: unknown): UsageLike | undefined {
   return undefined;
 }
 
-/** Cumulative tokens and cost for the given entries. */
 export function sumUsage(entries: Iterable<unknown>): UsageTotals {
   let input = 0;
   let output = 0;
@@ -47,14 +32,7 @@ export function sumUsage(entries: Iterable<unknown>): UsageTotals {
   return { input, output, cost };
 }
 
-/**
- * Totals cache for the render path.
- *
- * The footer re-renders on every keystroke, so scanning the branch per frame
- * would be O(entries) per frame. Totals only change when new usage is recorded
- * or the branch is rewritten, so the extension invalidates on those events and
- * the scan happens at most once per change.
- */
+/** Cache branch totals between usage events to avoid a full scan on every keystroke. */
 export class UsageTotalsCache {
   private totals?: UsageTotals;
   private revision?: string | null;
