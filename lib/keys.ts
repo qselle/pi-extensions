@@ -1,11 +1,3 @@
-/**
- * Display labels for pi's configurable keybindings.
- *
- * Footer hints have to name the keys the user actually has bound, so they are
- * derived from the `KeybindingsManager` pi injects into the component instead of
- * being hardcoded. Kept local to the extension so it stays self-contained.
- */
-
 import type { KeybindingsManager } from "@earendil-works/pi-tui";
 
 type KeybindingId = Parameters<KeybindingsManager["getKeys"]>[0];
@@ -21,11 +13,7 @@ const KEY_LABELS: Record<string, string> = {
   pageDown: "PgDn",
 };
 
-/**
- * Label for the first key bound to `id`, or `fallback` when the binding is
- * unknown. The first key is used because a hint has to stay short; pi's own
- * `keyText()` lists every key.
- */
+/** Use the first binding to keep hints short; fall back when unbound. */
 export function keyLabel(keybindings: KeybindingsManager, id: KeybindingId, fallback: string): string {
   const keys = typeof keybindings.getKeys === "function" ? keybindings.getKeys(id) : [];
   const [key] = keys;

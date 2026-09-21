@@ -28,9 +28,6 @@ not a summary of the entire user turn.
 
 Missing fields are omitted. Narrow terminals drop `ttft`, throughput, cache rate, tokens, and cost in that order before dropping duration. Stored session entries preserve the same display after reload.
 
-The rule reserves a right margin when at least two columns are available. A
-one-column view shows a single dash; a zero-column view renders no rows.
-
 The extension is event-driven and has no command, configuration file, or timer.
 
 ## Dependencies and limitations

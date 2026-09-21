@@ -49,15 +49,12 @@ Plan state follows session branches and is injected only while active. Plans des
 
 ## Dependencies and limitations
 
-- Plan updates show a short receipt and the active step. Expand the result with
-  your configured tool-expansion key or open `/plan` for the full hierarchy.
-  The full plan remains in model-visible tool output and the persistent card.
+Tool results show a short receipt and the active step. Expand the result or open `/plan` for the full tree.
 
 - Up to 3 levels, 10 siblings per group and 40 total groups/steps. Names must be
   unique within a group; repeated names in different groups are allowed.
-- Flat version-1 session entries remain readable. Nested plans use version 2 so
-  older extension versions cannot silently flatten their progress. Fold state is
-  local to the open panel; the plan tree itself persists with session branches.
+- Older flat plans remain readable. Fold state is local to the panel; the plan
+  tree persists with session branches.
 - Uses Pi's public extension, session, context, and TUI APIs.
 - Requires [`overlay-stack`](../overlay-stack/).
 - Uses host-provided `typebox` for the tool schema.

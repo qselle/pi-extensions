@@ -1,16 +1,3 @@
-/**
- * turn-separator — a dim rule between assistant messages that follow tool work,
- * labeled "Worked for <duration>" in the Codex style, followed by that block's
- * token, cache, throughput, and cost stats.
- *
- * When a new assistant message starts and at least one tool ran since the
- * previous assistant message, a custom (non-LLM) entry is appended and rendered
- * as a dim, width-aware rule. Stats come from real provider usage on each
- * finalized response, never estimates. Purely event-driven (no timer), so an idle
- * session does no rendering work. Uses public APIs only: appendEntry +
- * registerEntryRenderer.
- */
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { separatorText } from "./format.ts";
 import { addUsage, emptyStats, hasStats, tokensPerSecond, type TurnStats } from "./stats.ts";

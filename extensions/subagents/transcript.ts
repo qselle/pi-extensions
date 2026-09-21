@@ -8,7 +8,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { AgentTranscript } from "./coordinator.ts";
-import { keyLabel } from "./keys.ts";
+import { keyLabel } from "../../lib/keys.ts";
 
 // pi-tui's `Key` value export isn't reliably importable across runtimes; its
 // values are plain key-id strings that matchesKey accepts.

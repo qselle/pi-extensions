@@ -19,7 +19,7 @@ The panel uses arrow keys or `j`/`k`, Enter, and Escape. The cat decorates the c
 
 Animation pauses while hidden or when the terminal is too small. Use static mode if animation disrupts terminal scrollback.
 
-The cat normally sits on the editor's top border. If status text or another decoration occupies that space, it uses a separate row above the border so the text stays readable. Repeated session starts reuse the installed decorator, and replaced editors stop their animation immediately.
+The cat normally sits on the editor's top border. If status text or another decoration occupies that space, it uses a separate row above the border so the text stays readable.
 
 ## Dependencies and limitations
 

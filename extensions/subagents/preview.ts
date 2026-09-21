@@ -17,10 +17,6 @@ export interface CollapsedResult {
   hidden: number;
 }
 
-/**
- * A wait result is ambiguous without knowing what is still outstanding, so the
- * headline states the outcome and how many children remain running.
- */
 export function headlineSuffix(details: ResultHeadline): string {
   const parts: string[] = [];
   if (details.interrupted) parts.push("interrupted");
@@ -33,10 +29,7 @@ export function headlineSuffix(details: ResultHeadline): string {
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
 
-/**
- * Collapsed results keep the tail of the output, where a child agent states its
- * conclusion, instead of the first sentence of its preamble.
- */
+/** Keep the output tail, where the child's conclusion usually appears. */
 export function collapsedResult(output: string, rows = COLLAPSED_RESULT_ROWS): CollapsedResult {
   const lines = output
     .replace(/\r\n?/g, "\n")

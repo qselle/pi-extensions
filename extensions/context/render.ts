@@ -1,16 +1,3 @@
-/**
- * Report rendering for `/context`.
- *
- * Layout goals, in order:
- *   1. one authoritative "Used A / B (C%)" line, matching what drives compaction
- *   2. absolute comma-grouped numbers so rows are directly comparable
- *   3. a share column, so the row that is eating the window is obvious
- *   4. heaviest regions first
- *
- * Rows use Pi display-column measurement and slicing, then receive colors, so
- * wide glyphs and combining characters do not shift numeric columns.
- */
-
 import { visibleWidth, truncateToWidth, sliceByColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { Bucket, ContextReport, Section } from "./analysis.ts";
 
@@ -52,12 +39,7 @@ function sharePercent(tokens: number, total: number): string {
   return `${Math.round((tokens / total) * 100)}%`;
 }
 
-/**
- * The authoritative usage line.
- *
- * Prefers Pi's own figure, because that is what compaction reacts to; the
- * estimate is reconciled underneath the table instead of competing up here.
- */
+/** Prefer Pi's usage count, which drives compaction; use the estimate when unavailable. */
 export function summaryLine(report: ContextReport): string {
   const measured = report.reported !== undefined;
   const used = measured ? report.reported! : report.estimated;
@@ -103,8 +85,6 @@ function buildRows(report: ContextReport, expanded: boolean): Row[] {
   const rows: Row[] = [];
   const basis = report.estimated;
 
-  // Heaviest region first: in a long session the conversation dwarfs the rest,
-  // and reading top-down should answer "what is eating the window?" immediately.
   const sections: Array<[string, Section]> = [
     ["conversation", report.conversation],
     ["tool schemas", report.tools],
@@ -133,12 +113,7 @@ function buildRows(report: ContextReport, expanded: boolean): Row[] {
   return rows;
 }
 
-/**
- * Explains pi's figure with the provider's own components.
- *
- * A large gap against the estimate is usually cache accounting, and naming the
- * parts is more useful than asserting which side is right.
- */
+/** Show provider usage components alongside the independent estimate. */
 function providerDetail(report: ContextReport): string {
   const provider = report.provider;
   if (!provider) return "includes provider cache accounting";
@@ -204,7 +179,6 @@ function colorRow(row: Row, plainLine: string, labelWidth: number, theme: Report
     .join("");
 }
 
-/** Label, value, and share colours per row kind. */
 function rowColors(row: Row): [string, string, string] {
   if (row.kind === "section") return ["text", "text", "muted"];
   if (row.kind === "footnote" || row.kind === "note") return ["dim", "dim", "dim"];

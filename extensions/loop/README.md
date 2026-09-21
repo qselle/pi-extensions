@@ -34,11 +34,7 @@ reasons. Active and paused loops appear before finished loops. Use `/` to search
 and `q` or Escape to close; reopen to refresh. Other persistent modes receive a
 plain-text report. `/loop status` remains the short listing.
 
-For default-prompt loops, the view resolves the currently eligible prompt file
-using the same project-trust rules as a wakeup. The file is re-read at each wake;
-the view does not replace the prompt of an iteration already running. Finished
-loops show the default prompt recorded at creation. Viewing never creates or
-reschedules a loop, and navigation or shutdown closes the panel.
+Default prompt files are re-read at each wake; viewing a loop does not change a running iteration or reschedule it.
 
 Limits:
 

@@ -37,13 +37,7 @@ export class HistoryPicker implements Component, Focusable {
     this.refresh();
   }
 
-  /**
-   * Result rows that fit the current terminal.
-   *
-   * Read per use rather than cached at construction: the terminal can be
-   * resized while the picker is open, and pi can swap between its regular and
-   * fullscreen renderers at runtime.
-   */
+  /** Read on each use: terminal dimensions and Pi's renderer can change while open. */
   private visibleCount(): number {
     const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
     return Math.max(3, Math.min(MAX_VISIBLE_RESULTS, Math.floor(rows * 0.7) - 6));

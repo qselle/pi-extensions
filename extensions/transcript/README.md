@@ -29,13 +29,7 @@ color. Images appear as placeholders, never base64 payloads. Hidden extension
 context and internal state entries are excluded. The viewer does not modify
 history, submit prompts, or write transcript exports to disk.
 
-The panel has a visible frame and padded rows spanning the terminal width, so
-fragments of the underlying conversation cannot appear beside its body. The same
-frame is used by schedule, monitor and doctor reports.
-
-Keyboard hints adapt to the available width. Close, search and basic scrolling
-take priority; wider panels also show match navigation, paging and mode controls.
-All bindings remain available when their hint does not fit.
+Keyboard hints shrink with the panel; hidden bindings remain available.
 
 ## Dependencies and limitations
 

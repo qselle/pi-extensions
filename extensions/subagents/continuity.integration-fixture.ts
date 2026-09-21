@@ -7,7 +7,7 @@ import { getModels } from "@earendil-works/pi-ai/compat";
 import register from "./index.ts";
 import { createAgentSessionServices, createAgentSessionFromServices, SettingsManager, SessionManager } from "@earendil-works/pi-coding-agent";
 import { createChildContext, checkpointFile } from "./context.ts";
-import { SubagentCoordinator, type SavedAgent } from "./coordinator.ts";
+import { SubagentCoordinator } from "./coordinator.ts";
 import { restoreAgents, SUBAGENT_STATE } from "./persistence.ts";
 import type { AgentClient, RpcEvent } from "./rpc.ts";
 

@@ -1,21 +1,9 @@
-/**
- * Pure platform logic for prevent-sleep: the long-running command that holds an
- * idle-sleep assertion, per platform. No imports, so it is unit-testable.
- */
-
 export interface InhibitCommand {
 	cmd: string;
 	args: string[];
 }
 
-/**
- * The "keep awake" command for this platform, or undefined when unsupported.
- *
- * - macOS: `caffeinate -i -w <pid>` — prevents idle *system* sleep (not the
- *   display) and ties the assertion to the pi process, so it's released if pi
- *   exits unexpectedly.
- * - Other platforms, including Linux VMs: no operation.
- */
+/** caffeinate prevents idle system sleep and releases the assertion when Pi exits. */
 export function inhibitCommand(platform: NodeJS.Platform, pid: number): InhibitCommand | undefined {
 	if (platform === "darwin") {
 		return { cmd: "/usr/bin/caffeinate", args: ["-i", "-w", String(pid)] };

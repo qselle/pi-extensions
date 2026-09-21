@@ -2,7 +2,7 @@ import { isAbsolute, resolve, win32 } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 
-/** OSC 8 opener/closer, using the ST terminator (`ESC \`) which is the safest form. */
+/** OSC 8 sequences with the ST terminator (ESC \). */
 const OSC8_OPEN = "\x1b]8;;";
 const OSC8_ST = "\x1b\\";
 export const OSC8_CLOSE = `${OSC8_OPEN}${OSC8_ST}`;
@@ -92,13 +92,7 @@ export function hyperlinkUrl(display: string, url: string): string {
   return link(display, url);
 }
 
-/**
- * Wraps `display` in an OSC 8 hyperlink to `path` without changing its visible
- * width. Returns `display` unchanged when hyperlinks are unavailable.
- *
- * Accepts an absolute URI too, which is passed through instead of being resolved
- * against `cwd`.
- */
+/** Accepts paths or absolute URIs; returns plain text when links are disabled. */
 export function hyperlinkPath(display: string, path: string, cwd?: string): string {
   if (!display || !hyperlinksEnabled()) return display;
   if (hasUriScheme(path)) return link(display, path);
@@ -138,14 +132,7 @@ export function hasDanglingLink(text: string): boolean {
   return opened > closed;
 }
 
-/**
- * Repairs a line that was truncated mid-hyperlink.
- *
- * Width-aware truncation keeps the opening OSC 8 sequence (it has zero visible
- * width) but drops the closing one, which makes every following line part of the
- * link. This appends the missing terminator, and strips a trailing partial
- * escape if truncation landed inside one.
- */
+/** Close links cut by width truncation so they cannot extend into later lines. */
 export function closeDanglingLink(text: string): string {
   if (!text.includes(OSC8_OPEN)) return text;
   const cleaned = stripPartialEscape(text);

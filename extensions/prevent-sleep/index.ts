@@ -1,15 +1,3 @@
-/**
- * prevent-sleep — keeps the computer awake while the agent is actively working,
- * so long runs (and self-driving goals) don't stall when your Mac would idle to
- * sleep. The wake lock is held from `agent_start` until the run `agent_settled`
- * (covering thinking, tool calls, retries, and compaction recovery) and released
- * when idle or on shutdown — so a genuinely blocked/paused goal still lets the
- * machine sleep.
- *
- * macOS uses `caffeinate -i -w <pid>`; all other platforms are a no-op.
- * Fully event-driven (no timers). Toggle with
- * `/prevent-sleep on|off`.
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { basename } from "node:path";

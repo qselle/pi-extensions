@@ -1,18 +1,3 @@
-/**
- * notify — native desktop notifications for agent activity, so you can
- * context-switch away and get pinged when there's something to look at.
- *
- * Fires a native OS banner (macOS `osascript`, Linux `notify-send`) plus a
- * terminal bell when:
- *   - the agent finishes a turn (with a short preview of the reply),
- *   - a tool the turn depended on failed (folded into the turn-complete ping),
- *   - the agent needs input (a `questionnaire` tool call).
- *
- * Only fires when the terminal tab is **unfocused** (tracked via focus-reporting
- * escape sequences on Ghostty/iTerm/Kitty/Warp/WezTerm), stays quiet while a
- * self-driving `goal` is active, dedupes identical pings within 5s, and is fully
- * event-driven (no timers). Toggle with `/notify` or ~/.pi/agent/notify.json.
- */
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";

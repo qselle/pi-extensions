@@ -63,7 +63,7 @@ Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 { "enabled": true, "model": "provider/model-id", "tabLink": true }
 ```
 
-`model` is optional. When present, the extension tries that model first and safely falls back to the active session model when the override is missing, unauthenticated, or fails. Without an override, the active model is the portable default because it is already available and authenticated on the current machine.
+`model` defaults to the active session model. An override falls back to that model if unavailable, unauthenticated, or failing.
 
 The configuration is also used by [`side-chat`](../side-chat/) titles.
 

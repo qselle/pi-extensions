@@ -1,14 +1,11 @@
 import type { Api } from "@earendil-works/pi-ai";
 
-/** How much of the main conversation a side chat inherits at creation. */
 export type SideContextMode = "none" | "snapshot";
 
-/** Lifecycle of a single side chat. */
 export type SideChatStatus = "idle" | "generating" | "error";
 
 export type SideTurnRole = "user" | "assistant";
 
-/** Compact, serializable token accounting shared across side chats. */
 export interface SideUsage {
   input: number;
   output: number;
@@ -26,7 +23,6 @@ export interface SideModelRef {
   contextWindow?: number;
 }
 
-/** One committed exchange turn in a side chat. */
 export interface SideTurn {
   role: SideTurnRole;
   text: string;
@@ -43,10 +39,6 @@ export interface SidePending {
   startedAt: number;
 }
 
-/**
- * A persistent, multi-turn side conversation that runs alongside — and
- * independently of — the main agent job.
- */
 export interface SideChat {
   id: string;
   title: string;
@@ -70,7 +62,6 @@ export interface SideChat {
   contextTruncated: boolean;
 }
 
-/** Placeholder title for a side chat before its first question names it. */
 export const DEFAULT_SIDE_CHAT_TITLE = "New side chat";
 
 export function modelLabel(model: SideModelRef): string {

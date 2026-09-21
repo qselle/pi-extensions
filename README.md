@@ -1,43 +1,25 @@
 # pi-extensions
 
-A collection of optional extensions for the [Pi coding agent](https://github.com/earendil-works/pi).
+Optional extensions for the [Pi coding agent](https://github.com/earendil-works/pi).
 
 ## Install
 
-Requires Pi 0.87.0 (supported host line: 0.87.x). Use Node.js for interactive PTY
-jobs; Bun supports pipe jobs. macOS and Linux ARM64 are tested; Windows remains
-unverified. Shared internal code is packaged under `lib/` and does not register
-additional extensions.
+Requires Pi 0.87.x. macOS and Linux ARM64 are tested; Windows is unverified.
+Interactive PTY jobs require Node.js; pipe jobs also work with Bun.
 
 ```bash
 pi install git:github.com/qselle/pi-extensions
 pi config
 ```
 
-The first command installs the package. Use `pi config` to enable only the extensions you want.
+Enable the extensions you want with `pi config`, then use `/reload` to apply changes.
+A starting set: `codex-prompt`, `footer`, `tool-render`, `plan`, `web-search`,
+`background-jobs`, and `doctor`. Add `overlay-stack` for workflow cards.
 
-## Choose a small starting set
-
-Use `pi config` to enable only the workflows you use. A practical starting set is
-`codex-prompt`, `footer`, `tool-render`, `plan`, `web-search`, `background-jobs`, and
-`doctor`. Add `overlay-stack` for workflow cards, `side-chat` for isolated discussion,
-and `subagents` when you explicitly delegate work. Decorations, schedules,
-monitors and telemetry are optional. Use Pi's built-in `/reload` when changing
-extensions; this package has no cross-session reload broker.
-
-[Setup decisions](docs/setup-design.md) explain the extension boundaries and the
-current Telegram/session-title integrations.
-
-All 38 extensions together expose 14 model tools in a fresh session. Job and
-workflow controls activate when their workflow is used; optional context/image
-tools remain opt-in. This reduces tool descriptions without adding a profile
-manager. Built-in managed `bash` is the primary job entry point; `job_start` remains
-registered as a compatibility alias and is inactive by default.
-
-For a temporary lean checkout session, Pi also supports explicit selection:
+For a temporary selection from a checkout:
 
 ```bash
-pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./extensions/tool-render -e ./extensions/plan -e ./extensions/web-search
+pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./extensions/tool-render
 ```
 
 ## Extensions
@@ -49,96 +31,78 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`code-blocks`](extensions/code-blocks/) | Named code captions and restored syntax highlighting |
 | [`codex-prompt`](extensions/codex-prompt/) | Flat `›` editor prompt |
 | [`context`](extensions/context/) | Context-window breakdown |
-| [`context-journal`](extensions/context-journal/) | Durable session notes and bounded history retrieval |
+| [`context-journal`](extensions/context-journal/) | Working notes and older-message retrieval |
 | [`doctor`](extensions/doctor/) | Read-only dependency and configuration health report |
 | [`file-changes`](extensions/file-changes/) | Current and previous run file changes |
-| [`fast-mode`](extensions/fast-mode/) | Explicit premium processing requests for the direct OpenAI Responses API |
+| [`fast-mode`](extensions/fast-mode/) | Request fast processing for supported OpenAI models |
 | [`footer`](extensions/footer/) | Model, context, usage, and cost status |
 | [`goal`](extensions/goal/) | Persistent goals that continue across turns |
-| [`handoff`](extensions/handoff/) | Reviewed fresh-context continuation with durable checkpoints |
+| [`handoff`](extensions/handoff/) | Carry a task checkpoint into a fresh session |
 | [`history-search`](extensions/history-search/) | Fuzzy search of the active prompt history |
 | [`hyperlinks`](extensions/hyperlinks/) | Clickable terminal paths |
 | [`image-history`](extensions/image-history/) | Opt-in older-image deferral with on-demand retrieval |
-| [`loop`](extensions/loop/) | Repeated prompts on a bounded cadence with searchable loop inspection |
+| [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
-| [`monitor`](extensions/monitor/) | Shell-command monitoring with conditional wakeups and a searchable command panel |
+| [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
 | [`notify`](extensions/notify/) | Desktop and terminal notifications |
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
 | [`plan`](extensions/plan/) | Current multi-step execution plan |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep your Mac awake while Pi works; no-op on Linux |
 | [`rewind`](extensions/rewind/) | Search earlier prompts, fork before one, and edit it again |
 | [`questions`](extensions/questions/) | Structured terminal and Telegram questions |
-| [`schedule`](extensions/schedule/) | Persistent reminders, cron prompts, and a searchable schedule panel |
+| [`schedule`](extensions/schedule/) | Project reminders and cron prompts |
 | [`session-search`](extensions/session-search/) | Full-text search across saved sessions |
 | [`session-title`](extensions/session-title/) | Automatic session titles and Herdr tab synchronization |
 | [`side-chat`](extensions/side-chat/) | Background side conversations |
 | [`subagents`](extensions/subagents/) | Isolated child agents |
-| [`telegram`](extensions/telegram/) | Session topics, goal notifications, and replies shared across local Pi sessions |
+| [`telegram`](extensions/telegram/) | Session topics, goal notifications, and question replies |
 | [`tool-render`](extensions/tool-render/) | Compact built-in tool rendering |
 | [`transcript`](extensions/transcript/) | Searchable full-session history with live updates and Markdown |
 | [`turn-separator`](extensions/turn-separator/) | Timing and usage between tool-work blocks |
-| [`turn-stats`](extensions/turn-stats/) | Durable full-run timing, response/tool counts, and explicit missing-usage accounting |
-| [`usage-export`](extensions/usage-export/) | Explicit local JSON/CSV usage exports with missing-value accounting |
+| [`turn-stats`](extensions/turn-stats/) | Per-run timing, response counts, and usage |
+| [`usage-export`](extensions/usage-export/) | Export recorded usage as JSON or CSV |
 | [`verify`](extensions/verify/) | Run focused checks after file edits |
 | [`working-status`](extensions/working-status/) | Live phase and elapsed time in the native working indicator |
-| [`web-search`](extensions/web-search/) | Keyless Exa search, optional keyed providers, and bounded ax page reading |
+| [`web-search`](extensions/web-search/) | Web search and page reading |
 
-See each extension's README for commands, configuration, and limitations. The differences between `loop`, `monitor`, and `schedule` are covered in the [automation comparison](docs/automation-study.md).
+Each extension's README lists its commands, configuration, dependencies, and limitations.
+Job and workflow controls activate when used; context and image-history tools are opt-in.
 
-The [Pi 0.87 release audit](docs/pi-0.87-audit.md) records compatibility findings
-and updates for every extension.
+For automation, use `loop` to repeat a model prompt, `monitor` to run shell checks
+and wake the model on matching results, or `schedule` for reminders and cron prompts.
+All require an open Pi session; overdue schedules run when the session resumes.
 
 ## Development
 
-Requires Bun 1.3.14. CI also pins Node.js 26.8.2 for native PTY fixtures.
+Requires Bun 1.3.14. CI uses Node.js 26.8.2 for native PTY fixtures.
 
 ```bash
 bun install --frozen-lockfile
 bun run check
 ```
 
-Pi APIs are peer dependencies supplied by the host. `bun run check` runs TypeScript and the full test suite.
+Pi APIs are peer dependencies supplied by the host. Shared helpers live in `lib/`.
+Package archives contain runtime code, extension READMEs, themes, and the PTY
+installation helper; tests and fixtures stay in the checkout.
 
-Package archives include runtime TypeScript, extension READMEs, themes, documentation
-and the PTY installation helper. Tests and fixtures stay in the source checkout.
-Run `bun run check:package` on macOS or Linux to build a temporary archive,
-check its contents and load all extensions from it in both orders. It requires
-Node, npm, Bun and tar, and reuses installed dependencies without publishing.
-The package remains private. CI runs full checks and this archive check on Linux
-and macOS; Windows integration remains unverified.
+| Command | Check |
+|---|---|
+| `bun run check` | TypeScript and the full test suite |
+| `bun run check:package` | Pack a temporary archive and load every extension in both orders |
+| `bun run check:install` | Install the archive with fresh dependencies and run a native PTY command |
+| `bun run check:linux` | Run the suite and archive checks in Docker; add `--clean-install` for a fresh consumer install |
+| `bun run preview:ui` | Capture wide/narrow terminal layouts as HTML and text in a temporary directory |
 
-Run `bun run check:install` for an isolated consumer installation. It downloads
-the packed artifact's dependencies plus pinned Pi host APIs, prepares node-pty,
-executes a native PTY command and loads all extensions in both orders. It needs
-network access and the platform's native build prerequisites if prebuilt binaries
-are unavailable. Installation scripts are disabled except the explicit node-pty
-rebuild and this package's PTY helper. Temporary packages and cache are removed
-afterward; the working tree's dependencies and lockfile are not changed.
+Package checks require Node, npm, Bun, and tar. Clean installs need network access
+and Python/C++ build tools when node-pty has no prebuilt binary. The Linux check
+requires a running Docker engine and downloads `node:26.8.2-bookworm` plus dependencies.
+Temporary installs and containers are removed afterward; Docker images remain cached.
 
-`bun run check:linux` runs the full suite and archive checks in a disposable
-`node:26.8.2-bookworm` container with Bun 1.3.14. Start a local Docker engine first;
-the script does not start one or resume existing machines. It mounts a temporary
-source snapshot read-only and installs dependencies inside the container. Network
-access is required for the image and dependencies. It removes its container and
-snapshot afterward; downloaded Docker image layers remain cached. This checks
-Linux process/runtime behavior, not desktop notifications. Sleep prevention is macOS-only.
-Add `--clean-install` to also verify the archive in a separate Linux consumer
-directory with fresh dependencies and a real PTY, instead of reusing the source
-checkout's dependencies for the archive check.
+UI previews use synthetic responses in an isolated Pi session with integrations
+disabled. They require a working Node.js PTY installation and leave captures in
+the reported directory. They check terminal cells, not terminal-app fonts or links.
 
-`bun run preview:ui` starts an isolated native Pi session in a real PTY and writes
-an HTML preview plus terminal cell/text captures to a temporary directory. It
-checks active and settled layouts at 100 and 60 columns, workflow hide/show,
-transcript search, the doctor overview, and loop inspection with a paused fixture.
-All extensions load, but responses and usage are synthetic;
-network requests, desktop notifications, automatic titles, Telegram and sleep
-prevention are disabled. Your sessions and terminal windows are untouched.
-The preview uses Node.js, the existing node-pty dependency, and the development
-dependency `@xterm/headless`. It is verified on macOS with Node.js 26.8.2; it needs
-a working native PTY installation on other platforms. The fixture session is
-removed after exit; captures remain in the reported temporary directory for
-review. This is a static terminal-cell preview, not a test of a particular
-terminal application's font, graphics, or hyperlink handling.
+CI runs the suite and archive checks on macOS and Linux.
 
 ## License
 

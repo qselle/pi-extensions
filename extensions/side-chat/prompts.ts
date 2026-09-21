@@ -84,7 +84,6 @@ export function toApiMessages(chat: SideChat): Message[] {
   return messages;
 }
 
-/** Extract the plain-text answer from a provider assistant message. */
 export function responseText(response: Pick<AssistantMessage, "content">): string {
   if (!Array.isArray(response.content)) return "";
   return response.content
@@ -96,7 +95,6 @@ export function responseText(response: Pick<AssistantMessage, "content">): strin
     .trim();
 }
 
-/** Derive a short chat title from the first question. */
 export function deriveTitle(question: string, limit = TITLE_LIMIT): string {
   const firstLine = question.replace(/\s+/g, " ").trim().split(/(?<=[.?!])\s/)[0] ?? "";
   const base = (firstLine || question).replace(/\s+/g, " ").trim();

@@ -1,10 +1,9 @@
-import { writeFileSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VerifyCheck } from "./config.ts";
 
-/** Rough token estimate; the same 4-chars-per-token heuristic harnesses use. */
+/** Estimate tokens at four characters each. */
 export function approxTokenCount(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -21,10 +20,7 @@ export interface TemplateValues {
   files?: string[];
 }
 
-/**
- * Substitutes {file}, {dir}, and {files}. Values are shell-quoted because the
- * command runs through a shell and paths can contain spaces.
- */
+/** Shell-quote file placeholders before substituting them into the command. */
 export function applyTemplate(
   command: string,
   values: TemplateValues,
@@ -92,11 +88,7 @@ export interface SpillOptions {
   write?: (path: string, contents: string) => void;
 }
 
-/**
- * Keeps injected output small without losing anything: oversized output is
- * written to a file and only a bounded preview plus the path is injected, so the
- * agent can read the rest on demand. Falls back to truncation if the write fails.
- */
+/** Spill full output to disk; fall back to a truncated preview if the write fails. */
 export function spillOutput(text: string, options: SpillOptions): SpillResult {
   const { tokenLimit } = options;
   if (tokenLimit <= 0 || approxTokenCount(text) <= tokenLimit) return { text, truncated: false };
@@ -122,12 +114,7 @@ export interface FailureDetails {
   spillPath?: string;
 }
 
-/**
- * The text appended to the edit/write tool result.
- *
- * It states plainly that the write succeeded, because the model must not react by
- * re-applying the edit. The tool result itself is never marked as an error.
- */
+/** The edit succeeded; report check failures without inviting the agent to repeat it. */
 export function formatFailure(details: FailureDetails): string {
   const { check, command, code, timedOut, output, spillPath } = details;
   const status = timedOut

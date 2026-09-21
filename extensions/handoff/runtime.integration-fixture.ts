@@ -24,7 +24,7 @@ try {
     api: "openai-completions", provider: "test", model: "test", stopReason: "stop", timestamp: Date.now(),
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   });
-  const user = parent.appendMessage({ role: "user", content: "finish the complete task", timestamp: Date.now() });
+  parent.appendMessage({ role: "user", content: "finish the complete task", timestamp: Date.now() });
   const { default: extension } = await import("./index.ts");
   const { createGoal } = await import("../goal/goal.ts");
   const goal = { version: 2, goal: { ...createGoal("finish the complete task", { tokenBudget: 50000 }), tokensUsed: 1234 } };

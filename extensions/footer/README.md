@@ -26,7 +26,7 @@ unknown measurements use a muted color.
 
 Usage is cached until a lifecycle event or the session branch leaf changes. Totals
 include assistant responses, nested model usage on tool results, summaries,
-compactions and Pi 0.86 cache-warming usage. Idle warming costs appear on the next
+compactions and cache-warming usage. Idle warming costs appear on the next
 footer render without waiting for another assistant response.
 
 The terminal title shows the session and project. A low-frequency Braille spinner is active only while Pi is working. Attention UI such as `questionnaire` temporarily owns the title and the footer restores the appropriate active or idle title afterward.

@@ -37,11 +37,7 @@ export interface CheckOutcome {
   spillPath?: string;
 }
 
-/**
- * Caches outcomes within a turn, keyed by the command plus the edited file's
- * fingerprint, so a repeated identical invocation is not re-run while a genuine
- * new edit always is.
- */
+/** Cache per turn, command, and file fingerprint; a new edit invalidates the result. */
 export class VerifyCache {
   private readonly entries = new Map<string, CheckOutcome>();
 

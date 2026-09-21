@@ -41,8 +41,6 @@ export default function sessionSearchExtension(
   pi: ExtensionAPI,
   options: SessionSearchExtensionOptions = {},
 ): void {
-  // Namespace access remains test-order safe when another extension test installs
-  // a deliberately partial process-wide mock of the Pi package.
   const hostSessionManager = (CodingAgent as unknown as { SessionManager?: SessionManagerHost }).SessionManager;
   const listSessions = options.listSessions ?? ((onProgress, signal) => requireSessionManager(hostSessionManager).listAll(onProgress, signal));
   const openSession = options.openSession ?? ((path) => requireSessionManager(hostSessionManager).open(path));

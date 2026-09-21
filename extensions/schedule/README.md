@@ -35,20 +35,11 @@ Storage and delivery:
 - Missed cron runs coalesce; they are not replayed as a backlog.
 - Another Pi process for the same project sees the queue read-only while the lease is held; an idle standby does not occupy the footer status row.
 - Failures and interruptions pause the task with its pending delivery preserved.
-- Failed pause/stop saves retain queued or running delivery ownership. Control
-  changes, task creation, delivery and settlement are serialized with their
-  saves. A failed change rolls back before another operation builds its snapshot,
-  so concurrent creation cannot resurrect a failed task or lose a new reminder.
-- A save already underway finishes for its original project during navigation or
-  shutdown. Its old command cannot update the new session, rearm its timer, or
-  report success through a stale UI; a stale stop-tool call reports the change.
+- Failed saves roll back the change; queued or running deliveries retain their owner.
 
 Limits: 50 tasks per project; reminders from 1 minute to 365 days; cron defaults to 50 runs and accepts 1–500.
 
 Tasks do not run while Pi is closed. Overdue work runs when an owning persistent session next opens and becomes idle. Scheduled turns use the current project and working tree. A wakeup does not grant new authority for external or destructive actions.
-
-The inspection snapshot opens at its overview. Home/End move to the top/bottom;
-live-follow and thinking controls are reserved for the transcript viewer.
 
 ## Dependencies and limitations
 

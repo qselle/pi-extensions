@@ -75,7 +75,6 @@ type Store = InstanceType<typeof SideChatStore>;
 
 const MODEL: SideModelRef = { provider: "openai", id: "gpt-5", api: "openai-responses" };
 const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t } as never;
-const keybindings = { matches: () => false } as never;
 
 const KEY = { down: "\x1b[B", enter: "\r", escape: "\x1b", ctrlO: "\x0f" };
 
@@ -117,7 +116,7 @@ function harness(seed: (store: Store) => void = () => {}) {
     onDelete: (id: string) => store.remove(id),
   };
   let closed = 0;
-  const workspace = new SideChatWorkspace(callbacks, theme, keybindings, fakeTui(), () => {
+  const workspace = new SideChatWorkspace(callbacks, theme, fakeTui(), () => {
     closed += 1;
   });
   return { store, workspace, promoted, created, closed: () => closed };
