@@ -18,6 +18,10 @@ All images in the latest user message and subsequent tool results remain availab
 
 - Uses Pi's public context, session, tool and status APIs; no third-party dependencies or external services. Cross-platform.
 - Disabled by default. Deferral changes what the model can immediately see; it must retrieve an older image when visual details matter. Text context remains unchanged.
+- Pi 0.87's per-model `inputLimits.images.resize` controls apply when image input
+  is sent, including retrieved tool images. Resizing controls image dimensions;
+  this extension separately defers older images and retrieves them on demand.
+  Canonical context omissions remain omitted when deferral is turned off.
 - This reduces repeated image input in subsequent requests. It does not shrink session files, remove base64 data from memory, or implement on-disk image sidecars. The installed public storage API has no transparent image-sidecar hook.
 - Original session messages are never rewritten. Turning the mode off restores normal context behavior for images still in Pi's active context; it does not undo native compaction.
 - References are valid only on a branch containing the source entry. Retrieval cannot recover deleted session data or access another session's images.

@@ -64,7 +64,7 @@ export interface ToolLike {
 }
 
 export interface AnalyzeInput {
-  /** Entries actually in context, i.e. sessionManager.buildContextEntries(). */
+  /** Entries carrying their projected content after compaction and context edits. */
   entries?: readonly unknown[];
   /** The current system prompt string. */
   systemPrompt?: string;

@@ -44,7 +44,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     finally { if (version === generation) { requested = false; compacting = false; activeContext = undefined; acceptedCheckpoint = undefined; } }
   };
   pi.registerTool({ name: "context_rollover", label: "Roll context window",
-    description: "Request no-summary context rollover after saving complete, current context_notes. During an active tool chain, end this response after requesting; rollover commits when the run settles, or at Pi's next safe automatic compaction boundary. History stays retrievable. This does not finish the task.",
+    description: "Request no-summary context rollover after saving complete, current context_notes. During an active tool chain, end this response after requesting; Pi commits the boundary before settlement and continues with saved notes, or rolls over at its next safe automatic compaction boundary. History stays retrievable. This does not finish the task.",
     parameters: Type.Object({ checkpoint_ready: Type.Literal(true) }),
     async execute(_id, _params, signal, _update, ctx) {
       signal?.throwIfAborted();
@@ -95,9 +95,22 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     return { compaction: { summary: ROLLOVER_TEXT, firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details: { contextJournal: 1, noSummary: true } } };
   });
   pi.on("session_compact", () => { requested = false; warned = false; exhaustedNotified = false; acceptedCheckpoint = undefined; });
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_before_settle", (event, ctx) => {
     if (!requested || compacting || !journal().enabled) return;
-    try { await rollover(ctx); } catch { ctx.ui.notify("Context rollover could not finish. Notes remain saved; retry /context-journal reset when idle.", "warning"); }
+    // Never turn an interruption/error into a context-only recovery request.
+    // Another handler's new context must be consumed before notes can cover it.
+    const checkpoint = ready(ctx);
+    requested = false; acceptedCheckpoint = undefined;
+    if (event.outcome !== "completed") return;
+    if (!checkpoint || event.entries.some((entry) => entry.type !== "custom")) {
+      ctx.ui.notify("Context rollover deferred because the checkpoint or boundary changed. Save updated notes before retrying.", "warning");
+      return;
+    }
+    warned = false; exhaustedNotified = false;
+    return {
+      entries: [...event.entries, { type: "compaction" as const, summary: ROLLOVER_TEXT, firstKeptEntryId: null, details: { contextJournal: 1, noSummary: true } }],
+      continue: true,
+    };
   });
   pi.on("input", async (_event, ctx) => {
     if (!journal().enabled || !ctx.isIdle() || compacting) return;

@@ -30,8 +30,10 @@ When enabled, four tools become active:
   usage is reported as unknown, never as an empty window.
 - `context_rollover`: request a no-summary rollover after saving current notes.
   The agent must end its response after requesting. The boundary commits at Pi's
-  next safe automatic compaction point or after the run settles; other tools
-  cannot run while it is pending.
+  next safe automatic compaction point or through Pi's `agent_before_settle`
+  boundary; other tools cannot run while it is pending. The pre-settlement path
+  retains no earlier conversation, preserves the prompt/tools, and requests one
+  continuation with saved notes. Errors and interruptions never trigger it.
 
 Notes are supplied once in each model request as fallible working records.
 Changing a note takes effect on the next request. Disabling removes that injected
@@ -56,6 +58,8 @@ without an LLM-generated summary. Earlier messages leave model context while
 remaining visible in session history and retrievable with `context_history`.
 System instructions, tools and durable notes survive. Turning the journal off
 stops future rollover but does not undo a committed boundary.
+If another boundary handler proposes new model context, rollover is deferred
+until updated notes cover it. State-only metadata proposals are preserved.
 
 ## Dependencies and limitations
 
@@ -69,7 +73,8 @@ stops future rollover but does not undo a committed boundary.
 
 - Pi public tools, context transformation, session and usage APIs; host TypeBox.
   Internal output sanitization and questionnaire secret-registry helpers.
-- No extra model calls, network service, embeddings or external storage.
+- No model call to generate a summary, network service, embeddings or external
+  storage. A successful pre-settlement rollover resumes normal model work once.
 - History retrieves text only. It omits reasoning, image payloads and custom
   extension messages. It searches the active branch, not other branches/sessions.
 - Up to 20 matches, 2,000 characters per excerpt and 12,000 combined excerpt
@@ -77,14 +82,17 @@ stops future rollover but does not undo a committed boundary.
   branch's in-memory messages and scans full message text before excerpting.
 - Known questionnaire secret values are redacted from notes and retrieved text;
   this is literal matching, not general credential detection. Avoid storing secrets.
-- Pi 0.86 prompt/tool state survives the native compaction boundary, including
+- Pi 0.87 prompt/tool state survives the native compaction boundary, including
   a no-summary journal rollover and disk reload.
 - Uses Pi's normal session persistence. If a session has not yet produced an
   assistant message, Pi may not have flushed its file yet.
-- Pi must be able to prepare compaction and resolve the selected model's
+- Manual `/context-journal reset` and input-triggered rollover use Pi's compaction
+  hook. Pi must be able to prepare compaction and resolve the selected model's
   credentials before it invokes the public hook. Very small sessions may report
   “nothing to compact”; provider authentication may refresh even though no
-  summarization request is made. Failures retain notes and allow retry.
+  summarization request is made. Failures retain notes and allow retry. The new
+  pre-settlement path appends a native retain-none compaction draft directly and
+  does not need summary preparation or a separate authentication check.
 - Reliable continuation depends on complete, current notes. A nonempty journal
   is required but cannot prove that the agent recorded every relevant fact.
 - Pi reports unknown context usage after compaction until a new provider response;
