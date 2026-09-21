@@ -35,12 +35,12 @@ request. After `/reload`, run `/title tab link` once in the tab you want to link
 It immediately adopts the current Pi name, then follows generated titles,
 `/rename`, `/title set`, and names set by other extensions.
 
-Existing Herdr labels are preserved until you explicitly link them. The public
-API exposes a displayed label without its origin, so even a number such as `1`
-is treated as a possible manual name. An empty label can be linked automatically.
-If you later rename or clear the label in Herdr, Tab link yields on its next
-check; `/title tab link` explicitly reconnects it. `/title tab auto` resumes only
-an empty or still-owned label.
+Existing Herdr labels are preserved until you explicitly link them, except for
+an empty label or Herdr's default ordinal (for example, label `1` on tab `…:t1`),
+which can be linked automatically. Other numeric labels remain possible manual
+names. If you later rename or clear the label in Herdr, Tab link yields on its
+next check; `/title tab link` explicitly reconnects it. `/title tab auto` resumes
+only a default, empty, or still-owned label.
 
 Split tabs pause synchronization, including explicit linking, so separate Pi
 panes cannot compete for their shared label. Every update resolves the current
