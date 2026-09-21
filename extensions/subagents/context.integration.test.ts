@@ -56,6 +56,15 @@ async function verify() {
     if (fork.inheritedMessages !== 4) throw new Error("fork inherited message count is wrong");
     if (!forkText.includes("Parent instructions") || !forkText.includes("Updated constraint") || !forkText.includes("old_tool")) throw new Error("fork dropped transcript prompt/tool state");
     await fork.cleanup();
+
+    const messages = parent.getBranch().filter(entry => entry.type === "message");
+    parent.appendContextEdit(messages.find(entry => entry.message.role === "user").id, { content: "Edited requirement" });
+    parent.appendContextEdit(messages.find(entry => entry.message.role === "assistant").id, null);
+    const editedFork = await createChildContext(ctx, "fork");
+    const editedText = JSON.stringify(SessionManager.open(editedFork.sessionFile).buildSessionContext().messages);
+    if (!editedText.includes("Edited requirement") || editedText.includes("Parent requirement") || editedText.includes("Parent decision")) throw new Error("fork ignored canonical context edits");
+    if (!JSON.stringify(parent.getBranch()).includes("Parent decision")) throw new Error("fork rewrote parent history");
+    await editedFork.cleanup();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

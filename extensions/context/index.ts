@@ -11,7 +11,7 @@
  * provider's own count is shown alongside when pi has one.
  */
 
-import { estimateTokens, getLastAssistantUsage, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, getLastAssistantUsage, type ExtensionAPI, type SessionEntry, type SessionProjection } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { analyzeContext, shortenPath, type ContextReport, type Estimators, type ProviderUsage, type ToolLike } from "./analysis.ts";
 import { renderReport, summaryLine, type ReportTheme } from "./render.ts";
@@ -101,6 +101,7 @@ export interface ContextCommandContext {
   getSystemPrompt?: () => string;
   getSystemPromptOptions?: () => SystemPromptOptionsLike | undefined;
   sessionManager?: {
+    buildSessionProjection?: () => SessionProjection;
     buildContextEntries?: () => unknown[];
     getBranch?: () => unknown[];
   };
@@ -125,9 +126,18 @@ export function collectReport(
 ): ContextReport {
   const options = safeCall(() => ctx.getSystemPromptOptions?.()) ?? {};
   const usage = safeCall(() => ctx.getContextUsage?.());
-  const entries = safeCall(() => ctx.sessionManager?.buildContextEntries?.())
+  const rawEntries = safeCall(() => ctx.sessionManager?.buildContextEntries?.())
     ?? safeCall(() => ctx.sessionManager?.getBranch?.())
     ?? [];
+  const projection = safeCall(() => ctx.sessionManager?.buildSessionProjection?.());
+  const entries = projection ? projection.entries.flatMap<SessionEntry>(({ sourceEntry, messages }) => {
+    if (!messages.length) return [];
+    // Raw history retains omitted/replaced content; attribution must use the
+    // canonical model contribution while keeping entry kinds and provenance.
+    if (sourceEntry.type === "message") return [{ ...sourceEntry, message: messages[0]! }];
+    if (sourceEntry.type === "custom_message") return [{ ...sourceEntry, content: (messages[0]! as { content: typeof sourceEntry.content }).content }];
+    return [sourceEntry];
+  }) : rawEntries;
 
   const allTools = safeCall(() => host.getAllTools?.()) ?? [];
   const activeToolNames = safeCall(() => host.getActiveTools?.());
@@ -138,7 +148,7 @@ export function collectReport(
 
   const reported = typeof usage?.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens >= 0 ? usage.tokens : undefined;
   // The raw components explain any gap between pi's figure and the estimate.
-  const lastUsage = safeCall(() => readLastUsage(entries));
+  const lastUsage = safeCall(() => readLastUsage(rawEntries));
 
   // Absolute paths would push every number off the right edge of the table.
   const contextFiles = (options.contextFiles ?? []).map((file) => ({

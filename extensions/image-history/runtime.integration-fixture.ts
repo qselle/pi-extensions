@@ -34,5 +34,16 @@ try {
   assert(!session.getActiveToolNames().includes("history_image"));
   const full = await runner.emitContext(manager.buildSessionContext().messages);
   assert(JSON.stringify(full).includes(image.data));
+  const beforeEdit = manager.getLeafId()!;
+  manager.appendContextEdit(id, null);
+  await session.prompt("/image-history on");
+  const edited = await runner.emitContext(manager.buildSessionContext().messages);
+  assert(!JSON.stringify(edited).includes(`${id}:0`), "omitted images must not reappear as references");
+  await session.prompt("/image-history off");
+  assert(!JSON.stringify(await runner.emitContext(manager.buildSessionContext().messages)).includes(image.data), "disabling deferral must not undo a canonical omission");
+  const editedLeaf = manager.getLeafId();
+  manager.branch(beforeEdit);
+  await runner.emit({ type: "session_tree", newLeafId: beforeEdit, oldLeafId: editedLeaf, fromExtension: false });
+  assert(JSON.stringify(await runner.emitContext(manager.buildSessionContext().messages)).includes(image.data));
   console.log("native image deferral, retrieval, activation and unchanged history verified");
 } finally { session?.dispose(); await rm(root, { recursive: true, force: true }); }

@@ -39,7 +39,7 @@ All bindings remain available when their hint does not fit.
 
 ## Dependencies and limitations
 
-- Pi 0.86.1 public session, event, Markdown, and TUI APIs; no runtime packages.
+- Pi 0.87.0 public session, event, Markdown, and TUI APIs; no runtime packages.
 - Shares keyboard-hint formatting with `history-search`; that extension need not
   be enabled. Interactive TUI only; cross-platform.
 - All-branches mode is chronological storage order, not a session-tree graph.

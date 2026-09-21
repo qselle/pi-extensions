@@ -21,7 +21,12 @@ function fixture() {
   const ctx: any = { getContextUsage: () => ({ tokens, contextWindow: 100000 }), isIdle: () => true, abort: () => aborted++, ui: { notify() {} }, sessionManager: { getLeafId: () => leaf, getBranch: () => entries },
     compact: (options: any) => { compactions++; const result = handlers.get("session_before_compact")({ reason: "manual", signal: new AbortController().signal, preparation: { tokensBefore: tokens } }, ctx); options.onComplete(result.compaction); handlers.get("session_compact")(); } };
   const policy = installRollover({ on: (name: string, handler: any) => handlers.set(name, handler), registerTool: (tool: any) => tools.set(tool.name, tool), appendEntry: (customType: string, data: any) => { leaf = `entry-${entries.length}`; entries.push({ id: leaf, type: "custom", customType, data }); } } as never, () => state);
-  return { handlers, tools, ctx, policy, state, entries, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
+  const settle = async (outcome = "completed", proposals: any[] = []) => {
+    const result = await handlers.get("agent_before_settle")({ outcome, entries: proposals }, ctx);
+    if (result?.entries) for (const entry of result.entries) { entries.push({ ...entry, id: `entry-${entries.length}` }); if (entry.type === "compaction") compactions++; }
+    return result;
+  };
+  return { handlers, tools, ctx, policy, state, entries, settle, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
 }
 test("warns once then permits only checkpoint writes and rollover", () => {
   const f = fixture(); f.tokens(85000);
@@ -35,16 +40,20 @@ test("warns once then permits only checkpoint writes and rollover", () => {
   expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).terminate).toBe(true);
   expect(f.aborted()).toBe(1);
 });
-test("rollover waits for settlement and creates a boundary after old messages", async () => {
+test("rollover proposes a retain-none boundary before settlement and continues once", async () => {
   const f = fixture();
   await f.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, f.ctx);
   expect(f.compactions()).toBe(0);
   expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).terminate).toBe(true);
-  await f.handlers.get("agent_settled")({}, f.ctx);
+  f.ctx.isIdle = () => false;
+  const proposal = await f.settle();
+  expect(proposal.continue).toBe(true);
+  expect(proposal.entries.at(-1)).toMatchObject({ type: "compaction", firstKeptEntryId: null });
   expect(f.compactions()).toBe(1);
   expect(f.entries).toHaveLength(2);
   expect(f.aborted()).toBe(0);
   expect(f.policy.status()).toBe("automatic");
+  expect(await f.settle()).toBeUndefined();
 });
 test("native manual/overflow compaction stays unchanged without a pending rollover", () => {
   const f = fixture();
@@ -122,8 +131,31 @@ test("an accepted checkpoint permits a closing response but never new user work"
     const f = fixture();
     await f.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, f.ctx);
     f.entries.push({ type: "message", message: { role, content: "Continue after this boundary" } });
-    await f.handlers.get("agent_settled")({}, f.ctx);
+    await f.settle();
     expect(f.compactions()).toBe(role === "assistant" ? 1 : 0);
     expect(f.policy.status()).toBe("automatic");
+  }
+});
+
+test("failed or aborted runs do not compact or request a continuation", async () => {
+  for (const outcome of ["error", "aborted"]) {
+    const f = fixture();
+    await f.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, f.ctx);
+    expect(await f.settle(outcome)).toBeUndefined();
+    expect(f.compactions()).toBe(0);
+    expect(f.policy.status()).toBe("automatic");
+  }
+});
+
+test("rollover preserves metadata proposals and defers when another handler adds model context", async () => {
+  const metadata = { type: "custom", customType: "other-state", data: { safe: true } };
+  const f = fixture();
+  await f.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, f.ctx);
+  expect((await f.settle("completed", [metadata])).entries[0]).toEqual(metadata);
+  for (const type of ["custom_message", "context_edit", "compaction"]) {
+    const other = fixture();
+    await other.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, other.ctx);
+    expect(await other.settle("completed", [{ type }])).toBeUndefined();
+    expect(other.compactions()).toBe(0);
   }
 });

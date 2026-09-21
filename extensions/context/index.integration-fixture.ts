@@ -4,12 +4,13 @@ import {
   convertToLlm,
   estimateTokens,
   sessionEntryToContextMessages,
+  SessionManager,
   type CustomMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import { analyzeContext } from "./analysis.ts";
 import { renderReport } from "./render.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { piEstimators } from "./index.ts";
+import { collectReport, piEstimators } from "./index.ts";
 
 const entry: CustomMessageEntry = {
   id: "custom-1",
@@ -81,3 +82,25 @@ const persistedPrompt = { type: "message", message: { role: "system", content: "
 const promptReport = analyzeContext({ entries: [persistedPrompt], systemPrompt: "Current instructions" }, piEstimators);
 assert.equal(promptReport.conversation.total, 0, "persisted system prompts must not be counted twice");
 assert(promptReport.system.total > 0);
+
+// Attribution follows branch-relative context edits; historical usage stays raw.
+const manager = SessionManager.inMemory(process.cwd());
+manager.appendMessage({ role: "system", content: "Project rule", timestamp: 0 });
+const userId = manager.appendMessage({ role: "user", content: "Original long objective ".repeat(500), timestamp: 1 });
+const noteId = manager.appendCustomMessageEntry("plan-context", "Old plan ".repeat(300), false);
+const assistantId = manager.appendMessage({ role: "assistant", api: "anthropic-messages", provider: "anthropic", model: "fixture", stopReason: "stop", timestamp: 2,
+  content: [{ type: "text", text: "Original response" }], usage: { input: 900, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 920, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+const beforeEdits = manager.getLeafId()!;
+const readReport = () => collectReport({}, { sessionManager: manager, getSystemPrompt: () => "Project rule", ui: { notify() {} } });
+const original = readReport();
+manager.appendContextEdit(userId, null);
+manager.appendContextEdit(noteId, { content: "Updated plan" });
+manager.appendContextEdit(assistantId, { content: "Short answer" });
+const edited = readReport();
+assert(!edited.conversation.buckets.some((bucket) => bucket.id === "user"));
+assert.equal(edited.conversation.buckets.find((bucket) => bucket.id === "custom:plan-context")?.tokens, piEstimators.entry({ type: "custom_message", customType: "plan-context", content: "Updated plan" }));
+assert(edited.conversation.total < original.conversation.total);
+assert.equal(edited.provider?.input, 900);
+assert(JSON.stringify(manager.getBranch()).includes("Original long objective"));
+manager.branch(beforeEdits);
+assert.equal(readReport().conversation.total, original.conversation.total);

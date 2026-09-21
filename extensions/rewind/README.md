@@ -25,7 +25,7 @@ rewinding. If the session changes while the picker is open, choose again.
 
 ## Dependencies and limitations
 
-- Pi 0.86.1 public fork/session/editor APIs; interactive TUI only; cross-platform.
+- Pi 0.87.0 public fork/session/editor APIs; interactive TUI only; cross-platform.
 - Reuses this package's `history-search` picker and text extraction helpers.
   The history-search extension does not need to be enabled.
 - No third-party runtime packages or configuration files.

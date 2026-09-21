@@ -31,7 +31,7 @@ While a chat runs, [`overlay-stack`](../overlay-stack/) shows a card and the foo
 
 ## Dependencies and limitations
 
-- Uses Pi's public extension, session, model, and TUI APIs including Pi 0.86.1's authenticated `ctx.modelRegistry.streamSimple()`.
+- Uses Pi 0.87.0's public extension, session, model, and TUI APIs including authenticated `ctx.modelRegistry.streamSimple()`.
 - Requires [`overlay-stack`](../overlay-stack/); optionally uses [`session-title`](../session-title/).
 - No third-party runtime packages.
 - Requires the configured model provider. Provider overrides, authentication refresh,
