@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import sessionTitleExtension from "./index.ts";
 import type { HerdrMethod, HerdrRequest } from "./herdr-client.ts";
 
@@ -83,6 +84,25 @@ describe("Tab link", () => {
     expect(h.tab.label).toBe("Title From Another Extension");
     expect(h.modelCalls()).toBe(0);
     expect(h.calls.every((call) => call.params.tab_id !== "stale")).toBe(true);
+  });
+
+  test("automatically claims Herdr's default ordinal label", async () => {
+    const h = setup({ label: "3" });
+    await h.start();
+    expect(h.tab.label).toBe("First Title");
+  });
+
+  test("migrates an old paused state when the label is the tab's default ordinal", async () => {
+    const key = createHash("sha256")
+      .update(`${environment.HERDR_SOCKET_PATH}\0terminal-2\0w1:t3`)
+      .digest("hex");
+    const h = setup({
+      label: "3",
+      entries: [{ type: "custom", customType: "session-title:tab-link", data: { version: 1, paused: key } }],
+    });
+    await h.start();
+    expect(h.tab.label).toBe("First Title");
+    expect(h.entries.at(-1)?.data.owner?.label).toBe("First Title");
   });
 
   test.each(["My Workspace", "1", "First Title"])("preserves an unverified label %s until explicitly linked", async (label) => {

@@ -10,7 +10,7 @@ import titleExtension from "./index.ts";
 const root = await mkdtemp(join(tmpdir(), "pi-tab-"));
 process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 const path = join(root, "api.sock");
-const tab = { tab_id: "w1:t2", label: "", pane_count: 1 };
+const tab = { tab_id: "w1:t1", label: "1", pane_count: 1 };
 const pane = { pane_id: "w1:p3", tab_id: tab.tab_id, terminal_id: "term3" };
 const writes: string[] = [];
 const sockets = new Set<Socket>();

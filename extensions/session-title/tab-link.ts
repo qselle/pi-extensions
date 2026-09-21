@@ -39,6 +39,11 @@ function tabInfo(value: any, expected: string): { label: string; pane_count: num
   return tab;
 }
 
+/** Herdr labels an unnamed tab with the ordinal encoded in its tab ID. */
+function isDefaultOrdinalLabel(label: string, tabId: string): boolean {
+  return /^:t([1-9]\d*)$/.exec(tabId.slice(tabId.lastIndexOf(":")))?.[1] === label;
+}
+
 /** Tab link follows session names without owning OSC titles or making model requests. */
 export function registerTabLink(pi: ExtensionAPI, options: TabLinkOptions = {}) {
   const env = options.env ?? process.env;
@@ -102,7 +107,11 @@ export function registerTabLink(pi: ExtensionAPI, options: TabLinkOptions = {}) 
       const key = createHash("sha256").update(`${path}\0${pane.terminal_id}\0${pane.tab_id}`).digest("hex");
       const known = live.owner?.key === key || live.paused === key ? live : state;
       const owned = known.owner?.key === key && known.owner.label === tab.label;
-      if (!work.claim && (known.paused === key || (!owned && (tab.label !== "" || known.owner?.key === key)))) {
+      const defaultOrdinal = isDefaultOrdinalLabel(tab.label, pane.tab_id);
+      const paused = known.paused === key && !defaultOrdinal;
+      const ownershipLost = !owned
+        && ((tab.label !== "" && !defaultOrdinal) || known.owner?.key === key);
+      if (!work.claim && (paused || ownershipLost)) {
         state.owner = undefined;
         state.paused = key;
         live = { paused: key };
