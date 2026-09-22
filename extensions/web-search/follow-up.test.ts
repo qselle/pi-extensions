@@ -7,11 +7,10 @@ import { readExaPage } from "./remote-reader.ts";
 import { searchPreview } from "./render.ts";
 import { formatPage, pagePreview } from "./reader.ts";
 
-test("account access requires deliberate configuration; a key alone is unused", () => {
-  expect(exaAccess({ EXA_API_KEY: "unused" })).toBe("keyless");
-  expect(exaAccess({ PI_EXA_ACCESS: "api-key", EXA_API_KEY: "configured" })).toBe("api-key");
-  expect(() => exaAccess({ PI_EXA_ACCESS: "api-key" })).toThrow("EXA_API_KEY");
-  expect(() => exaAccess({ PI_EXA_ACCESS: "auto" })).toThrow("No request");
+test("access uses only the presence of a nonblank Exa key", () => {
+  expect(exaAccess({})).toBe("keyless");
+  expect(exaAccess({ EXA_API_KEY: " \n " })).toBe("keyless");
+  expect(exaAccess({ EXA_API_KEY: "configured" })).toBe("api-key");
 });
 test("one-sided dates, exclusions and source category retain precise semantics", () => {
   expect(searchRequest({ query: "q", date_range: { start: "2025-01-01" }, exclude_domains: [" EXAMPLE.COM "], category: "pdf" }, "exa").body).toMatchObject({ startPublishedDate: "2025-01-01T00:00:00.000Z", excludeDomains: ["example.com"], category: "pdf" });
@@ -45,7 +44,7 @@ test("retries honor short cooldowns, never replay transport ambiguity or long co
   await expect(pending).rejects.toThrow();
 });
 test("remote PDF extraction preserves access and reported source without inventing completeness", async () => {
-  const page = await readExaPage({ url: "https://example.com/paper.pdf", reader: "exa" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "key" }, async (url, init) => {
+  const page = await readExaPage({ url: "https://example.com/paper.pdf", reader: "exa" }, undefined, { EXA_API_KEY: "key" }, async (url, init) => {
     expect(url).toBe("https://api.exa.ai/contents");
     expect(JSON.parse(String(init?.body))).toEqual({ urls: ["https://example.com/paper.pdf"], text: { maxCharacters: 8000 } });
     return Response.json({ results: [{ url: "https://example.com/final.pdf", text: "Text\n\x1b[31mred\x1b[0m" }] });

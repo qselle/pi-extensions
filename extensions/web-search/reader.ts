@@ -19,7 +19,7 @@ export function axArgs(input: ReadInput): string[] {
   const mode = input.mode ?? "markdown";
   const budget = input.budget ?? 2000;
   const offset = input.offset ?? 0;
-  if (input.max_age_hours !== undefined) throw new Error("max_age_hours requires reader=exa with explicit API-key access. ax always fetches directly. No request was sent.");
+  if (input.max_age_hours !== undefined) throw new Error("max_age_hours requires reader=exa with API-key access. ax always fetches directly. No request was sent.");
   if (!Number.isInteger(budget) || budget < 100 || budget > 8000) throw new Error("Budget must be between 100 and 8000 tokens.");
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Offset must be a nonnegative integer.");
   if (mode === "markdown" && offset > 0) throw new Error("Markdown continuation is not supported by ax. Use extract mode with a CSS selector and offset instead.");

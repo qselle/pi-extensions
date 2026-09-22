@@ -87,10 +87,8 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   }
   const providers = [input.env.EXA_API_KEY?.trim() ? "Exa" : "", input.env.FIRECRAWL_API_KEY?.trim() ? "Firecrawl (explicit provider selection)" : "", input.env.MISTRAL_API_KEY?.trim() ? "Mistral (explicit provider selection)" : ""].filter(Boolean);
   if (loaded("web_search")) {
-    try {
-      const access = exaAccess(input.env);
-      add("search-keys", "Search access", "ok", `${access === "api-key" ? "Default: Exa API key (explicit setting)." : "Default: Exa keyless; no API key required."} Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
-    } catch { add("search-keys", "Search access", "warn", "Exa access policy is invalid or explicitly selected account access lacks a key.", "Set PI_EXA_ACCESS=keyless, or api-key with EXA_API_KEY."); }
+    const access = exaAccess(input.env);
+    add("search-keys", "Search access", "ok", `${access === "api-key" ? "Default: Exa API key." : "Default: Exa keyless; no API key required."} Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
   }
   if (loaded("web_read")) {
     const found = await probe.executable("ax");

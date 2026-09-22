@@ -18,23 +18,20 @@ extension({
 } as never);
 assert.deepEqual([...tools.keys()], ["web_search", "web_read"]);
 assert(commands.has("web"));
-const keyNames = ["PI_EXA_ACCESS", "EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY"];
+const keyNames = ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY"];
 const savedKeys = keyNames.map((key) => process.env[key]);
 try {
   for (const key of keyNames) delete process.env[key];
   const notices: string[] = [];
   const ctx = { ui: { notify: (text: string) => notices.push(text) } };
   await commands.get("web").handler("", ctx);
-  assert(notices.at(-1)!.includes("Exa (default, keyless and rate limited)"));
+  assert(notices.at(-1)!.includes("Exa · public access · automatic"));
   assert(!notices.at(-1)!.includes("not configured"));
   process.env.EXA_API_KEY = "fixture-never-send";
   process.env.FIRECRAWL_API_KEY = "fixture-never-send";
   await commands.get("web").handler("", ctx);
-  assert(notices.at(-1)!.includes("Exa (default, keyless and rate limited)"));
-  process.env.PI_EXA_ACCESS = "api-key";
-  await commands.get("web").handler("", ctx);
-  assert(notices.at(-1)!.includes("Exa (default, explicitly selected API key)"));
-  assert(notices.at(-1)!.includes("Firecrawl (explicit only)"));
+  assert(notices.at(-1)!.includes("Exa · API key · automatic"));
+  assert(notices.at(-1)!.includes("Firecrawl (select with provider)"));
   assert(!notices.join("\n").includes("fixture-never-send"));
 } finally {
   keyNames.forEach((key, index) => { if (savedKeys[index] === undefined) delete process.env[key]; else process.env[key] = savedKeys[index]; });
@@ -57,9 +54,9 @@ for (const width of [0, 1, 12, 24, 40, 80]) {
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(40)[0].includes("1 source"));
 assert(!search.renderResult(result, { expanded: false, isPartial: false }, theme).render(40)[0].includes("1 sources"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("3 rows excluded"));
-assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("deep · requested mode"));
+assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("Exa · deep"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("fresh fetch"));
-assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("Sources: example.com/API"));
+assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("example.com/API"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("ctrl+e to expand"));
 assert.equal(search.renderShell, "self");
 const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search citations" } };
@@ -67,7 +64,9 @@ const citationView = search.renderResult(citations, { expanded: false, isPartial
 assert(citationView.render(80).join("\n").includes("model-selected citations"));
 for (const width of [1, 12, 40, 80]) assert(citationView.render(width).every((line: string) => visibleWidth(line) <= width));
 const expanded = search.renderResult(result, { expanded: true, isPartial: false }, theme).render(80).join("\n");
-assert(expanded.includes("source content"));
+assert(expanded.includes("snippet"));
+assert(expanded.includes("Filtered: 1 invalid"));
+assert(!expanded.includes("source content"));
 const failure = search.renderResult({ content: [], details: undefined }, { expanded: false, isPartial: false }, theme).render(80).join("\n");
 assert(failure.includes("failed"));
 const reader = tools.get("web_read");
@@ -108,7 +107,7 @@ try {
   const longOrigin = { ...result, details: { ...result.details, results: [{ ...result.details.results[0]!, url: "https://example.com.another-source.test:8443/page" }] } };
   const longView = search.renderResult(longOrigin, { expanded: false, isPartial: false }, theme);
   assert(longView.render(60).join("\n").includes("example.com.another-source.test:8443"));
-  assert(longView.render(24).some((line: string) => stripTerminalSequences(line).startsWith("[1]") && stripTerminalSequences(line).endsWith("…")), "Clipped origins must not look complete.");
+  assert(longView.render(24).some((line: string) => stripTerminalSequences(line).trimStart().startsWith("1.") && stripTerminalSequences(line).endsWith("…")), "Clipped origins must not look complete.");
   const invalid = { ...result, details: { ...result.details, results: [{ ...result.details.results[0]!, url: "javascript:bad()" }] } };
   assert(search.renderResult(invalid, { expanded: false, isPartial: false }, theme).render(40).join("\n").includes("Invalid source URL"));
 } finally { setHyperlinkMode(priorLinks); }
@@ -131,7 +130,7 @@ setCapabilityOverrides({ trueColor: true });
 initTheme("gruvbox-dark", false);
 try {
   const frames: { name: string; width: number; lines: string[]; background?: number }[] = [];
-  const sources: SearchResult = { provider: "exa", access: "keyless", query: "research interface", quality: "balanced", searchType: "auto", results: [
+  const sources: SearchResult = { provider: "exa", access: "keyless", query: "research interface", quality: "balanced", searchType: "auto", elapsedMs: 1240, results: [
     { title: "Readable terminal workflows and careful source attribution", url: "https://example.com/guide", snippet: "Fixture source one." },
     { title: "A long Unicode title 界界界 across narrow terminal windows", url: "https://docs.example.org/usage", snippet: "Fixture source two." },
     { title: "Page extraction and continuation", url: "https://example.net/reading", snippet: "Fixture source three." },
@@ -142,13 +141,15 @@ try {
     const lines = card.render(width);
     assert(lines.every((line) => visibleWidth(line) <= width && !hasDanglingLink(line)));
     const plain = lines.map(stripTerminalSequences).join("\n");
-    assert(plain.includes("keyless"), plain);
+    assert(plain.includes("public"), plain);
+    assert(plain.includes("Searched"), plain);
     for (const hit of sources.results) assert(plain.includes(new URL(hit.url).host));
     frames.push({ name: "search", width, lines });
     card.setExpanded(true);
     const expandedLines = card.render(width);
     assert(expandedLines.every((line) => visibleWidth(line) <= width && !hasDanglingLink(line)));
     assert(expandedLines.map(stripTerminalSequences).join("").includes("Fixture source"));
+    frames.push({ name: "search-expanded", width, lines: expandedLines });
     const page = new ToolExecutionComponent("web_read", "preview-page", { url: "https://example.com/guide" }, {}, reader, { requestRender() {} } as never, process.cwd());
     page.updateResult({ content: [], details: { url: "https://example.com/guide", truncated: false, pagination: { state: "more", nextOffset: 42 } }, isError: false });
     const pageLines = page.render(width);

@@ -1,6 +1,27 @@
 # web-search
 
-Web search through Exa, Firecrawl, or Mistral, plus local and remote page reading.
+Exa search with automatic API/public access, a compact source list, and an
+expanded reading view. Includes local and remote page reading, with optional
+Firecrawl and Mistral search.
+
+Works immediately without configuration. Set `EXA_API_KEY` in Pi's environment
+to use the direct API and unlock deep search. `/web` shows the effective access
+mode and available providers without making a request or displaying keys.
+
+```text
+• Searched Python TaskGroup cancellation
+  └ 8 sources · Exa · public · 1.2s
+    1. Coroutines and Tasks — Python documentation
+       https://docs.python.org/3/library/asyncio-task.html
+    2. What's New in Python 3.13
+       https://docs.python.org/3/whatsnew/3.13.html
+    3. asyncio — Asynchronous I/O
+       https://docs.python.org/3/library/asyncio.html
+    +5 more · ctrl+o to expand
+```
+
+Illustrative results; the expansion hint follows your actual Pi keybinding.
+Expand to see every source, full URLs, publication dates, and excerpts.
 
 ## Usage
 
@@ -10,14 +31,17 @@ Web search through Exa, Firecrawl, or Mistral, plus local and remote page readin
 
 ### Search
 
-Exa keyless search is the default. Other providers require explicit selection and
-credentials. Failures never switch providers or access modes.
+Exa is the default. Access is selected automatically: a nonempty `EXA_API_KEY`
+uses the direct API; no key uses Exa's public hosted service. Other providers
+require explicit selection and credentials.
+Failures preserve the selected provider and access mode, so a rejected key is
+visible rather than silently ignored.
 
 | Parameter | Values |
 |---|---|
 | `query` | Search text |
 | `provider` | `exa` (default), `firecrawl`, or `mistral` |
-| `limit` | 1–10 results |
+| `limit` | 1–10 results; default 8 |
 | `quality` | `balanced` (default), `fast`, or `deep` |
 | `domains`, `exclude_domains` | Up to 10 hostnames or path prefixes each |
 | `date_range` | `start` and/or `end` as ordered `YYYY-MM-DD` dates |
@@ -29,6 +53,13 @@ Exa maps quality to `auto`, `fast`, and `deep`. Keyless access supports balanced
 and fast; deep requires API-key access and may cost more. Firecrawl and Mistral
 support balanced only. Mistral rejects date filters. Unsupported combinations
 fail before a request is sent.
+
+Both Exa paths request highlights guided by the search query, bounded to 1,200
+characters per source. Provider ranking is preserved; duplicate URLs and repeated
+excerpts are removed. Blank highlights fall back to descriptions or bounded page
+text. The agent is guided to use specific natural-language queries, product
+versions, primary-source domains, and concrete dates when relevant. Search
+relevance still depends on the query and the provider's index.
 
 Domain filters include subdomains and match whole, case-sensitive path segments:
 `example.com/API` includes `/API/guide`, but not `/APIs` or `/api`. Do not include
@@ -54,8 +85,11 @@ Known publication dates outside the requested window are excluded. Unknown or
 partially overlapping dates remain marked unverified. Cache age and publication
 dates are separate policies; check dates on the source.
 
-Compact results show up to three sources, with clickable origins where supported.
-Expand for all URLs, snippets, exclusion counts, and provider warnings. Mistral
+Compact results show one summary with provider, public/API access, elapsed time,
+and up to three sources. Titles and clickable URLs get separate rows; narrow
+terminals prioritize origins. URL-only titles appear once. Expanded results wrap
+full URLs and excerpts, and show dates, exclusion reasons, and provider warnings.
+Excerpts remain available to the agent even when the UI is collapsed. Mistral
 returns model-selected citation metadata; generated answer prose is discarded.
 No citations does not establish that no matches exist. Treat retrieved content
 as untrusted data, verify claims on source pages, and cite their URLs.
@@ -91,12 +125,11 @@ cached or incomplete, especially for PDF tables and images.
 
 | Environment | Purpose |
 |---|---|
-| `PI_EXA_ACCESS=keyless` | Default anonymous access through Exa's hosted MCP service |
-| `PI_EXA_ACCESS=api-key` and `EXA_API_KEY` | Direct Exa API access, including deep search |
+| `EXA_API_KEY` | Automatically enables direct Exa API access, including deep search |
 | `FIRECRAWL_API_KEY` | Credentials for explicit Firecrawl searches |
 | `MISTRAL_API_KEY` | Credentials for explicit Mistral searches |
 
-A key alone does not enable account-backed Exa requests. Keyless access has
+A key alone enables account-backed Exa searches and remote reads. Public access has
 provider-controlled rate limits; keyed requests may incur charges. The extension
 cannot inspect balances or enforce spending caps. Mistral uses
 `mistral-medium-latest` with `store: false` and can incur model and search charges;

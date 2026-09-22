@@ -12,7 +12,8 @@ Read-only checks for local dependencies and configuration, with suggested fixes.
 Checks Pi version and settings, model authentication metadata, keybinding conflicts,
 the shell, loaded tools, search credentials, ax, PTY setup, Telegram, rendering,
 notifications, and macOS sleep prevention. Optional integrations are checked only
-when loaded; disabled features are not errors. Keyless Exa needs no API key.
+when loaded; disabled features are not errors. Exa uses its API key when present
+and public access otherwise.
 
 Warnings and fixes appear first, followed by passed checks and inactive features.
 The panel uses the [transcript viewer's controls](../transcript/). Rerun the command
