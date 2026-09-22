@@ -7,6 +7,7 @@ import { domainMatcher, freshnessLabel, freshnessOptions, normalizeDomains, SEAR
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type Provider = "exa" | "firecrawl" | "mistral";
 export type SearchQuality = "fast" | "balanced" | "deep";
+export const DEFAULT_SEARCH_LIMIT = 8;
 export interface SearchInput {
   query: string;
   provider?: Provider;
@@ -21,7 +22,7 @@ export interface SearchInput {
 }
 export interface SearchHit { title: string; url: string; snippet: string; published?: string; dateUncertain?: boolean }
 export interface SearchDiagnostics { received: number; invalid: number; duplicate: number; outsideDomains: number; omitted: number; excludedDomains?: number; outsideDates?: number; uncertainDates?: number }
-export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: "keyless" | "api-key"; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number }
+export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: "keyless" | "api-key"; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number; elapsedMs?: number }
 
 /** Strip terminal controls from remote text before it reaches any renderer. */
 export function cleanText(value: unknown, limit = 1200): string {
@@ -74,7 +75,7 @@ export function searchRequest(input: SearchInput, provider: Provider) {
   }
   const query = input.query.trim();
   if (!query || query.length > 500) throw new Error("Search query must contain 1–500 characters.");
-  const limit = input.limit ?? 5;
+  const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("Search limit must be between 1 and 10.");
   const domains = normalizeDomains(input.domains);
   const excluded = normalizeDomains(input.exclude_domains);
@@ -88,7 +89,7 @@ export function searchRequest(input: SearchInput, provider: Provider) {
   const filter = domains.length ? { includeDomains: provider === "exa" ? domains : [...new Set(domains.map((domain) => domain.split("/")[0]!))] } : {};
   if (provider === "mistral") return mistralSearchRequest(query, limit, domains);
   return provider === "exa"
-    ? { url: "https://api.exa.ai/search", body: { query, numResults: limit, type: quality === "balanced" ? "auto" : quality, contents: { highlights: true, ...freshness }, ...(additionalQueries ? { additionalQueries } : {}), ...filter, ...(excluded.length ? { excludeDomains: excluded } : {}), ...(input.category ? { category: input.category } : {}), ...dates } }
+    ? { url: "https://api.exa.ai/search", body: { query, numResults: limit, type: quality === "balanced" ? "auto" : quality, contents: { highlights: { query, maxCharacters: 1200 }, ...freshness }, ...(additionalQueries ? { additionalQueries } : {}), ...filter, ...(excluded.length ? { excludeDomains: excluded } : {}), ...(input.category ? { category: input.category } : {}), ...dates } }
     : { url: "https://api.firecrawl.dev/v2/search", body: { query, limit, sources: ["web"], timeout: 25_000, ...filter, ...dates } };
 }
 
@@ -122,11 +123,12 @@ export function inspectResults(raw: unknown, provider: Provider, limit: number, 
     seen.add(identity);
     if (results.length >= limit) { diagnostics.omitted++; continue; }
     if (dateMatch === "uncertain") diagnostics.uncertainDates!++;
-    const highlights = Array.isArray(row.highlights) ? row.highlights.filter((h: unknown) => typeof h === "string").join(" ") : "";
+    // Empty or repeated highlights should not hide a useful description.
+    const highlights = Array.isArray(row.highlights) ? [...new Set<string>(row.highlights.map((h: unknown) => cleanText(h)).filter(Boolean))].join(" ") : "";
     results.push({
       url,
       title: cleanText(row.title, 240) || new URL(url).hostname,
-      snippet: cleanText(highlights || row.description || row.text),
+      snippet: cleanText(highlights) || cleanText(row.description) || cleanText(row.text),
       ...(typeof row.publishedDate === "string" ? { published: cleanText(row.publishedDate, 40) } : {}),
       ...(dateMatch === "uncertain" ? { dateUncertain: true } : {}),
     });
@@ -162,6 +164,7 @@ export async function searchWeb(
   env: Record<string, string | undefined> = process.env,
   request: Fetch = fetch,
 ): Promise<SearchResult> {
+  const started = performance.now();
   signal?.throwIfAborted();
   const provider = selectProvider(input.provider ?? (input.quality === "fast" || input.quality === "deep" ? "exa" : undefined), env);
   const { url, body } = searchRequest(input, provider);
@@ -174,12 +177,12 @@ export async function searchWeb(
   const timeout = AbortSignal.timeout(input.quality === "deep" || provider === "mistral" ? 60_000 : 30_000);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   if (provider === "exa" && exaAccess(env) === "keyless") {
-    if (input.quality === "deep") throw new Error("Deep Exa search requires PI_EXA_ACCESS=api-key and EXA_API_KEY. Keyless access supports balanced and fast modes. No request was sent.");
-    const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? 5, type: input.quality === "fast" ? "fast" : "auto",
+    if (input.quality === "deep") throw new Error("Deep Exa search requires EXA_API_KEY. Public access supports balanced and fast modes. No request was sent.");
+    const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? DEFAULT_SEARCH_LIMIT, type: input.quality === "fast" ? "fast" : "auto",
       ...(domains.length ? { includeDomains: domains } : {}), ...(excludedDomains.length ? { excludeDomains: excludedDomains } : {}), ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours), ...dateRangeFilter(input.date_range, "exa") }, requestSignal, request);
     requestSignal.throwIfAborted();
     return { provider, access: "keyless", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: input.quality === "fast" ? "fast" : "auto",
-      ...provenance, ...inspectResults(raw, "exa", input.limit ?? 5, domains, input.date_range, excludedDomains) };
+      ...provenance, ...inspectResults(raw, "exa", input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains), elapsedMs: Math.round(performance.now() - started) };
   }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (provider === "exa") headers["x-api-key"] = key!;
@@ -197,7 +200,7 @@ export async function searchWeb(
   }
   const raw = await boundedJson(response);
   requestSignal.throwIfAborted();
-  return { provider, access: "api-key", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : provider === "mistral" ? "web_search citations" : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? 5, domains, input.date_range, excludedDomains) };
+  return { provider, access: "api-key", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : provider === "mistral" ? "web_search citations" : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains), elapsedMs: Math.round(performance.now() - started) };
 }
 
 export function searchConstraints(result: SearchResult): string[] {

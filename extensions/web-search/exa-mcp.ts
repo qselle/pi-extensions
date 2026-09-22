@@ -4,7 +4,7 @@ import { requestWithRetry } from "./retry.ts";
 const ENDPOINT = "https://mcp.exa.ai/mcp?tools=";
 const PROTOCOL = "2025-06-18";
 const LIMIT = 2_000_000;
-const RETRY_HINT = "Try again later, or explicitly select PI_EXA_ACCESS=api-key with EXA_API_KEY. No provider or access mode was changed.";
+const RETRY_HINT = "Try again later, or set EXA_API_KEY for API access. No provider or access mode was changed.";
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -85,7 +85,7 @@ export interface ExaMcpInput {
 }
 
 export async function searchExaKeyless(input: ExaMcpInput, signal: AbortSignal, request: Fetch): Promise<unknown> {
-  const result = await callExaKeyless("web_search_advanced_exa", { ...input, enableHighlights: true, highlightsMaxCharacters: 1200, textMaxCharacters: 1200, enableSummary: false }, signal, request);
+  const result = await callExaKeyless("web_search_advanced_exa", { ...input, enableHighlights: true, highlightsQuery: input.query, highlightsMaxCharacters: 1200, textMaxCharacters: 1200, enableSummary: false }, signal, request);
   if (record(result.structuredContent) && Array.isArray(result.structuredContent.results)) return result.structuredContent;
   if (Array.isArray(result.content) && result.content.length === 1) {
     const part = result.content[0];

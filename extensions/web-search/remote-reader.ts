@@ -15,7 +15,7 @@ export async function readExaPage(input: ReadInput, signal?: AbortSignal, env: R
   if (!Number.isInteger(budget) || budget < 100 || budget > 8000) throw new Error("Budget must be between 100 and 8000 tokens.");
   const access = exaAccess(env);
   const freshness = freshnessOptions(input.max_age_hours);
-  if (input.max_age_hours !== undefined && access === "keyless") throw new Error("Keyless Exa page reading does not expose freshness controls. Use ax for a direct fetch, or configure PI_EXA_ACCESS=api-key and EXA_API_KEY. No request was sent.");
+  if (input.max_age_hours !== undefined && access === "keyless") throw new Error("Public Exa page reading does not expose freshness controls. Use ax for a direct fetch, or set EXA_API_KEY. No request was sent.");
   const deadline = AbortSignal.timeout(30_000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   requestSignal.throwIfAborted();

@@ -25,7 +25,7 @@ test("default keyless Exa negotiates MCP and preserves filtering, bounds and sou
     { url: "https://example.com.evil.test/" },
     { url: "https://user:secret@example.com/" },
   ])) });
-  const result = await searchWeb({ query: " public query ", domains: [" EXAMPLE.COM "], limit: 2, date_range: { start: "2026-01-01", end: "2026-09-20" } }, undefined, { EXA_API_KEY: "unused-account-key", FIRECRAWL_API_KEY: "unused-secret" }, fixture.request);
+  const result = await searchWeb({ query: " public query ", domains: [" EXAMPLE.COM "], limit: 2, date_range: { start: "2026-01-01", end: "2026-09-20" } }, undefined, { FIRECRAWL_API_KEY: "unused-secret" }, fixture.request);
   expect(result.access).toBe("keyless");
   expect(result.provider).toBe("exa");
   expect(result.results).toEqual([{ url: "https://docs.example.com/guide#one", title: "Source", snippet: "x".repeat(1200), dateUncertain: true }]);
@@ -37,7 +37,7 @@ test("default keyless Exa negotiates MCP and preserves filtering, bounds and sou
   expect(search.message.params).toEqual({ name: "web_search_advanced_exa", arguments: {
     query: "public query", numResults: 2, type: "auto", includeDomains: ["example.com"],
     startPublishedDate: "2026-01-01T00:00:00.000Z", endPublishedDate: "2026-09-20T23:59:59.999Z",
-    enableHighlights: true, highlightsMaxCharacters: 1200, textMaxCharacters: 1200, enableSummary: false,
+    enableHighlights: true, highlightsQuery: "public query", highlightsMaxCharacters: 1200, textMaxCharacters: 1200, enableSummary: false,
   } });
   for (const [index, { url, init }] of fixture.calls.entries()) {
     expect(url).toBe("https://mcp.exa.ai/mcp?tools=web_search_advanced_exa");
@@ -69,18 +69,18 @@ test("keyless search preserves path case, category and freshness without using c
     expect(args).toMatchObject({ maxAgeHours: 0, category: "news", includeDomains: ["docs.example.com/API"], excludeDomains: ["docs.example.com/API/old"] });
     return rpc(payload([{ url: "https://docs.example.com/API/current" }, { url: "https://docs.example.com/API/old/item" }]));
   } });
-  const result = await searchWeb({ query: "q", domains: [" DOCS.EXAMPLE.COM/API "], exclude_domains: ["docs.example.com/API/old"], category: "news", max_age_hours: 0 }, undefined, { EXA_API_KEY: "unused" }, fixture.request);
+  const result = await searchWeb({ query: "q", domains: [" DOCS.EXAMPLE.COM/API "], exclude_domains: ["docs.example.com/API/old"], category: "news", max_age_hours: 0 }, undefined, {}, fixture.request);
   expect(result.access).toBe("keyless");
   expect(result.maxAgeHours).toBe(0);
   expect(result.category).toBe("news");
   expect(result.results.map((row) => row.url)).toEqual(["https://docs.example.com/API/current"]);
-  expect(JSON.stringify(fixture.calls)).not.toContain("unused");
+  expect(fixture.calls.some(({ init }) => new Headers(init.headers).has("x-api-key"))).toBe(false);
 });
 
 test("explicit account access selects the direct API and never falls back to anonymous search on failure", async () => {
   for (const status of [200, 401, 429]) {
     const requests: string[] = [];
-    const pending = searchWeb({ query: "q" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "optional-key" }, async (url, init) => {
+    const pending = searchWeb({ query: "q" }, undefined, { EXA_API_KEY: "optional-key" }, async (url, init) => {
       requests.push(url);
       expect(new Headers(init?.headers).get("x-api-key")).toBe("optional-key");
       return status === 200 ? Response.json({ results: [] }) : new Response("hidden error", { status });

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cleanText, formatSearch, normalizeResults, searchRequest, searchWeb, selectProvider, webUrl } from "./client.ts";
 
 test("Exa is the default even without keys; other providers require explicit selection and keys", async () => {
-  expect(selectProvider(undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" })).toBe("exa");
+  expect(selectProvider(undefined, { EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" })).toBe("exa");
   expect(selectProvider(undefined, { FIRECRAWL_API_KEY: "y" })).toBe("exa");
   expect(selectProvider("exa", {})).toBe("exa");
   expect(selectProvider("firecrawl", { FIRECRAWL_API_KEY: "y" })).toBe("firecrawl");
@@ -12,7 +12,7 @@ test("Exa is the default even without keys; other providers require explicit sel
 });
 
 test("search validates controls and maps both documented provider contracts", () => {
-  expect(searchRequest({ query: " q ", domains: ["EXAMPLE.COM"] }, "exa").body).toEqual({ query: "q", numResults: 5, type: "auto", contents: { highlights: true }, includeDomains: ["example.com"] });
+  expect(searchRequest({ query: " q ", domains: ["EXAMPLE.COM"] }, "exa").body).toEqual({ query: "q", numResults: 8, type: "auto", contents: { highlights: { query: "q", maxCharacters: 1200 } }, includeDomains: ["example.com"] });
   expect(searchRequest({ query: "q", limit: 2 }, "firecrawl").body).toEqual({ query: "q", limit: 2, sources: ["web"], timeout: 25_000 });
   for (const input of [{ query: " " }, { query: "q", limit: 100 }, { query: "q", domains: ["https://example.com/"] }]) {
     expect(() => searchRequest(input, "exa")).toThrow();
@@ -40,7 +40,7 @@ test("results preserve attribution, remove controls, deduplicate URLs and cap sn
 test("HTTP request uses expected authentication, cancellation, and no redirects", async () => {
   for (const provider of ["exa", "firecrawl"] as const) {
     let captured: RequestInit | undefined;
-    const result = await searchWeb({ query: "q", provider }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "a", FIRECRAWL_API_KEY: "b" }, (async (_url, init) => {
+    const result = await searchWeb({ query: "q", provider }, undefined, { EXA_API_KEY: "a", FIRECRAWL_API_KEY: "b" }, (async (_url, init) => {
       captured = init;
       return Response.json(provider === "exa" ? { results: [] } : { success: true, data: { web: [] } });
     }) as import("./client.ts").Fetch);
@@ -51,9 +51,34 @@ test("HTTP request uses expected authentication, cancellation, and no redirects"
   }
 });
 
+test("a key alone enables direct search and deep mode without exposing the key in results", async () => {
+  for (const quality of ["balanced", "deep"] as const) {
+    const requests: string[] = [];
+    const result = await searchWeb({ query: "TaskGroup cancellation", quality }, undefined, { EXA_API_KEY: " private-key " }, async (url, init) => {
+      requests.push(url);
+      expect(new Headers(init?.headers).get("x-api-key")).toBe("private-key");
+      expect(JSON.parse(String(init?.body))).toMatchObject({ numResults: 8, contents: { highlights: { query: "TaskGroup cancellation", maxCharacters: 1200 } } });
+      return Response.json({ results: [{ url: "https://docs.python.org/", title: "Python docs" }] });
+    });
+    expect(requests).toEqual(["https://api.exa.ai/search"]);
+    expect(result.access).toBe("api-key");
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(result)).not.toContain("private-key");
+  }
+});
+
+test("empty highlights fall back to useful text and repeated excerpts are removed", () => {
+  const result = normalizeResults({ results: [
+    { url: "https://example.com/one", highlights: [" ", 42, "\x1b[31m"], description: "Useful description" },
+    { url: "https://example.com/two", highlights: [" Same excerpt. ", "Same excerpt.", "Another excerpt."], description: "Unused" },
+    { url: "https://example.com/three", description: " ", text: "Useful page text" },
+  ] }, "exa", 8);
+  expect(result.map((hit) => hit.snippet)).toEqual(["Useful description", "Same excerpt. Another excerpt.", "Useful page text"]);
+});
+
 test("HTTP errors never echo remote bodies or retry billable requests", async () => {
   let calls = 0;
-  await expect(searchWeb({ query: "q" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "private-key" }, (async () => {
+  await expect(searchWeb({ query: "q" }, undefined, { EXA_API_KEY: "private-key" }, (async () => {
     calls++;
     return new Response("private-key", { status: 401 });
   }) as import("./client.ts").Fetch)).rejects.toThrow("Check EXA_API_KEY");
@@ -61,11 +86,11 @@ test("HTTP errors never echo remote bodies or retry billable requests", async ()
 });
 
 test("oversized responses fail and pre-cancelled searches never send", async () => {
-  await expect(searchWeb({ query: "q" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x" }, (async () => new Response("x".repeat(2_000_001))) as import("./client.ts").Fetch)).rejects.toThrow("exceeded 2 MB");
+  await expect(searchWeb({ query: "q" }, undefined, { EXA_API_KEY: "x" }, (async () => new Response("x".repeat(2_000_001))) as import("./client.ts").Fetch)).rejects.toThrow("exceeded 2 MB");
   const controller = new AbortController();
   controller.abort();
   let called = false;
-  await expect(searchWeb({ query: "q" }, controller.signal, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x" }, (() => { called = true; }) as never)).rejects.toThrow();
+  await expect(searchWeb({ query: "q" }, controller.signal, { EXA_API_KEY: "x" }, (() => { called = true; }) as never)).rejects.toThrow();
   expect(called).toBe(false);
   expect(() => webUrl("file:///etc/passwd")).toThrow();
 });
@@ -84,7 +109,7 @@ test("domain restrictions are enforced locally with honest exclusion counts", as
       null,
     ];
     const result = await searchWeb({ query: "q", provider, limit: 2, domains: [" EXAMPLE.COM "] }, undefined,
-      { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async () => Response.json(provider === "exa" ? { results: rows } : { data: { web: rows } }));
+      { EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async () => Response.json(provider === "exa" ? { results: rows } : { data: { web: rows } }));
     expect(result.results.map((hit) => hit.title)).toEqual(["Docs", "Root"]);
     expect(result.diagnostics).toEqual({ received: 9, invalid: 2, duplicate: 1, outsideDomains: 3, omitted: 1 });
     expect(formatSearch(result)).toContain("3 outside requested domains");
@@ -95,7 +120,7 @@ test("domain restrictions are enforced locally with honest exclusion counts", as
 test("empty provider results differ from discarded results without leaking rejected content", async () => {
   for (const rows of [[], [{ url: "https://private:password@example.com" }], [{ url: "https://unrelated.test" }]]) {
     const result = await searchWeb({ query: "q", domains: ["example.com"] }, undefined,
-      { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x" }, async () => Response.json({ results: rows }));
+      { EXA_API_KEY: "x" }, async () => Response.json({ results: rows }));
     const text = formatSearch(result);
     expect(text).toContain(rows.length ? "No usable results remain" : "No results found");
     expect(text).not.toContain("password");
@@ -146,7 +171,7 @@ test("invalid, impossible or reversed calendar windows fail before any request",
     { start: "2023-02-29", end: "2023-03-01" }, { start: "2024-04-31", end: "2024-05-01" },
     { start: "2024-01-02", end: "2024-01-01" }, { start: "2024-1-1", end: "2024-01-02" },
     { start: "2024-01-01T00:00:00Z", end: "2024-01-02" },
-  ]) await expect(searchWeb({ query: "q", date_range }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x" }, (async () => { calls++; return Response.json({ results: [] }); }))).rejects.toThrow("date_range");
+  ]) await expect(searchWeb({ query: "q", date_range }, undefined, { EXA_API_KEY: "x" }, (async () => { calls++; return Response.json({ results: [] }); }))).rejects.toThrow("date_range");
   expect(calls).toBe(0);
 });
 
@@ -162,7 +187,7 @@ test("quality routes deliberately and preserves filters and requested-mode prove
   for (const quality of ["fast", "balanced", "deep"] as const) {
     let calls = 0;
     const result = await searchWeb({ query: "q", quality, domains: ["example.com"], date_range: { start: "2024-01-01", end: "2024-01-31" }, ...(quality === "deep" ? { additional_queries: [" variation "] } : {}) }, undefined,
-      { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async (url, init) => {
+      { EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async (url, init) => {
         calls++;
         expect(url).toBe("https://api.exa.ai/search");
         const body = JSON.parse(init!.body as string);
@@ -184,7 +209,7 @@ test("unsupported quality/provider combinations and query variations fail withou
   const request = async () => { calls++; return Response.json({}); };
   await expect(searchWeb({ query: "q", quality: "deep" }, undefined, {}, request)).rejects.toThrow("EXA_API_KEY");
   for (const quality of ["fast", "deep"] as const) {
-    await expect(searchWeb({ query: "q", quality, provider: "firecrawl" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, request)).rejects.toThrow("requires Exa");
+    await expect(searchWeb({ query: "q", quality, provider: "firecrawl" }, undefined, { EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, request)).rejects.toThrow("requires Exa");
   }
   for (const input of [
     { quality: "unknown" }, { additional_queries: ["q"] },
@@ -192,13 +217,13 @@ test("unsupported quality/provider combinations and query variations fail withou
     { quality: "deep", additional_queries: [" "] },
     { quality: "deep", additional_queries: ["q".repeat(501)] },
     { quality: "deep", additional_queries: Array(6).fill("q") },
-  ]) await expect(searchWeb({ query: "q", ...input } as never, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x" }, request)).rejects.toThrow("No request was sent");
+  ]) await expect(searchWeb({ query: "q", ...input } as never, undefined, { EXA_API_KEY: "x" }, request)).rejects.toThrow("No request was sent");
   expect(calls).toBe(0);
 });
 
 test("deep failures never retry or fall back to another billable provider", async () => {
   let calls = 0;
-  await expect(searchWeb({ query: "q", quality: "deep" }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async () => {
+  await expect(searchWeb({ query: "q", quality: "deep" }, undefined, { EXA_API_KEY: "x", FIRECRAWL_API_KEY: "y" }, async () => {
     calls++; return new Response("unavailable", { status: 503 });
   })).rejects.toThrow("503");
   expect(calls).toBe(1);

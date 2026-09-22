@@ -11,7 +11,7 @@ test("publication filtering respects UTC day boundaries and explicit precision",
 test("registered request path rejects known old sources and labels uncertain dates", async () => {
   for (const provider of ["exa", "firecrawl"] as const) {
     const rows = ["2020-01-01", "2024-02-29", "2024", undefined].map((publishedDate, index) => ({ url: `https://example.com/${index}`, publishedDate }));
-    const result = await searchWeb({ query: "q", provider, date_range: window }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "fixture", FIRECRAWL_API_KEY: "fixture" }, async () => Response.json(provider === "exa" ? { results: rows } : { data: { web: rows } }));
+    const result = await searchWeb({ query: "q", provider, date_range: window }, undefined, { EXA_API_KEY: "fixture", FIRECRAWL_API_KEY: "fixture" }, async () => Response.json(provider === "exa" ? { results: rows } : { data: { web: rows } }));
     expect(result.results).toHaveLength(3);
     expect(result.diagnostics?.outsideDates).toBe(1);
     expect(result.diagnostics?.uncertainDates).toBe(2);

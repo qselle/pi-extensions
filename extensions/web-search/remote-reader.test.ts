@@ -4,7 +4,7 @@ import { formatPage } from "./reader.ts";
 import { pageContentFailure } from "./page-content.ts";
 import type { Fetch } from "./client.ts";
 
-const keyed = { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "key" };
+const keyed = { EXA_API_KEY: "key" };
 function keylessPage(text: string): Fetch {
   return async (_url, init) => {
     const message = JSON.parse(String(init?.body));
@@ -13,6 +13,21 @@ function keylessPage(text: string): Fetch {
     return Response.json({ jsonrpc: "2.0", id: message.id, result });
   };
 }
+
+test("remote page reading shares automatic key detection", async () => {
+  const page = await readExaPage({ url: "https://example.com" }, undefined, { EXA_API_KEY: " key " }, async (url, init) => {
+    expect(url).toBe("https://api.exa.ai/contents");
+    expect(new Headers(init?.headers).get("x-api-key")).toBe("key");
+    return Response.json({ results: [{ text: "Direct page content." }] });
+  });
+  expect(page.access).toBe("api-key");
+  const publicRequest = keylessPage("Public page content.");
+  const publicPage = await readExaPage({ url: "https://example.com" }, undefined, {}, async (url, init) => {
+    expect(new Headers(init?.headers).has("x-api-key")).toBe(false);
+    return publicRequest(url, init);
+  });
+  expect(publicPage.access).toBe("keyless");
+});
 
 test("both remote access modes reject empty and challenge-only success payloads", async () => {
   for (const text of ["   ", "\x1b[31m\x1b[0m", "# Just a moment...", "403 Forbidden", "Verify you are human"]) {
