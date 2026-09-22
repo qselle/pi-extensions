@@ -239,8 +239,8 @@ test("coexists with goal context during an automatic goal run", async () => {
   overlay.setViewport(120, 40);
   const rendered = overlay.render(58).join("\n");
   expect(rendered).toContain("Goal ● ACTIVE");
-  expect(rendered).toContain("Plan 1/3");
-  expect(rendered.indexOf("Goal ● ACTIVE")).toBeLessThan(rendered.indexOf("Plan 1/3"));
+  expect(rendered).not.toContain("Plan 1/3");
+  expect(overlay.renderCompact(120).join("\n")).toContain("Plan 1/3 · ● Implement extension");
 
   await pi.emit("tool_execution_end", {}, ctx);
   await pi.emit("agent_settled", {}, ctx);
@@ -287,4 +287,69 @@ test("a late clear confirmation cannot remove a replaced plan", async () => {
   answer(true); await clearing;
   expect(pi.entries.at(-1).data.plan.items[0].step).toBe("New work");
   await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("plan display defaults to one line and restores compact, card, and hidden choices per branch", async () => {
+  const { pi, ctx } = harness();
+  const overlay = new OverlayStackView(plainTheme);
+  overlay.setViewport(120, 80);
+  const command = pi.commands.get("plan");
+  try {
+    await pi.emit("session_start", {}, ctx);
+    await pi.tools.get("update_plan").execute("plan", activePlan);
+    const initial = [...pi.entries];
+    expect(overlay.render(48)).toEqual([]);
+    expect(overlay.renderCompact(120)).toHaveLength(1);
+    expect(overlay.renderCompact(120)[0]).toContain("Implement extension");
+
+    await command.handler("card", ctx);
+    const cardBranch = [...pi.entries];
+    expect(overlay.preferredWidth()).toBe(48);
+    expect(overlay.render(48).join("\n")).toContain("Next  Verify integration");
+    expect(overlay.render(48).length).toBeLessThanOrEqual(5);
+    expect(overlay.renderCompact(120)).toEqual([]);
+
+    await command.handler("hide", ctx);
+    const hiddenBranch = [...pi.entries];
+    expect(overlay.render(48)).toEqual([]);
+    expect(overlay.renderCompact(120)).toEqual([]);
+    const [context] = await pi.emit("context", { messages: [] }, ctx);
+    expect(context.messages[0].content).toContain("Implement extension");
+    await command.handler("", ctx);
+    expect(pi.entries).toHaveLength(hiddenBranch.length);
+
+    await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => cardBranch } });
+    expect(overlay.render(48).join("\n")).toContain("Plan 1/3");
+    await pi.emit("session_start", {}, { ...ctx, sessionManager: { getBranch: () => hiddenBranch } });
+    expect(overlay.renderCompact(120)).toEqual([]);
+    expect(overlay.render(48)).toEqual([]);
+    await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => initial } });
+    expect(overlay.renderCompact(120)).toHaveLength(1);
+
+    await command.handler("compact", ctx);
+    expect(pi.entries.at(-1)).toMatchObject({ customType: "plan-view", data: { version: 1, view: "compact" } });
+    await pi.tools.get("update_plan").execute("finished", { plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })) });
+    expect(overlay.renderCompact(120)).toEqual([]);
+  } finally {
+    await pi.emit("session_shutdown", {}, ctx);
+  }
+});
+
+test("malformed display entries keep the default and failed saves do not change the display", async () => {
+  const { pi, ctx } = harness();
+  const overlay = new OverlayStackView(plainTheme);
+  overlay.setViewport(100, 30);
+  try {
+    await pi.tools.get("update_plan").execute("plan", activePlan);
+    for (const data of [null, "hide", { version: 2, view: "hide" }, { version: 1, view: "unknown" }]) {
+      pi.entries.push({ type: "custom", customType: "plan-view", data });
+    }
+    await pi.emit("session_start", {}, ctx);
+    expect(overlay.renderCompact(100)).toHaveLength(1);
+    pi.appendEntry = () => { throw new Error("save failed"); };
+    await expect(pi.commands.get("plan").handler("hide", ctx)).rejects.toThrow("save failed");
+    expect(overlay.renderCompact(100)).toHaveLength(1);
+  } finally {
+    await pi.emit("session_shutdown", {}, ctx);
+  }
 });

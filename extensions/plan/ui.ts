@@ -1,5 +1,4 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { expansionHint } from "../../lib/tool-ui.ts";
 import {
   matchesKey,
   truncateToWidth,
@@ -11,6 +10,7 @@ import {
   currentPlanItem,
   planStats,
   planRows,
+  planLeaves,
   type PlanItem,
   type PlanItemStatus,
   type PlanState,
@@ -42,8 +42,18 @@ export class PlanOverlayCard implements Component {
 }
 
 export function planOverlayTitle(plan: PlanState, theme: Theme): string {
-  const stats = planStats(plan.items);
-  return theme.bold(` Plan ${stats.finished}/${stats.total} `);
+  return theme.bold(` Plan ${progressLabel(plan)} `);
+}
+
+export function renderPlanSummary(plan: PlanState, width: number, theme: Theme): string {
+  if (width <= 0 || planStats(plan.items).unfinished === 0) return "";
+  const current = currentPlanItem(plan)!;
+  const label = `${theme.fg("muted", `Plan ${progressLabel(plan)}`)}${theme.fg("dim", " · ")}`;
+  const body = `${theme.fg("accent", "●")} ${theme.fg("text", current.step)}`;
+  const hint = width >= 80 ? theme.fg("dim", "/plan") : "";
+  const available = Math.max(0, width - (hint ? visibleWidth(hint) + 2 : 0));
+  const line = truncateToWidth(label + body, available, "…");
+  return line + (hint ? " ".repeat(Math.max(2, width - visibleWidth(line) - visibleWidth(hint))) + hint : "");
 }
 
 export function renderPlanOverlayBody(
@@ -55,21 +65,12 @@ export function renderPlanOverlayBody(
   const stats = planStats(plan.items);
   if (stats.unfinished === 0 || width <= 0 || maxHeight <= 0) return [];
 
-  const body: string[] = [];
-  if (plan.explanation && maxHeight >= 3) body.push(theme.fg("dim", theme.italic(truncateToWidth(plan.explanation, width, "…"))));
-
-  const itemBudget = Math.max(1, maxHeight - body.length);
-  const rows = planRows(plan.items).map(({ item, depth }) => ({ ...item, step: "  ".repeat(depth) + item.step }));
-  const showHints = itemBudget >= 4 && rows.length > itemBudget;
-  const selection = selectOverlayItems(rows, showHints ? itemBudget - 2 : itemBudget);
-  if (showHints && selection.hiddenBefore > 0) body.push(theme.fg("dim", `… ${selection.hiddenBefore} earlier`));
-  for (const item of selection.items) body.push(itemLine(item, theme, width));
-  if (showHints && selection.hiddenAfter > 0) body.push(theme.fg("dim", `… ${selection.hiddenAfter} later`));
-
-  if (body.length <= maxHeight) return body.map((line) => truncateToWidth(line, width, ""));
-  const visible = body.slice(0, maxHeight);
-  visible[maxHeight - 1] = theme.fg("dim", "… /plan for full details");
-  return visible.map((line) => truncateToWidth(line, width, ""));
+  const current = currentPlanItem(plan)!;
+  const next = planLeaves(plan.items).find((item) => item.status === "pending");
+  const body = [itemLine(current, theme, width)];
+  if (next && maxHeight > 1) body.push(truncateToWidth(theme.fg("dim", "Next  ") + theme.fg("muted", next.step), width, "…"));
+  if (stats.unfinished > 2 && maxHeight > 2) body.push(truncateToWidth(theme.fg("dim", `+${stats.unfinished - 2} more · /plan`), width, "…"));
+  return body;
 }
 
 export class PlanPanel implements Component {
@@ -87,7 +88,7 @@ export class PlanPanel implements Component {
   }
   private rows() { return planRows(this.plan.items, this.collapsed); }
   handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { this.done("close"); return; }
+    if (data === "q" || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { this.done("close"); return; }
     if (matchesKey(data, "c") && this.plan.items.length > 0) { this.done("clear"); return; }
     const rows = this.rows();
     const index = Math.max(0, rows.findIndex((row) => row.path === this.selected));
@@ -106,11 +107,16 @@ export class PlanPanel implements Component {
     this.requestRender();
   }
   render(width: number): string[] {
+    if (width <= 0) return [];
     const stats = planStats(this.plan.items);
     const innerWidth = Math.max(1, width - 4);
     const maxRows = Math.max(1, Math.floor(this.terminalRows() * 0.8));
+    if (maxRows < 8) {
+      return [renderPlanSummary(this.plan, width, this.theme) || this.theme.fg("muted", `Plan ${progressLabel(this.plan)}`),
+        this.theme.fg("dim", panelHint(this.plan, width))].slice(0, maxRows).map((line) => truncateToWidth(line, width, "…"));
+    }
     const body = [this.theme.fg("muted", `${stats.finished}/${stats.total} finalized · ${stats.completed} completed${stats.cancelled ? ` · ${stats.cancelled} cancelled` : ""}`)];
-    if (this.plan.explanation) body.push(...wrapTextWithAnsi(this.theme.fg("dim", this.plan.explanation), innerWidth).slice(0, 2));
+    if (this.plan.explanation && maxRows >= 12) body.push(...wrapTextWithAnsi(this.theme.fg("dim", this.plan.explanation), innerWidth).slice(0, 2));
     body.push("");
     const rows = this.rows();
     const budget = Math.max(1, maxRows - body.length - 4);
@@ -122,7 +128,7 @@ export class PlanPanel implements Component {
     }
     if (!rows.length) body.push(this.theme.fg("dim", "No plan yet. Use update_plan."));
     if (rows.length > budget) body.push(this.theme.fg("dim", `${start + 1}–${Math.min(rows.length, start + budget)} / ${rows.length} visible steps`));
-    body.push(this.theme.fg("dim", "↑↓ move · ←→ fold · space toggle · " + panelHint(this.plan)));
+    body.push(this.theme.fg("dim", panelHint(this.plan, innerWidth)));
     return frame(" Execution plan ", body, width, this.theme, "border").slice(0, maxRows);
   }
   invalidate(): void {}
@@ -136,19 +142,19 @@ export class PlanToolResult implements Component {
   ) {}
 
   render(width: number): string[] {
+    if (width <= 0) return [];
     const stats = planStats(this.plan.items);
+    const title = !stats.total ? "Plan cleared" : stats.unfinished ? "Plan updated" : stats.cancelled ? "Plan closed" : "Plan complete";
     const lines = [
-      `${this.theme.fg("accent", "•")} ${this.theme.bold("Plan updated")} ${this.theme.fg("muted", `${stats.finished}/${stats.total}`)}`,
+      `${this.theme.fg("accent", "•")} ${this.theme.bold(title)}${stats.total ? this.theme.fg("muted", ` · ${progressLabel(this.plan)}`) : ""}`,
     ];
     if (!this.expanded) {
-      const current = currentPlanItem(this.plan);
-      if (current) lines.push(this.theme.fg("text", `  ${current.step}`));
-      lines.push(this.theme.fg("dim", `  ${expansionHint()} · /plan`));
-      return width <= 0 ? [] : lines.map(line => truncateToWidth(line, width, "…"));
+      const current = stats.unfinished ? currentPlanItem(this.plan) : undefined;
+      if (current) lines[0] += this.theme.fg("muted", ` · ${current.step}`);
+      return lines.map(line => truncateToWidth(line, width, "…"));
     }
     if (this.plan.explanation) lines.push(this.theme.fg("dim", truncateToWidth(this.plan.explanation, width, "…")));
     for (const { item, depth } of planRows(this.plan.items)) lines.push(itemLine({ ...item, step: "  ".repeat(depth) + item.step }, this.theme, width));
-    if (this.plan.items.length === 0) lines.push(this.theme.fg("dim", "Plan cleared"));
     return lines.map((line) => truncateToWidth(line, width, ""));
   }
 
@@ -158,26 +164,16 @@ export class PlanToolResult implements Component {
 export function renderPlanText(plan: PlanState): string {
   const stats = planStats(plan.items);
   const current = currentPlanItem(plan);
-  const lines = [`Plan ${stats.finished}/${stats.total}`];
+  const lines = [`Plan ${progressLabel(plan)}`];
   if (plan.explanation) lines.push(plan.explanation);
   if (current && stats.unfinished > 0) lines.push(`Current: ${current.step}`);
   for (const { item, depth } of planRows(plan.items)) lines.push(`${"  ".repeat(depth)}${plainIcon(item.status)} ${item.step}${groupProgress(item)}`);
   return lines.join("\n");
 }
 
-function selectOverlayItems(items: readonly PlanItem[], limit: number): {
-  items: PlanItem[];
-  hiddenBefore: number;
-  hiddenAfter: number;
-} {
-  if (items.length <= limit) return { items: [...items], hiddenBefore: 0, hiddenAfter: 0 };
-  const currentIndex = Math.max(0, items.findIndex((item) => item.status === "in_progress" && !item.children));
-  const start = Math.min(Math.max(0, currentIndex - Math.floor(limit / 2)), items.length - limit);
-  return {
-    items: items.slice(start, start + limit),
-    hiddenBefore: start,
-    hiddenAfter: items.length - start - limit,
-  };
+function progressLabel(plan: PlanState): string {
+  const stats = planStats(plan.items);
+  return `${stats.completed}/${stats.total}${stats.cancelled ? ` · ${stats.cancelled} cancelled` : ""}`;
 }
 
 function itemLine(item: PlanItem, theme: Theme, width: number): string {
@@ -216,8 +212,12 @@ function plainIcon(status: PlanItemStatus): string {
   return "○";
 }
 
-function panelHint(plan: PlanState): string {
-  return [plan.items.length > 0 ? "c clear" : undefined, "esc close"].filter(Boolean).join("  ·  ");
+function panelHint(plan: PlanState, width: number): string {
+  let help = "q/esc close";
+  for (const hint of ["↑↓ move", "←→ fold", "space toggle", ...(plan.items.length ? ["c clear"] : [])]) {
+    if (visibleWidth(`${help} · ${hint}`) <= width) help += ` · ${hint}`;
+  }
+  return help;
 }
 
 function frame(

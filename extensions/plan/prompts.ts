@@ -4,6 +4,7 @@ export const PLAN_CONTEXT_TYPE = "plan-context";
 
 export const PLAN_PROMPT_GUIDELINES = [
   "Use update_plan for meaningful multi-step implementation or investigation work, including work performed inside an active goal. Skip it for simple one-step tasks.",
+  "Prefer 3–5 short, outcome-oriented steps. Add nested steps only when they help track separate work; do not turn routine tool calls into checklist items. Supply an explanation only when the approach changes.",
   "Every update_plan call replaces the complete tactical plan. Groups may contain children up to three levels deep; group status derives from children. Keep exactly one leaf step in_progress while unfinished work remains, and update statuses as evidence is produced.",
   "A plan tracks execution, not success criteria. When a persistent goal is active, goal checks remain the durable verification contract and the plan should describe the current route through that work.",
 ];

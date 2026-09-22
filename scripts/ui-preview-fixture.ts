@@ -35,8 +35,8 @@ manager.appendCustomEntry("loop-state", encodeLoopSnapshot([
 const runtime = await createAgentSessionRuntime(async ({ cwd, agentDir, sessionManager }) => {
   const services = await createAgentSessionServices({ cwd, agentDir,
     settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "0.87.0", enableInstallTelemetry: false, enableAnalytics: false,
-      compaction: { enabled: false }, theme: join(repo, "themes/gruvbox-dark.json"), tuiMode: "fullscreen", hideThinkingBlock: true }),
-    resourceLoaderOptions: { additionalExtensionPaths: paths, noSkills: true, noPromptTemplates: true, noContextFiles: true } });
+      compaction: { enabled: false }, theme: "gruvbox-dark", tuiMode: "fullscreen", hideThinkingBlock: true }),
+    resourceLoaderOptions: { additionalExtensionPaths: paths, additionalThemePaths: [join(repo, "themes/gruvbox-dark.json")], noSkills: true, noPromptTemplates: true, noContextFiles: true } });
   const loaded = services.resourceLoader.getExtensions();
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, paths.length);
