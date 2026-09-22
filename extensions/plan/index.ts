@@ -28,11 +28,14 @@ import {
   PlanToolResult,
   planOverlayTitle,
   renderPlanOverlayBody,
+  renderPlanSummary,
   renderPlanText,
   type PlanPanelAction,
 } from "./ui.ts";
 
 const ENTRY_TYPE = "plan-state";
+const VIEW_ENTRY_TYPE = "plan-view";
+type PlanView = "compact" | "card" | "hide";
 
 const itemParameters = (depth: number): TSchema => Type.Object({
   step: Type.String({ description: "A concise execution step or group name." }),
@@ -70,15 +73,18 @@ interface TransientPlanMessage {
 export default function planExtension(pi: ExtensionAPI): void {
   let plan = createPlanState();
   let generation = 0;
+  let view: PlanView = "compact";
 
   const overlayCard = registerOverlayCard({
     id: "plan",
     order: 10,
-    width: 58,
+    width: 48,
     minBodyHeight: 1,
     minTerminalWidth: 72,
     minTerminalHeight: 12,
-    visible: () => planIsActive(plan),
+    visible: () => view !== "hide" && planIsActive(plan),
+    presentation: () => view === "compact" ? "line" : "card",
+    renderSummary: (width, theme) => renderPlanSummary(plan, width, theme),
     title: (theme) => planOverlayTitle(plan, theme),
     renderBody: (width, maxHeight, theme) => renderPlanOverlayBody(plan, width, maxHeight, theme),
   });
@@ -135,9 +141,9 @@ export default function planExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("plan", {
-    description: "Inspect or clear the current tactical execution plan: /plan [status|clear]",
+    description: "Inspect the plan or choose its display: /plan [compact|card|hide|status|clear]",
     getArgumentCompletions: (prefix) => {
-      const commands = ["status", "clear"];
+      const commands = ["compact", "card", "hide", "status", "clear"];
       const items = commands
         .filter((command) => command.startsWith(prefix.toLowerCase()))
         .map((command) => ({ value: command, label: command }));
@@ -146,9 +152,15 @@ export default function planExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       const command = args.trim().toLowerCase();
       if (!command) await showPlanPanel(ctx);
+      else if (command === "compact" || command === "card" || command === "hide") {
+        pi.appendEntry(VIEW_ENTRY_TYPE, { version: 1, view: command });
+        view = command;
+        overlayCard.invalidate();
+        ctx.ui.notify(`Plan display: ${view === "hide" ? "hidden" : view}.`, "info");
+      }
       else if (command === "status") ctx.ui.notify(plan.items.length > 0 ? renderPlanText(plan) : "No plan is set.", "info");
       else if (command === "clear") await clearPlan(ctx);
-      else ctx.ui.notify("Usage: /plan [status|clear]", "error");
+      else ctx.ui.notify("Usage: /plan [compact|card|hide|status|clear]", "error");
     },
   });
 
@@ -199,8 +211,14 @@ export default function planExtension(pi: ExtensionAPI): void {
   const restore = (ctx: ExtensionContext) => {
     generation++;
     plan = createPlanState();
+    view = "compact";
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+      if (entry.type !== "custom") continue;
+      if (entry.customType === VIEW_ENTRY_TYPE) {
+        const saved = entry.data as { version?: unknown; view?: unknown } | null;
+        if (saved?.version === 1 && (saved.view === "compact" || saved.view === "card" || saved.view === "hide")) view = saved.view;
+      }
+      if (entry.customType !== ENTRY_TYPE) continue;
       const restored = decodePlanEntry(entry.data);
       if (restored) plan = restored.plan;
     }

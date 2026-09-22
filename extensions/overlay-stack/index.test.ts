@@ -179,8 +179,33 @@ test("omits lower-priority cards that cannot fit the terminal", () => {
   const output = view.render(58).join("\n");
   expect(output).toContain("First");
   expect(output).not.toContain("Second");
+  expect(view.renderCompact(58).join("\n")).toContain("Second");
   first.unregister();
   second.unregister();
+});
+
+test("an inline workflow stays out of the overlay and switches presentation without duplication", () => {
+  let presentation: "line" | "card" = "line";
+  const handle = registerOverlayCard({
+    id: "inline-plan", order: 1, visible: () => true, width: 48,
+    presentation: () => presentation,
+    title: () => "Plan", renderBody: () => ["Current", "Next"],
+    renderSummary: () => "Plan · Current",
+  });
+  try {
+    const view = new OverlayStackView(theme);
+    view.setViewport(120, 60);
+    expect(view.canRender()).toBe(false);
+    expect(view.render(48)).toEqual([]);
+    expect(view.renderCompact(120)).toEqual(["Plan · Current"]);
+    presentation = "card";
+    expect(view.canRender()).toBe(true);
+    expect(view.preferredWidth()).toBe(48);
+    expect(view.render(48).join("\n")).toContain("Next");
+    expect(view.renderCompact(120)).toEqual([]);
+  } finally {
+    handle.unregister();
+  }
 });
 
 test("large cards share available rows and reclaim space from short cards", () => {

@@ -22,6 +22,8 @@ export interface OverlayCardDefinition {
   visible: () => boolean;
   title: (theme: Theme) => string;
   renderBody: (width: number, maxHeight: number, theme: Theme) => string[];
+  presentation?: () => "card" | "line";
+  renderSummary?: (width: number, theme: Theme) => string;
   width?: number;
   minBodyHeight?: number;
   minTerminalWidth?: number;
@@ -74,8 +76,8 @@ function visibleCards(terminalWidth: number, terminalHeight: number, includeComp
   return [...registry.cards.values()]
     .map(({ definition }) => definition)
     .filter((card) => {
-      if (!includeCompact && !fitsViewport(card, terminalWidth, terminalHeight)) return false;
       try {
+        if (!includeCompact && (card.presentation?.() === "line" || !fitsViewport(card, terminalWidth, terminalHeight))) return false;
         return card.visible();
       } catch {
         return false;
@@ -96,7 +98,8 @@ export class OverlayStackView implements Component {
   }
 
   preferredWidth(): number {
-    return Math.max(DEFAULT_WIDTH, ...visibleCards(this.terminalWidth, this.terminalHeight).map((card) => card.width ?? DEFAULT_WIDTH));
+    const cards = visibleCards(this.terminalWidth, this.terminalHeight);
+    return cards.length ? Math.max(...cards.map((card) => card.width ?? DEFAULT_WIDTH)) : DEFAULT_WIDTH;
   }
 
   canRender(): boolean {
@@ -157,22 +160,27 @@ export class OverlayStackView implements Component {
 
   invalidate(): void {}
 
-  /** Cards excluded by viewport size retain a small, non-overlapping status row. */
+  /** Inline workflows and cards that do not fit share the space above the editor. */
   renderCompact(width: number): string[] {
     const limit = Math.min(3, Math.max(0, Math.floor((this.terminalHeight - 6) / 4)));
     if (width <= 0 || !limit) return [];
+    const selected = new Set(this.selectCards(this.rowBudget()));
     const cards = visibleCards(this.terminalWidth, this.terminalHeight, true)
-      .filter((card) => !fitsViewport(card, this.terminalWidth, this.terminalHeight));
+      .filter((card) => !selected.has(card));
     const rows: string[] = [];
     let shown = 0;
     const available = cards.length > limit && limit > 1 ? limit - 1 : limit;
     for (const card of cards) {
       if (rows.length >= available) break;
       try {
-        const title = truncateToWidth(card.title(this.theme), Math.min(24, Math.max(8, Math.floor(width * 0.35))), "…");
-        const bodyWidth = width - visibleWidth(title) - 3;
-        const body = bodyWidth > 0 ? card.renderBody(bodyWidth, 1, this.theme)[0] : undefined;
-        rows.push(truncateToWidth(body ? `${title}${this.theme.fg("dim", " · ")}${body}` : title, width, "…"));
+        if (card.renderSummary) {
+          rows.push(truncateToWidth(card.renderSummary(width, this.theme), width, "…"));
+        } else {
+          const title = truncateToWidth(card.title(this.theme), Math.min(24, Math.max(8, Math.floor(width * 0.35))), "…");
+          const bodyWidth = width - visibleWidth(title) - 3;
+          const body = bodyWidth > 0 ? card.renderBody(bodyWidth, 1, this.theme)[0] : undefined;
+          rows.push(truncateToWidth(body ? `${title}${this.theme.fg("dim", " · ")}${body}` : title, width, "…"));
+        }
         shown++;
       } catch { /* A broken card must not hide the remaining workflow state. */ }
     }

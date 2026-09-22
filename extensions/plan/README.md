@@ -1,11 +1,18 @@
 # plan
 
-Shows the current multi-step execution plan in the shared workflow overlay and a full panel.
+Tracks a multi-step plan in one line above the editor, with full details on demand.
+
+```text
+Plan 1/3 · ● Verify the implementation                              /plan
+```
 
 ## Usage
 
 ```text
 /plan          Open the plan panel
+/plan compact  One progress line above the editor (default)
+/plan card     Small card with the current and next steps
+/plan hide     Hide the passive display; keep tracking
 /plan status   Print the current plan
 /plan clear    Remove the plan
 /overlay       Toggle all workflow cards
@@ -36,20 +43,24 @@ Example tool input:
 }
 ```
 
-The panel starts with the active branch expanded. Use ↑/↓ to move, ←/→ to fold
-or enter groups, and Space to toggle a group. It scrolls to the selection and
-fits terminal height. `/plan status` prints the full tree. The compact card keeps
-the active leaf visible even with a one-row allocation, and hides when every
-leaf is completed or cancelled.
+The default line shows completed/total steps and the current task. Cancelled
+steps are counted separately. Display choices follow the session branch through
+reload and navigation. Finished plans disappear from the passive display.
 
-In narrow terminals, the shared workflow host shows a compact row above the
-editor with plan progress and the active step. `/overlay hide` hides it too.
+The optional card has at most three body rows: current step, next pending step,
+and a remaining count. It falls back to the progress line in narrow terminals.
+`/overlay hide` hides either presentation.
+
+The panel starts with the active group expanded. Use ↑/↓ to move, ←/→ to fold
+or enter groups, Space to toggle a group, and `q` or Escape to close.
+`/plan status` prints the full tree. Explanations and completed steps remain
+available in the panel and expanded tool results.
 
 Plan state follows session branches and is injected only while active. Plans describe the current route through work; they do not replace persistent goal completion checks.
 
 ## Dependencies and limitations
 
-Tool results show a short receipt and the active step. Expand the result or open `/plan` for the full tree.
+Tool results use a single-line receipt. Expand the result or open `/plan` for the full tree.
 
 - Up to 3 levels, 10 siblings per group and 40 total groups/steps. Names must be
   unique within a group; repeated names in different groups are allowed.

@@ -74,6 +74,15 @@ try {
   await input('/overlay hide', 'Workflow overlay hidden');
   await snapshot('workflow-hidden', 60, 28);
   await input('/overlay show', 'Workflow overlay shown');
+  await input('/plan card', 'Plan display: card');
+  await snapshot('plan-card', 100, 34);
+  await input('/plan hide', 'Plan display: hidden');
+  await snapshot('plan-hidden', 100, 34);
+  await input('/plan compact', 'Plan display: compact');
+  await input('/plan', 'Execution plan');
+  await snapshot('plan-details-wide', 100, 34);
+  await snapshot('plan-details-narrow', 60, 28);
+  child.write('q'); await delay(100);
   await input('/transcript stable phrase across wraps', 'Transcript');
   await snapshot('search-narrow', 60, 28);
   child.write('q'); await delay(100);
@@ -92,10 +101,23 @@ try {
   assert.deepEqual(result.errors, []);
   assert.equal(result.networkAttempts, 0);
   const frame = (name) => frames.find((frame) => frame.name === name).lines.join('\n');
-  assert(frame('active-wide').includes('╭ Plan 1/3'));
-  assert(frame('active-narrow').includes('Plan 1/3  · ● Improve research tools'));
-  assert(frame('settled-narrow').includes('Plan 1/3  · ● Improve research tools'));
-  assert(!frame('workflow-hidden').includes('Plan 1/3  · ● Improve research tools'));
+  for (const name of ['active-wide', 'active-narrow', 'settled-wide', 'settled-narrow']) {
+    assert(!frame(name).includes('╭ Plan'), 'The default plan must not cover transcript content.');
+    assert(frame(name).includes('Plan 1/3 · ● Improve research tools'));
+    assert(!frame(name).includes('to expand · /plan'), 'Collapsed receipts must stay on one line.');
+  }
+  assert(!frame('workflow-hidden').includes('Plan 1/3 · ● Improve research tools'));
+  assert(frame('plan-card').includes('╭ Plan 1/3'));
+  assert(frame('plan-card').includes('Next  Verify behavior'));
+  assert(!frame('plan-card').includes('Plan 1/3 · ● Improve research tools'));
+  assert(!frame('plan-hidden').includes('╭ Plan'));
+  assert(!frame('plan-hidden').includes('Plan 1/3 · ● Improve research tools'));
+  for (const name of ['plan-details-wide', 'plan-details-narrow']) {
+    assert(frame(name).includes('Execution plan'));
+    assert(frame(name).includes('Improve research tools'));
+    assert(frame(name).includes('q/esc close'));
+    assert(!frame(name).includes('Plan 1/3 · ● Improve research tools'));
+  }
   assert(frame('search-narrow').includes('╭ Transcript'));
   assert(frame('search-narrow').includes('1/1 matches'));
   assert(frame('search-narrow').includes('q/Esc close'));
