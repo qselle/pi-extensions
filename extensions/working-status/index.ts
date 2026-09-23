@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { WorkingState, toolLabel } from "./state.ts";
+import { WorkingState, toolActivity } from "./state.ts";
 import { indicatorStyle, isWorkingStyle, STYLE_ENTRY, WORKING_STYLES, type WorkingStyle } from "./style.ts";
 
 export default function workingStatusExtension(pi: ExtensionAPI): void {
@@ -7,7 +7,7 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
   let active: ExtensionContext | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let last: string | undefined;
-  let style: WorkingStyle = "native";
+  let style: WorkingStyle = "pulse";
 
   const refresh = () => {
     const label = state.label(performance.now());
@@ -39,7 +39,7 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
 
   const restore = (ctx: ExtensionContext) => {
     stop();
-    style = "native";
+    style = "pulse";
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== "custom" || entry.customType !== STYLE_ENTRY) continue;
       const data = entry.data as { version?: unknown; style?: unknown } | undefined;
@@ -79,7 +79,7 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
   });
   pi.on("tool_execution_start", (event) => {
     if (!active) return;
-    state.tools.set(event.toolCallId, toolLabel(event.toolName));
+    state.tools.set(event.toolCallId, toolActivity(event.toolName, event.args));
     refresh();
   });
   pi.on("tool_execution_end", (event) => {

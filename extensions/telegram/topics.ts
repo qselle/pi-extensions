@@ -73,6 +73,8 @@ export class SessionTopics {
     return `${mode} · ${state.record.creating ? "creation unconfirmed; /telegram topic retry before another attempt" : state.status}`;
   }
 
+  mode(): TelegramTopicsMode { return this.current?.record.mode ?? this.config.topics ?? "auto"; }
+
   async command(args: string): Promise<string> {
     const state = this.current;
     if (!state) return this.status();

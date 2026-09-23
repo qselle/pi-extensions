@@ -1,5 +1,5 @@
 /** The first call renders the group; followers render empty. Grouping is live-only. */
-import { shortPath } from "./render.ts";
+import { labelText, searchTarget, shortPath } from "./render.ts";
 
 export const EXPLORATION_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
 
@@ -9,6 +9,7 @@ export interface Activity {
 	verb: string;
 	detail: string;
 	path?: string; // reads: the coalescing key
+	filePath?: string; // raw path for terminal hyperlinks
 	range?: string; // chunked reads: "10-40"
 }
 
@@ -17,6 +18,7 @@ export interface DisplayRow {
 	detail: string;
 	suffix?: string; // range or result count, rendered dim
 	status: Status;
+	filePath?: string;
 }
 
 interface Call extends Activity {
@@ -50,12 +52,12 @@ export function readRange(args: any): string | undefined {
 export function activityFor(name: string, args: any): Activity | undefined {
 	const a = args ?? {};
 	if (name === "read" && typeof a.path === "string") {
-		const path = shortPath(a.path);
-		return { verb: "Read", detail: path, path, range: readRange(a) };
+		const path = shortPath(labelText(a.path));
+		return { verb: "Read", detail: path, path: a.path, filePath: a.path, range: readRange(a) };
 	}
-	if (name === "ls") return { verb: "Listed", detail: shortPath(String(a.path ?? a.dir ?? ".")) };
-	if (name === "grep" && a.pattern != null) return { verb: "Searched", detail: `"${a.pattern}"` };
-	if (name === "find" && (a.pattern ?? a.name) != null) return { verb: "Found", detail: `"${a.pattern ?? a.name}"` };
+	if (name === "ls") return { verb: "Listed", detail: shortPath(labelText(a.path ?? a.dir ?? ".")), filePath: String(a.path ?? a.dir ?? ".") };
+	if (name === "grep" && a.pattern != null) return { verb: "Searched", detail: searchTarget(a) };
+	if (name === "find" && (a.pattern ?? a.name) != null) return { verb: "Found", detail: searchTarget(a) };
 	return undefined;
 }
 
@@ -130,7 +132,7 @@ export function toDisplayRows(calls: Call[]): DisplayRow[] {
 	for (let i = 0; i < calls.length; ) {
 		const c = calls[i]!;
 		if (c.verb !== "Read") {
-			rows.push({ verb: c.verb, detail: c.detail, suffix: c.count, status: c.status });
+			rows.push({ verb: c.verb, detail: c.detail, suffix: c.count, status: c.status, filePath: c.filePath });
 			i += 1;
 			continue;
 		}
@@ -143,8 +145,8 @@ export function toDisplayRows(calls: Call[]): DisplayRow[] {
 			if (list) list.push(r);
 			else byPath.set(key, [r]);
 		}
-		for (const [path, group] of byPath) {
-			rows.push({ verb: "Read", detail: path, suffix: readsSuffix(group), status: mergeStatus(group) });
+		for (const group of byPath.values()) {
+			rows.push({ verb: "Read", detail: group[0]!.detail, filePath: group[0]!.filePath, suffix: readsSuffix(group), status: mergeStatus(group) });
 		}
 	}
 	return rows;

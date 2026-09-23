@@ -8,6 +8,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { getHyperlinkMode, hasDanglingLink, setHyperlinkMode } from "../../lib/links.ts";
 
 // Isolate the config file so the overrides register regardless of local settings.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-tool-render-agent-"));
@@ -116,3 +119,50 @@ assert(rows.length > 2, "long commands must wrap instead of collapsing to the fi
 const detail = "The operation failed because the requested source cannot be read. Check the final permission setting.";
 const wrapped = read.renderResult({ content: [{ type: "text", text: detail }] }, {}, theme, ctx).render(30).join("\n");
 assert(wrapped.includes("setting."), wrapped);
+
+// Native Pi calls renderCall before any result exists. Running operations must
+// remain visible there, then move to one compact result headline on completion.
+fire("session_start", { cwd: otherDir });
+const pendingContext = { toolCallId: "pending-read", args: { path: "src/very-long-path-that-needs-clipping/file.ts" }, cwd: otherDir,
+  executionStarted: true, isPartial: true, isError: false, invalidate() {} };
+fire("tool_execution_start", {}, { toolName: "read", toolCallId: pendingContext.toolCallId, args: pendingContext.args });
+const pendingRead = read.renderCall(pendingContext.args, theme, pendingContext).render(80).join("\n");
+assert(pendingRead.includes("Exploring") && pendingRead.includes("Reading"));
+assert.deepEqual(read.renderResult({}, { isPartial: true }, theme, pendingContext).render(80), []);
+fire("tool_execution_end", {}, { toolName: "read", toolCallId: pendingContext.toolCallId, isError: false, result: { content: "a\n\nb" } });
+fire("agent_end", {});
+const completedContext = { ...pendingContext, isPartial: false };
+assert.deepEqual(read.renderCall(pendingContext.args, theme, completedContext).render(80), []);
+const completeRead = read.renderResult({ content: "a\n\nb" }, {}, theme, completedContext);
+assert(completeRead.render(40).join("\n").includes("3 lines"), "clip the path before the result count");
+assert(completeRead.render(80).join("\n").includes("Explored"));
+const oldLinks = getHyperlinkMode();
+try {
+  setHyperlinkMode("always");
+  assert(completeRead.render(80).join("\n").includes("file://"));
+  for (let width = 0; width <= 100; width++) {
+    assert(completeRead.render(width).every((line: string) => visibleWidth(line) <= width && !hasDanglingLink(line)));
+  }
+} finally { setHyperlinkMode(oldLinks); }
+fire("session_tree", {});
+assert(!completeRead.render(80).join("\n").includes("Explored"), "tree navigation must clear live group state");
+const write = registered.filter((entry) => entry.name === "write").at(-1)!.definition;
+const writing = { ...pendingContext, args: { path: "new.ts", content: "first\nsecond" } };
+const pendingWrite = write.renderCall(writing.args, theme, writing).render(80).join("\n");
+assert(pendingWrite.includes("Writing") && !pendingWrite.includes("+2"));
+assert.deepEqual(write.renderResult({}, { isPartial: true }, theme, writing).render(80), []);
+assert(write.renderResult(error, {}, theme, { ...writing, isError: true, isPartial: false }).render(80).join("\n").includes("Write failed"));
+
+const managed = (status: string, extras: object = {}) => ({ content: [{ type: "text", text:
+  `✓ Shell command · ${status} · 0s · exit ${status === "failed" ? 1 : 0}\nJob: abc123 · cursor: 16\n\n2 checks passed` }],
+  details: { managed: true, id: "abc123", status, exitCode: status === "failed" ? 1 : 0, ...extras } });
+const cleanContext = { ...ctx, isError: false };
+const compactSuccess = bash.renderResult(managed("completed"), {}, theme, cleanContext).render(80).map(stripVTControlCharacters).join("\n");
+assert.equal(compactSuccess, "  └ 2 checks passed");
+assert(bash.renderResult(managed("completed"), { expanded: true }, theme, cleanContext).render(80).join("\n").includes("cursor: 16"));
+for (const value of [managed("running"), managed("failed"), managed("completed", { lost: 5 }), managed("completed", { more: true })]) {
+  const compact = bash.renderResult(value, {}, theme, cleanContext).render(80).join("\n");
+  assert(compact.includes("Job: abc123"), "actionable jobs keep their IDs");
+  assert(!compact.includes("cursor:"), "cursor values belong in expanded output");
+  assert(compact.includes("2 checks passed"));
+}

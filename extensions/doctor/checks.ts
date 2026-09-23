@@ -1,11 +1,12 @@
 import { exaAccess } from "../web-search/access.ts";
-import { access, lstat, open, stat } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { createRequire } from "node:module";
 import { parseAccent } from "../codex-prompt/config.ts";
 import { supportsFastMode } from "../fast-mode/index.ts";
 import { notificationEscape } from "../notify/deliver.ts";
+import { readConfig, resourceFindings, type ConfigRead } from "./configuration.ts";
 
 export interface Finding { id: string; label: string; status: "ok" | "warn" | "off"; detail: string; fix?: string }
 export interface DoctorInput {
@@ -19,10 +20,16 @@ export interface Probe {
   executable(name: string): Promise<boolean>;
   config(name: string): Promise<"absent" | "valid" | "invalid">;
   pty(): Promise<boolean>;
+  resources?(): Promise<Finding[]>;
 }
 
 /** Metadata checks only: no executable is launched and no network is contacted. */
 export function localProbe(input: DoctorInput): Probe {
+  const reads = new Map<string, Promise<ConfigRead>>();
+  const read = (name: string) => {
+    if (!reads.has(name)) reads.set(name, readConfig(input.agentDir, name));
+    return reads.get(name)!;
+  };
   return {
     async executable(name) {
       const paths = isAbsolute(name) ? [name] : (input.env.PATH ?? "").split(delimiter).filter(Boolean).map((part) => join(part, name));
@@ -34,25 +41,19 @@ export function localProbe(input: DoctorInput): Probe {
       return false;
     },
     async config(name) {
-      const path = join(input.agentDir, name);
-      let file;
-      try {
-        const info = await lstat(path);
-        if (!info.isFile() || info.size > 64 * 1024) return "invalid";
-        file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-        const stat = await file.stat();
-        if (!stat.isFile() || stat.size > 64 * 1024) return "invalid";
-        const bytes = Buffer.alloc(64 * 1024 + 1);
-        const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-        if (bytesRead > 64 * 1024) return "invalid";
-        const data = JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
-        if (!data || typeof data !== "object" || Array.isArray(data)) return "invalid";
-        if (name === "hyperlinks.json") return data.mode === undefined || ["auto", "always", "never"].includes(data.mode) ? "valid" : "invalid";
-        if (name === "codex-prompt.json" && data.accent !== undefined && (typeof data.accent !== "string" || !parseAccent(data.accent))) return "invalid";
-        const fields = name === "notify.json" ? ["enabled", "banner", "bell"] : ["enabled"];
-        return fields.every((key) => data[key] === undefined || typeof data[key] === "boolean") ? "valid" : "invalid";
-      } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "invalid"; }
-      finally { await file?.close(); }
+      // Settings are shared with resources() for a consistent diagnostic snapshot.
+      const result = name === "settings.json" ? await read(name) : await readConfig(input.agentDir, name);
+      if (result.status !== "valid") return result.status;
+      const { data } = result;
+      if (name === "settings.json") return "valid";
+      if (name === "hyperlinks.json") return data.mode === undefined || ["auto", "always", "never"].includes(data.mode as string) ? "valid" : "invalid";
+      if (name === "codex-prompt.json" && data.accent !== undefined && (typeof data.accent !== "string" || !parseAccent(data.accent))) return "invalid";
+      const fields = name === "notify.json" ? ["enabled", "banner", "bell"] : ["enabled"];
+      return fields.every((key) => data[key] === undefined || typeof data[key] === "boolean") ? "valid" : "invalid";
+    },
+    async resources() {
+      const result = await read("settings.json");
+      return result.status === "valid" ? resourceFindings(result.data, input.agentDir) : [];
     },
     async pty() {
       try {
@@ -79,6 +80,7 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   if (input.bindingConflicts !== undefined) add("keybindings", "Custom key assignments", input.bindingConflicts ? "warn" : "ok", input.bindingConflicts ? `${input.bindingConflicts} duplicate custom key assignment(s) reported by Pi; some may be intentional in separate UI contexts.` : "Pi reports no duplicate custom key assignments.", input.bindingConflicts ? "Review keybindings.json and keep intended context-specific overlaps." : undefined);
   const hostSettings = await probe.config("settings.json");
   add("host-settings", "Host settings", hostSettings === "invalid" ? "warn" : "ok", hostSettings === "invalid" ? "Global settings JSON is unreadable, oversized or malformed." : hostSettings === "absent" ? "No global settings file; defaults apply." : "Global settings JSON is readable; values and project overrides are not exhaustively validated.", hostSettings === "invalid" ? "Repair settings.json in the Pi agent directory." : undefined);
+  if (probe.resources) result.push(...await probe.resources());
   const shellFound = !!input.shell && await probe.executable(input.shell);
   add("shell", "Shell", shellFound ? "ok" : "warn", shellFound ? "Pi resolved an available shell executable." : "Pi could not resolve an available shell executable.", shellFound ? undefined : "Install bash and make it available to Pi, then restart.");
   for (const [name, label] of [["web_search", "Web search"], ["web_read", "Page reader"], ["job_start", "Managed jobs"]]) {

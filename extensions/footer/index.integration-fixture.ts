@@ -12,6 +12,8 @@ type Handler = (event: unknown, ctx: unknown) => unknown;
 const handlers = new Map<string, Handler[]>();
 const eventHandlers = new Map<string, Array<(value: unknown) => void>>();
 let sessionName = "Footer refresh";
+let gitOutput = "# branch.head main\0";
+const gitCalls: Array<{ command: string; args: string[]; cwd: string; signal: AbortSignal; timeout: number }> = [];
 const events = {
   on(name: string, handler: (value: unknown) => void) {
     const existing = eventHandlers.get(name);
@@ -31,6 +33,10 @@ const pi = {
   events,
   getThinkingLevel: () => "high",
   getSessionName: () => sessionName,
+  exec: async (command: string, args: string[], options: { cwd: string; signal: AbortSignal; timeout: number }) => {
+    gitCalls.push({ command, args, ...options });
+    return { stdout: gitOutput, stderr: "", code: 0, killed: false };
+  },
 } as never;
 
 function fire(name: string, ctx: unknown, event: unknown = {}): void {
@@ -139,12 +145,35 @@ assert.equal(session.scans(), 1, "render must not rescan the branch every frame"
 // Identity, state, compact usage, and the idle terminal title are present.
 assert(first.includes("Footer refresh"), first);
 assert(first.includes("claude-opus-4-8 high"), first);
-assert(first.includes("● ready"), first);
-assert(first.includes("ctx 94% left"), first);
+assert(!first.includes("● ready"), first);
+assert(first.includes("6% 28.2K/258K"), first);
 // Tool-result usage (nested subagent/side-chat model calls) is included.
-assert(first.includes("↓105"), `expected combined input tokens, got: ${first}`);
-assert(first.includes("↑11"), `expected combined output tokens, got: ${first}`);
+assert(first.includes("in 105"), `expected combined input tokens, got: ${first}`);
+assert(first.includes("out 11"), `expected combined output tokens, got: ${first}`);
 assert.equal(session.titles.at(-1), "π Footer refresh · project");
+
+// Git is an asynchronous, event-driven snapshot; renders never spawn commands.
+assert.equal(gitCalls.length, 0);
+await Bun.sleep(550);
+assert.equal(gitCalls.length, 1);
+assert.equal(gitCalls[0]!.command, "git");
+assert(gitCalls[0]!.args.includes("--no-optional-locks"));
+assert(gitCalls[0]!.args.includes("--porcelain=v2"));
+assert.equal(gitCalls[0]!.cwd, session.ctx.cwd);
+assert.equal(gitCalls[0]!.timeout, 2000);
+gitOutput = "# branch.ab +2 -1\0? new-directory/\0u UU conflict\0";
+for (let i = 0; i < 10; i++) {
+  fire("tool_execution_end", session.ctx);
+  footer.render(200);
+}
+assert.equal(gitCalls.length, 1);
+await Bun.sleep(550);
+assert.equal(gitCalls.length, 2, "a burst of tool events needs one Git read");
+assert(footer.render(200).join(" ").includes("git conflicts 1 new 1 ahead 2 behind 1"));
+const beforeModelRenders = session.renders();
+fire("model_select", session.ctx);
+fire("thinking_level_select", session.ctx);
+assert.equal(session.renders(), beforeModelRenders + 2);
 
 // New usage invalidates the cache exactly once per change.
 session.branch.push({
@@ -154,7 +183,7 @@ session.branch.push({
 fire("message_end", session.ctx, { message: { role: "assistant" } });
 const afterMessage = footer.render(200).join("");
 assert.equal(session.scans(), 2);
-assert(afterMessage.includes("↓125"), `expected refreshed totals, got: ${afterMessage}`);
+assert(afterMessage.includes("in 125"), `expected refreshed totals, got: ${afterMessage}`);
 footer.render(200);
 assert.equal(session.scans(), 2);
 
@@ -169,53 +198,51 @@ assert.equal(session.scans(), 4);
 // Idle cache warming produces a usage entry without an assistant event.
 session.branch.push({ type: "usage", kind: "cache_warm", usage: { input: 7, output: 1, cost: { total: 0.004 } } });
 const afterWarm = footer.render(200).join("");
-assert(afterWarm.includes("↓132"), afterWarm);
+assert(afterWarm.includes("in 132"), afterWarm);
 assert.equal(session.scans(), 5);
 footer.render(200);
 assert.equal(session.scans(), 5);
 
-// Extension statuses (ctx.ui.setStatus) render on their own line, sorted by key,
-// so replacing pi's footer no longer hides them.
-assert.equal(footer.render(200).length, 1, "no statuses means no extra line");
+// Extension statuses share the single footer row, sorted by key when space permits.
+assert.equal(footer.render(200).length, 1, "all footer content occupies one row");
 session.statuses.set("verify", "verifying tests…");
 session.statuses.set("subagents-usage", "agents ↑12k ↓850 $0.0421");
-const withStatuses = footer.render(200);
-assert.equal(withStatuses.length, 2, "extension statuses need their own line");
-assert(withStatuses[1].includes("agents ↑12k ↓850 $0.0421"), withStatuses[1]);
-assert(withStatuses[1].includes("verifying tests…"), withStatuses[1]);
+const withStatuses = footer.render(300);
+assert.equal(withStatuses.length, 1, "extension statuses must never add another row");
+assert(withStatuses[0].includes("agents ↑12k ↓850 $0.0421"), withStatuses[0]);
+assert(withStatuses[0].includes("verifying tests…"), withStatuses[0]);
 assert(
-  withStatuses[1].indexOf("agents") < withStatuses[1].indexOf("verifying"),
-  `statuses must be sorted by key: ${withStatuses[1]}`,
+  withStatuses[0].indexOf("agents") < withStatuses[0].indexOf("verifying"),
+  `statuses must be sorted by key: ${withStatuses[0]}`,
 );
-// The main line keeps its own cells; statuses never displace them.
-assert(withStatuses[0].includes("ctx 94% left"), withStatuses[0]);
+// Session/context remain visible when statuses are present.
+assert(withStatuses[0].includes("6% 28.2K/258K"), withStatuses[0]);
 
 // A multi-line status is flattened so it cannot break the footer layout.
 session.statuses.set("verify", "verifying\ntests\tnow");
-assert(footer.render(200)[1].includes("verifying tests now"), footer.render(200)[1]);
+assert(footer.render(300)[0].includes("verifying tests now"), footer.render(300)[0]);
 session.statuses.clear();
-assert.equal(footer.render(200).length, 1, "cleared statuses drop the extra line");
+assert.equal(footer.render(200).length, 1, "cleared statuses keep the footer one row");
 
 // Git identity is anchored on the right, separate from the information rail.
 session.setGitBranch("main");
 const withBranch = footer.render(200)[0];
-assert(withBranch.endsWith("/work/project · main"), withBranch);
+assert(withBranch.includes("project · main"), withBranch);
 
-// Optional extensions can publish compact first-line badges without consuming
-// the transient status row. Updates replace by id and empty text removes them.
+// Optional extensions can publish compact inline badges. Updates replace by id and empty text removes them.
 const beforeBadgeRender = session.renders();
 events.emit("footer:badge", { id: "priority", text: "fast", order: 10 });
 assert.equal(session.renders(), beforeBadgeRender + 1);
-assert(footer.render(200)[0].includes("[fast]"), footer.render(200)[0]);
+assert(footer.render(300)[0].includes("fast"), footer.render(300)[0]);
 events.emit("footer:badge", { id: "priority" });
-assert(!footer.render(200)[0].includes("[fast]"), footer.render(200)[0]);
+assert(!footer.render(300)[0].includes("fast"), footer.render(300)[0]);
 
 // Activity updates both the footer and terminal title. Attention overrides win
 // until their owning source clears them, then activity resumes.
 const beforeLifecycleRenders = session.renders();
 session.setIdle(false);
 fire("agent_start", session.ctx);
-assert(footer.render(200)[0].includes("● working"), footer.render(200)[0]);
+assert(!footer.render(200)[0].includes("● working"), footer.render(200)[0]);
 assert(/^⠋ π Footer refresh · project$/.test(session.titles.at(-1) ?? ""), session.titles.at(-1) ?? "missing title");
 events.emit("terminal-title:override", { source: "questions", title: "❓ Input needed" });
 assert.equal(session.titles.at(-1), "❓ Input needed");
@@ -229,7 +256,7 @@ assert.equal(session.renders(), beforeLifecycleRenders + 2);
 // Session renames are reflected without replacing the footer component.
 sessionName = "Footer polish";
 fire("session_info_changed", session.ctx, { name: sessionName });
-assert(footer.render(200)[0].includes("Footer polish"), footer.render(200)[0]);
+assert(footer.render(300)[0].includes("Footer polish"), footer.render(300)[0]);
 assert.equal(session.titles.at(-1), "π Footer polish · project");
 
 // A checkout refreshes the branch through pi's watcher rather than a timer.
@@ -245,7 +272,13 @@ assert.equal(session.footers.length, 2);
 assert.equal(session.footers.at(-1), undefined, "session_shutdown must restore pi's footer");
 assert.equal(session.titles.at(-1), "pi", "session shutdown must release the terminal title");
 const rendersAfterShutdown = session.renders();
+const gitCallsAfterShutdown = gitCalls.length;
 fire("agent_start", session.ctx);
+fire("model_select", session.ctx);
+fire("thinking_level_select", session.ctx);
+events.emit("terminal-title:override", { source: "late-event", title: "Do not restore the old session" });
+assert.equal(session.titles.at(-1), "pi", "late selection events cannot revive the old UI context");
+events.emit("terminal-title:override", { source: "late-event" });
 assert.equal(session.renders(), rendersAfterShutdown, "no renders may be requested after shutdown");
 
 // Disposing the replaced footer releases pi's branch subscription.
@@ -259,7 +292,7 @@ assert.equal(session.renders(), rendersAfterShutdown, "a released subscription c
 const replacement = createContext("tui");
 fire("session_start", replacement.ctx);
 const replacementFooter = replacement.mount();
-assert(replacementFooter.render(200).join("").includes("↓105"));
+assert(replacementFooter.render(200).join("").includes("in 105"));
 assert.equal(replacement.scans(), 1);
 
 // dispose() releases the TUI reference when pi swaps footers itself.
@@ -273,5 +306,7 @@ fire("session_start", headless.ctx);
 assert.equal(headless.footers.length, 0);
 fire("session_shutdown", headless.ctx, { reason: "quit" });
 assert.equal(headless.footers.length, 0, "headless shutdown must not touch the footer");
+await Bun.sleep(550);
+assert.equal(gitCalls.length, gitCallsAfterShutdown, "disposed and headless sessions must not schedule Git checks");
 
 console.log("footer lifecycle verified");

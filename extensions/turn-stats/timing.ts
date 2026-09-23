@@ -4,6 +4,13 @@ export interface ResponseTiming {
 }
 export const emptyTiming = (): ResponseTiming => ({ latencyMs: 0, latencySamples: 0, streamMs: 0, outputTokens: 0, streamSamples: 0 });
 
+/** Empty block-start events contain no output; tool-call deltas are real output too. */
+export function isFirstOutputEvent(event: { type: string; delta?: string; content?: string }): boolean {
+  if (["text_delta", "thinking_delta", "toolcall_delta"].includes(event.type)) return typeof event.delta === "string" && event.delta.length > 0;
+  if (["text_end", "thinking_end"].includes(event.type)) return typeof event.content === "string" && event.content.length > 0;
+  return event.type === "toolcall_end";
+}
+
 export function addTiming(total: ResponseTiming, sent: number | undefined, first: number | undefined, ended: number, output: unknown): void {
   if (sent === undefined || first === undefined || ![sent, first, ended].every(Number.isFinite) || first < sent || ended < first) return;
   total.latencyMs += first - sent;
@@ -28,7 +35,7 @@ export function timingText(value: ResponseTiming | undefined, responses: number)
   const latency = value?.latencySamples ? `${Math.round(value.latencyMs / value.latencySamples)}ms` : "unknown";
   const rate = value?.streamSamples ? `${(value.outputTokens / (value.streamMs / 1000)).toFixed(1)} tokens/s` : "unknown";
   return [
-    `Mean first-output latency: ${latency} · ${value?.latencySamples ?? 0}/${responses} responses measured`,
-    `Aggregate streaming rate: ${rate} · ${value?.streamSamples ?? 0}/${responses} responses measured`,
+    `Average first token: ${latency} · ${value?.latencySamples ?? 0}/${responses} replies measured`,
+    `Streaming rate: ${rate} · ${value?.streamSamples ?? 0}/${responses} replies measured`,
   ];
 }

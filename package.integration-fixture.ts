@@ -33,7 +33,7 @@ try {
   for (const name of ["job_start", "job_wait", "get_goal", "loop_schedule", "get_monitors", "get_schedules"]) assert(!active.includes(name), `${name} should be deferred`);
   for (const name of ["bash", "create_goal", "update_plan", "questionnaire", "subagents", "web_search", "web_read"]) assert(active.includes(name), `${name} must remain discoverable`);
   const commands = session.extensionRunner.getRegisteredCommands().map((command) => command.name);
-  for (const name of ["fast", "web", "doctor", "schedule", "rewind", "transcript", "jobs", "handoff", "image-history", "turn-stats"]) assert(commands.includes(name), name);
+  for (const name of ["fast", "web", "doctor", "schedule", "rewind", "transcript", "jobs", "handoff", "image-history", "turn-stats", "palette"]) assert(commands.includes(name), name);
   const tools = session.extensionRunner.getAllRegisteredTools().map((tool) => tool.definition.name);
   for (const name of ["web_search", "web_read", "job_start", "history_image", "context_notes"]) assert(tools.includes(name), name);
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });

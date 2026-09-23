@@ -13,7 +13,8 @@ const details: SearchResult = {
 test("collapsed search is one summary and three sources; expansion reveals all evidence", () => {
   const preview = searchPreview(details, theme).render(100);
   expect(preview[0]).toContain("8 sources · Exa · API · 1.2s");
-  expect(preview).toHaveLength(8);
+  expect(preview).toHaveLength(5);
+  expect(stripTerminalSequences(preview[1]!)).toBe("    1. Source 1 界 · docs.example.com");
   expect(preview.join("\n")).toContain("+5 more");
   expect(preview.join("\n")).not.toContain("Evidence");
   const expanded = searchPreview(details, theme, true).render(100).join("\n");
@@ -27,9 +28,23 @@ test("URL-only titles render once, and expansion preserves long URL text", () =>
   const result = { ...details, results: [{ title: url, url, snippet: "" }] };
   // A normal URL-only title never repeats the source row.
   const short = { ...details, results: [{ title: "https://example.com/", url: "https://example.com/", snippet: "" }] };
-  expect(searchPreview(short, theme).render(100).filter((line) => line.includes("https://"))).toHaveLength(1);
+  expect(searchPreview(short, theme).render(100).map(stripTerminalSequences).filter((line) => line.includes("example.com"))).toHaveLength(1);
   const expanded = searchPreview(result, theme, true).render(40);
   expect(expanded.map(stripTerminalSequences).map((line) => line.trim()).join("")).toContain(url);
+});
+
+test("long titles reserve the visible origin and remain linked", () => {
+  const before = getHyperlinkMode();
+  try {
+    setHyperlinkMode("always");
+    const url = "https://docs.example.org/guide";
+    const result = { ...details, results: [{ title: "A long title with Unicode 界 ".repeat(20), url, snippet: "" }] };
+    const row = searchPreview(result, theme).render(60)[1]!;
+    expect(stripTerminalSequences(row)).toEndWith(" · docs.example.org");
+    expect(row).toContain(`\x1b]8;;${url}`);
+    expect(stripTerminalSequences(row)).toContain("A long title");
+    expect(searchPreview(result, theme).render(26).map(stripTerminalSequences).some((line) => line.includes("docs.example.org"))).toBe(true);
+  } finally { setHyperlinkMode(before); }
 });
 
 test("both display modes fit every width and close all terminal hyperlinks", () => {

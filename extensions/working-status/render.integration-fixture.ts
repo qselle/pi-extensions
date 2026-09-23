@@ -18,7 +18,7 @@ const handlers = new Map<string, Function>();
 let command: any;
 const entries: any[] = [];
 const ctx = { mode: "tui", isIdle: () => true, sessionManager: { getBranch: () => entries }, ui: {
-  notify() {}, setWorkingMessage: (message?: string) => indicator.setMessage(message ?? "Working"),
+  notify() {}, setHiddenThinkingLabel() {}, setWorkingMessage: (message?: string) => indicator.setMessage(message ?? "Working"),
   setWorkingIndicator: (options?: unknown) => indicator.setIndicator(options),
 } };
 extension({ on: (name: string, fn: Function) => handlers.set(name, fn), registerCommand: (_: string, value: any) => { command = value; },
@@ -40,6 +40,12 @@ try {
       await Bun.sleep(260);
       assert.equal(indicator.renderInBorder(80), initial);
     }
+  }
+  handlers.get("tool_execution_start")!({ toolCallId: "wide", toolName: "read", args: { path: `/project/${"界".repeat(90)}.ts` } }, ctx);
+  handlers.get("tool_execution_start")!({ toolCallId: "other", toolName: "bash", args: { command: "bun test --token secret" } }, ctx);
+  assert(!indicator.renderInBorder(200).includes("secret"));
+  for (const width of [1, 8, 20, 40, 80, 120]) {
+    assert(editor.render(width).every((line) => visibleWidth(line) <= width));
   }
   handlers.get("session_shutdown")!({}, ctx);
   assert(!indicator.renderInBorder(80).includes("Waiting for model"));

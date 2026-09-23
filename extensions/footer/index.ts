@@ -1,20 +1,14 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import {
-	buildCells,
 	compactInlineText,
-	contextColor,
 	formatCwd,
-	layoutFooter,
 	modelLabel,
-	statusLine,
-	workspaceLabel,
-	type Cell,
-	type CellId,
 } from "./format.ts";
+import { renderFooter } from "./render.ts";
 import { UsageTotalsCache } from "./usage.ts";
+import { GitStatusTracker, gitStatusLabel, parseGitStatus } from "./git.ts";
 
 export const FOOTER_BADGE_EVENT = "footer:badge";
 export const TERMINAL_TITLE_OVERRIDE_EVENT = "terminal-title:override";
@@ -38,21 +32,8 @@ interface StoredBadge {
 	order: number;
 }
 
-type FgColor = Parameters<Theme["fg"]>[0];
-
 const TITLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const TITLE_INTERVAL_MS = 160;
-
-const CELL_COLOR: Record<CellId, FgColor> = {
-	session: "accent",
-	model: "text",
-	badges: "warning",
-	status: "accent",
-	context: "success",
-	contextTokens: "muted",
-	traffic: "muted",
-	cost: "success",
-};
 
 function currentEffort(pi: ExtensionAPI): string | undefined {
 	try {
@@ -64,7 +45,7 @@ function currentEffort(pi: ExtensionAPI): string | undefined {
 
 function currentSessionName(pi: ExtensionAPI): string | undefined {
 	try {
-		return compactInlineText(pi.getSessionName?.(), 32) || undefined;
+		return compactInlineText(pi.getSessionName?.(), 80) || undefined;
 	} catch {
 		return undefined;
 	}
@@ -111,6 +92,15 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	const titleOverrides = new Map<string, string>();
 
 	const refresh = () => tuiRef?.requestRender();
+	const git = new GitStatusTracker(async (cwd, signal) => {
+		const result = await pi.exec("git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "-z"], {
+			cwd, signal, timeout: 2000,
+		});
+		return result.code === 0 && !result.killed ? parseGitStatus(result.stdout) : undefined;
+	}, refresh);
+	const refreshGit = () => {
+		if (sessionOpen && tuiRef && activeCtx?.mode === "tui") git.refresh(activeCtx.cwd);
+	};
 
 	const latestTitleOverride = (): string | undefined => [...titleOverrides.values()].at(-1);
 
@@ -161,6 +151,10 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		git.reset();
+		stopTitleTimer();
+		activeCtx = undefined;
+		tuiRef = undefined;
 		sessionOpen = true;
 		totals.invalidate();
 		if (ctx.mode !== "tui") return;
@@ -172,47 +166,35 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			tuiRef = tui;
-			const stopBranchWatch = footerData?.onBranchChange?.(() => tui.requestRender());
+			refreshGit();
+			const stopBranchWatch = footerData?.onBranchChange?.(() => { refreshGit(); tui.requestRender(); });
 			return {
 				invalidate() {},
 				dispose() {
 					stopBranchWatch?.();
-					if (tuiRef === tui) tuiRef = undefined;
+					if (tuiRef === tui) { tuiRef = undefined; git.reset(); }
 				},
 				render(width: number): string[] {
 					if (width <= 0) return [];
-					const usage = ctx.getContextUsage();
+					const current = activeCtx ?? ctx;
+					const usage = current.getContextUsage();
 					const badgeLabels = [...badges.entries()]
 						.sort(([leftId, left], [rightId, right]) => left.order - right.order || leftId.localeCompare(rightId))
 						.map(([, badge]) => badge.text);
-					const cells = buildCells({
-						session: currentSessionName(pi),
-						model: modelLabel(ctx.model?.id, currentEffort(pi)),
+					return renderFooter({
+						session: currentSessionName(pi) ?? current.sessionManager.getSessionId?.().slice(0, 8) ?? "pi",
+						model: modelLabel(current.model?.name ?? current.model?.id, current.model?.reasoning === false ? undefined : currentEffort(pi)),
+						provider: current.model?.provider,
 						badges: badgeLabels,
-						status: ctx.isIdle() ? "ready" : "working",
+						git: gitStatusLabel(git.value),
+						gitConflicts: !!git.value?.conflicts,
 						usage,
-						totals: totals.get(() => ctx.sessionManager.getBranch(), ctx.sessionManager.getLeafId()),
-					});
-					const workspace = workspaceLabel(
-						formatCwd(ctx.cwd, homedir()),
-						footerData?.getGitBranch?.(),
-					);
-					const separator = " · ";
-					const layout = layoutFooter(cells, workspace, width, separator, visibleWidth);
-					const styledSeparator = theme.fg("dim", separator);
-					const left = layout.cells.map((cell: Cell) => {
-						const color = cell.id === "status"
-							? (ctx.isIdle() ? "success" : "accent")
-							: cell.id === "context" ? contextColor(usage?.percent) : CELL_COLOR[cell.id];
-						return theme.fg(color, cell.text);
-					}).join(styledSeparator);
-					const right = layout.workspace ? theme.fg("muted", layout.workspace) : "";
-					const mainLine = `${left}${right ? " ".repeat(layout.gap) : ""}${right}`;
-					const lines = [truncateToWidth(mainLine, width, "")];
-
-					const statuses = statusLine(footerData?.getExtensionStatuses?.(), styledSeparator);
-					if (statuses) lines.push(truncateToWidth(statuses, width, theme.fg("dim", "…")));
-					return lines;
+						contextWindow: current.model?.contextWindow,
+						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId()),
+						directory: formatCwd(current.cwd, homedir()),
+						branch: footerData?.getGitBranch?.(),
+						statuses: footerData?.getExtensionStatuses?.(),
+					}, width, theme);
 				},
 			};
 		});
@@ -222,6 +204,14 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	pi.on("message_end", invalidateTotals);
 	pi.on("session_compact", invalidateTotals);
 	pi.on("session_tree", invalidateTotals);
+	pi.on("tool_execution_end", refreshGit);
+	const refreshSelection = (_event: unknown, ctx: ExtensionContext) => {
+		if (!sessionOpen || ctx.mode !== "tui") return;
+		activeCtx = ctx;
+		refresh();
+	};
+	pi.on("model_select", refreshSelection);
+	pi.on("thinking_level_select", refreshSelection);
 
 	pi.on("session_info_changed", (_event, ctx) => {
 		if (!sessionOpen || ctx.mode !== "tui") return;
@@ -237,6 +227,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 			agentActive = true;
 			startTitleTimer();
 		}
+		refreshGit();
 		refresh();
 	});
 
@@ -249,11 +240,13 @@ export default function footerExtension(pi: ExtensionAPI): void {
 			titleFrame = 0;
 			syncTerminalTitle();
 		}
+		refreshGit();
 		refresh();
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		sessionOpen = false;
+		git.reset();
 		stopTitleTimer();
 		agentActive = false;
 		titleFrame = 0;

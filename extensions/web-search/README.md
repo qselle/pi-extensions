@@ -11,12 +11,9 @@ mode and available providers without making a request or displaying keys.
 ```text
 • Searched Python TaskGroup cancellation
   └ 8 sources · Exa · public · 1.2s
-    1. Coroutines and Tasks — Python documentation
-       https://docs.python.org/3/library/asyncio-task.html
-    2. What's New in Python 3.13
-       https://docs.python.org/3/whatsnew/3.13.html
-    3. asyncio — Asynchronous I/O
-       https://docs.python.org/3/library/asyncio.html
+    1. Coroutines and Tasks — Python documentation · docs.python.org
+    2. What's New in Python 3.13 · docs.python.org
+    3. asyncio — Asynchronous I/O · docs.python.org
     +5 more · ctrl+o to expand
 ```
 
@@ -86,8 +83,9 @@ partially overlapping dates remain marked unverified. Cache age and publication
 dates are separate policies; check dates on the source.
 
 Compact results show one summary with provider, public/API access, elapsed time,
-and up to three sources. Titles and clickable URLs get separate rows; narrow
-terminals prioritize origins. URL-only titles appear once. Expanded results wrap
+and up to three sources. Each source occupies one ranked row with a clickable
+title and a reserved visible origin; narrow terminals prioritize origins.
+URL-only titles show the origin once. Expanded results wrap
 full URLs and excerpts, and show dates, exclusion reasons, and provider warnings.
 Excerpts remain available to the agent even when the UI is collapsed. Mistral
 returns model-selected citation metadata; generated answer prose is discarded.

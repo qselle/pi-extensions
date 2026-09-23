@@ -2,7 +2,7 @@ import { truncateToWidth, visibleWidth, type EditorComponent } from "@earendil-w
 import { transformEditorLines } from "./transform.ts";
 
 /** Add the Codex prompt renderer while retaining the supplied editor object. */
-export function decorateCodexEditor<T extends EditorComponent>(editor: T, accent?: (text: string) => string): T {
+export function decorateCodexEditor<T extends EditorComponent>(editor: T, accent?: (text: string) => string, border = accent): T {
 	const render = editor.render.bind(editor);
 	try {
 		editor.setPaddingX?.(2);
@@ -17,7 +17,7 @@ export function decorateCodexEditor<T extends EditorComponent>(editor: T, accent
 		const originalBorder = editor.borderColor;
 		let base: string[];
 		try {
-			if (accent) editor.borderColor = accent;
+			if (border) editor.borderColor = border;
 			base = render(renderWidth);
 		} catch {
 			editor.borderColor = originalBorder;

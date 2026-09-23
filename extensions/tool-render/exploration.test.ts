@@ -31,6 +31,10 @@ describe("activityFor", () => {
 		expect(activityFor("find", { pattern: "*.ts" })).toMatchObject({ verb: "Found", detail: '"*.ts"' });
 		expect(activityFor("bash", { command: "x" })).toBeUndefined();
 	});
+	test("search activity includes the requested directory and file glob", () => {
+		expect(activityFor("grep", { pattern: "token", path: "src", glob: "*.ts" })!.detail).toBe('"token" in src (*.ts)');
+		expect(activityFor("find", { pattern: "*.test.ts", path: "tests" })!.detail).toBe('"*.test.ts" in tests');
+	});
 });
 
 describe("grouping", () => {
@@ -77,6 +81,11 @@ describe("grouping", () => {
 });
 
 describe("display rows", () => {
+	test("read and directory rows retain raw paths for clickable targets", () => {
+		noteStart("a", "read", { path: "src/a.ts" });
+		noteStart("b", "ls", { path: "src" });
+		expect(groupState("a")!.rows.map((row) => row.filePath)).toEqual(["src/a.ts", "src"]);
+	});
 	test("whole-file read shows a line count; grep shows a result count", () => {
 		noteStart("a", "read", { path: "a.ts" });
 		noteEnd("a", false, "42 lines");

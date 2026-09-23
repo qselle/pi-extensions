@@ -11,6 +11,7 @@ import { redactText } from "../../lib/redact.ts";
 import { BASH_OWNER, BASH_STYLE, type BashOwnerRequest, type BashStyleRequest, type BashStyle } from "./bash-style.ts";
 import { JOB_HISTORY_ENTRY, JobHistory } from "./history.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
+import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE } from "../../lib/tool-purpose.ts";
 const JOB_CONTROLS = ["job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"];
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
@@ -162,16 +163,23 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     description: "Execute a managed shell command in the current working directory. Short commands finish inline; after yield_ms (default 1000, maximum 30000) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Optional timeout is in seconds. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use nohup/disown/setsid.",
     promptSnippet: "Execute shell commands; long commands yield managed job IDs for follow-up.",
-    promptGuidelines: ["A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful."],
-    parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 16000 }), timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 86400 })), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) }),
+    promptGuidelines: ["A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful.", COMMAND_PURPOSE_GUIDELINE],
+    parameters: Type.Object({ purpose: commandPurposeParameter, command: Type.String({ minLength: 1, maxLength: 16000 }), timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 86400 })), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) }),
     async execute(_id, params: any, signal, update, ctx) {
-      const value = await startManaged({ ...params, name: params.name ?? "Shell command", timeout_seconds: params.timeout }, signal, ctx, update);
+      const { purpose: _purpose, ...execution } = params;
+      const value = await startManaged({ ...execution, name: execution.name ?? "Shell command", timeout_seconds: execution.timeout }, signal, ctx, update);
       if (["failed", "timed-out", "stopped"].includes(value.details.status)) throw new Error(value.content[0].text);
       return value;
     },
     renderShell: bashStyle?.renderShell,
-    renderCall: (args: any, theme, context) => bashStyle?.renderCall?.({ ...args, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) }, theme, context)
-      ?? lines(theme.fg("accent", `$ ${safeLabel(args.command)}`)),
+    renderCall: (args: any, theme, context) => {
+      // Redact before the display cap so a secret crossing that cap stays hidden.
+      const rawPurpose = typeof args.purpose === "string" ? args.purpose.replace(/\p{Bidi_Control}/gu, "") : "";
+      const purpose = commandPurpose(safeLabel(rawPurpose));
+      const shown = { ...args, purpose, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) };
+      return bashStyle?.renderCall?.(shown, theme, context)
+        ?? lines([...(purpose ? [theme.fg("muted", purpose)] : []), theme.fg("accent", `$ ${safeLabel(args.command)}`)].join("\n"));
+    },
     renderResult: (value, options, theme, context) => renderStartResult(value, options, theme, context,
       bashStyle?.renderResult ? (resolved, opts, selectedTheme, selectedContext) => bashStyle!.renderResult!(resolved, opts, selectedTheme, selectedContext!) : renderResult),
   });

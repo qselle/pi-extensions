@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { fileUri as sharedFileUri, link as osc8Link, toAbsolutePath } from "../../lib/links.ts";
+import { PlainOutput } from "../../lib/output.ts";
 
 export type ToolName = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls";
 
@@ -27,6 +28,18 @@ const VERBS: Record<ToolName, string> = {
 
 export function verbFor(name: ToolName): string {
 	return VERBS[name];
+}
+
+/** Labels are single-line plain text; tool output itself remains untouched. */
+export function labelText(value: unknown): string {
+	return new PlainOutput().push(String(value ?? "")).replace(/\s+/g, " ").trim();
+}
+
+export function searchTarget(args: any): string {
+	const query = labelText(args?.pattern ?? args?.query ?? args?.name);
+	const path = args?.path == null ? "" : shortPath(labelText(args.path));
+	const glob = labelText(args?.glob);
+	return [`"${query}"`, path && path !== "." ? `in ${path}` : "", glob ? `(${glob})` : ""].filter(Boolean).join(" ");
 }
 
 export function targetFor(name: ToolName, args: any): string {
@@ -82,19 +95,45 @@ export function diffStat(patch: string): { added: number; removed: number } {
 	return { added, removed };
 }
 
-const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+const plural = (n: number, unit: string) => `${n} ${n === 1 ? unit : unit === "entry" ? "entries" : unit === "match" ? "matches" : `${unit}s`}`;
+
+/** Only remove Pi's appended continuation notice, never arbitrary bracketed output. */
+function withoutNotice(text: string, name: ToolName): string {
+	const notice = name === "read"
+		? /\n\n\[(?:Showing lines \d+-\d+ of \d+[^\n]*|\d+ more lines in file\. Use offset=\d+ to continue\.)\]$/
+		: /\n\n\[(?:\d+ (?:matches|entries|results) limit reached[^\n]*|[\d.]+[KMGT]?B limit reached[^\n]*|Some lines truncated to \d+ chars[^\n]*)\]$/;
+	return text.replace(notice, "");
+}
+
+function limitedSuffix(details: any): string {
+	return details?.truncation?.truncated || details?.matchLimitReached || details?.entryLimitReached || details?.resultLimitReached
+		? " · limited" : "";
+}
 
 export function summarize(name: ToolName, result: any, args: any): string {
 	const { text, hasImage } = resultText(result);
+	const details = result?.details;
+	const body = withoutNotice(text, name);
 	switch (name) {
-		case "read":
-			return hasImage ? "image" : plural(countNonEmptyLines(text), "line");
+		case "read": {
+			if (hasImage) return "image";
+			const count = Number.isSafeInteger(details?.truncation?.outputLines) ? details.truncation.outputLines : body ? body.split("\n").length : 0;
+			return plural(count, "line") + limitedSuffix(details);
+		}
 		case "ls":
-			return plural(countNonEmptyLines(text), "entry").replace("entrys", "entries");
-		case "grep":
-			return plural(countNonEmptyLines(text), "match").replace("matchs", "matches");
+			return plural(text.trim() === "(empty directory)" ? 0 : countNonEmptyLines(body), "entry") + limitedSuffix(details);
+		case "grep": {
+			if (text.trim() === "No matches found") return "0 matches";
+			// Native grep marks matches path:line: and context path-line-. Count
+			// matching lines, not context or the trailing truncation instructions.
+			const matches = body.split("\n").map((line) => line.match(/^(.+?):\d+: /)).filter((match) => match !== null);
+			const nativeFormat = matches.length > 0 || body.split("\n").some((line) => /^.+-\d+- /.test(line));
+			const count = nativeFormat ? matches.length : countNonEmptyLines(body);
+			const files = new Set(matches.map((match) => match[1])).size;
+			return plural(count, "match") + (files ? ` · ${plural(files, "file")}` : "") + limitedSuffix(details);
+		}
 		case "find":
-			return plural(countNonEmptyLines(text), "result");
+			return plural(text.trim() === "No files found matching pattern" ? 0 : countNonEmptyLines(body), "result") + limitedSuffix(details);
 		case "write": {
 			const content = typeof args?.content === "string" ? args.content : "";
 			return content ? plural(content.split("\n").length, "line") : "written";

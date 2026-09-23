@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import { decodeSummary, emptySummary, recordResponse, summaryText, type Summary } from "./stats.ts";
-import { addTiming } from "./timing.ts";
+import { addTiming, isFirstOutputEvent } from "./timing.ts";
+import { renderCompletion } from "./render.ts";
 import { isTelemetryStyle, telemetryStyle, TELEMETRY_ENTRY, TELEMETRY_CHANGED } from "../../lib/telemetry.ts";
 const ENTRY = "turn-usage-summary";
 /** Full agent-run accounting, separate from individual response/work-block timing. */
-export default function turnStats(pi: ExtensionAPI, now: () => number = () => performance.now()): void {
+export default function turnStats(pi: ExtensionAPI, now: () => number = () => performance.now(), wallNow: () => number = Date.now): void {
   let current: Summary | undefined;
   let started = 0;
   let seen = new WeakSet<object>();
@@ -17,11 +17,15 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
   pi.on("session_start", restore);
   pi.on("session_tree", restore);
   pi.on("session_shutdown", reset);
-  pi.on("agent_start", () => { reset(); current = emptySummary(); started = now(); });
+  pi.on("agent_start", () => {
+    // Native retries, compaction and pre-settle continuations can start the agent
+    // again before the same user turn settles. Keep the whole turn's accounting.
+    if (!current) { current = emptySummary(); started = now(); }
+  });
   pi.on("before_provider_request", () => { if (current) { sent = now(); first = undefined; } });
   pi.on("message_update", (event) => {
-    if (!current || first !== undefined) return;
-    if (["text_delta", "thinking_delta", "toolcall_delta"].includes(event.assistantMessageEvent.type)) first = now();
+    if (!current || sent === undefined || first !== undefined) return;
+    if (isFirstOutputEvent(event.assistantMessageEvent)) first = now();
   });
   pi.on("tool_execution_start", () => { if (current) current.tools++; });
   pi.on("tool_execution_end", (event) => { if (current && event.isError) current.failedTools++; });
@@ -37,6 +41,7 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
     if (!current) return;
     const summary = current;
     summary.durationMs = Math.max(0, now() - started);
+    summary.endedAt = wallNow();
     reset();
     if (summary.responses || summary.tools) pi.appendEntry(ENTRY, summary);
   });
@@ -45,8 +50,7 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
     render(width) {
       const summary = decodeSummary(entry.data);
       if (!summary || width <= 0 || style === "hide") return [];
-      const color = summary.outcome === "error" || summary.failedTools ? "error" : summary.outcome === "interrupted" ? "warning" : "muted";
-      return summaryText(summary, options.expanded || style === "full").split("\n").map((line) => theme.fg(color, truncateToWidth(line, width, "…")));
+      return renderCompletion(summary, width, theme, options.expanded || style === "full", entry.timestamp);
     },
   }));
   pi.registerCommand("turn-stats", {

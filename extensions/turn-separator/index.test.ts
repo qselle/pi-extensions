@@ -66,7 +66,7 @@ describe("turn-separator wiring", () => {
 		expect(h.appended.length).toBe(1);
 	});
 
-	test("renderer draws a labeled dim rule", () => {
+	test("renderer draws a labeled rule", () => {
 		const h = harness();
 		const theme = { fg: (_c: string, s: string) => s };
 		const lines = h.renderer!({ data: { seconds: 74 } }, { expanded: false }, theme).render(40);
@@ -107,7 +107,7 @@ describe("turn-separator stats", () => {
 		const h = harness();
 		h.fire("message_start", assistant);
 		h.fire("before_provider_request", { payload: {} });
-		h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+		h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
 		h.fire("message_end", usage());
 		h.fire("tool_execution_start", {});
 		h.fire("message_start", assistant);
@@ -117,7 +117,7 @@ describe("turn-separator stats", () => {
 	test("omits ttft when there was no send anchor, instead of reporting 0ms", () => {
 		const h = harness();
 		h.fire("message_start", assistant);
-		h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+		h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
 		h.fire("message_end", usage());
 		h.fire("tool_execution_start", {});
 		h.fire("message_start", assistant);
@@ -125,15 +125,15 @@ describe("turn-separator stats", () => {
 		expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
 	});
 
-	test("ignores non-delta stream events for ttft", () => {
+	test("measures tool-call output as first output", () => {
 		const h = harness();
 		h.fire("message_start", assistant);
 		h.fire("before_provider_request", { payload: {} });
-		h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta" } });
+		h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "x" } });
 		h.fire("message_end", { message: { role: "assistant", usage: { output: 0 } } });
 		h.fire("tool_execution_start", {});
 		h.fire("message_start", assistant);
-		expect(h.appended[0]!.data.stats?.ttftMs).toBeUndefined();
+		expect(h.appended[0]!.data.stats?.ttftMs).toBeGreaterThanOrEqual(0);
 	});
 
 	test("omits stats entirely when nothing was recorded", () => {
@@ -173,15 +173,16 @@ describe("turn-separator stats", () => {
 		expect(h.appended).toHaveLength(0);
 	});
 
-		test("expanded renderer includes stats while compact mode avoids duplicate usage", () => {
+	test("compact and expanded work rules both include stats", () => {
 		const h = harness();
 		const theme = { fg: (_c: string, s: string) => s };
 		const entry = { data: { seconds: 74, stats: { input: 100, output: 318, cacheRead: 4_100, cacheWrite: 0, cost: 0.21 } } };
 		const compact = h.renderer!(entry, { expanded: false }, theme).render(100)[0];
-		expect(compact).not.toContain("$0.21");
+		expect(compact).toContain("$0.21");
+		expect(compact).toContain("in 100 · out 318");
 		const line = h.renderer!(entry, { expanded: true }, theme).render(100)[0];
 		expect(line).toContain("Worked for 1m 14s");
-		expect(line).toContain("↑318");
+		expect(line).toContain("out 318");
 		expect(line).toContain("$0.21");
 	});
 
@@ -215,7 +216,7 @@ test("a response without stream timing does not inherit the prior response's rat
   const h = harness(() => time);
   h.fire("before_provider_request");
   time = 1200;
-  h.fire("message_update", { assistantMessageEvent: { type: "text_delta" } });
+  h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
   time = 2200;
   h.fire("message_end", { message: { role: "assistant", usage: { output: 100 } } });
   h.fire("before_provider_request");
@@ -226,4 +227,28 @@ test("a response without stream timing does not inherit the prior response's rat
   expect(h.appended[0]!.data.stats.output).toBe(150);
   expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
   expect(h.appended[0]!.data.stats.tps).toBeUndefined();
+});
+
+test("tool-call timing survives the work boundary without counting empty chunks or duplicate responses", () => {
+  let time = 0;
+  const h = harness(() => time);
+  h.fire("before_provider_request");
+  time = 100; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_start" } });
+  time = 200; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "" } });
+  time = 500; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "{}" } });
+  time = 1500;
+  const first = usage({ output: 0 });
+  h.fire("message_end", first);
+  h.fire("message_end", first);
+  time = 1600; h.fire("tool_execution_start");
+  time = 2500; h.fire("before_provider_request");
+  time = 2600; h.fire("message_start", assistant);
+  expect(h.appended[0]!.data).toMatchObject({ seconds: 1, stats: { responses: 1, output: 0, ttftMs: 500, tps: 0 } });
+  // A delayed duplicate must neither enter the new block nor erase its request anchor.
+  h.fire("message_end", first);
+  time = 2800; h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
+  time = 3800; h.fire("message_end", usage({ output: 50 }));
+  h.fire("tool_execution_start");
+  time = 4000; h.fire("message_start", assistant);
+  expect(h.appended[1]!.data).toMatchObject({ seconds: 0, stats: { responses: 1, output: 50, ttftMs: 300, tps: 50 } });
 });

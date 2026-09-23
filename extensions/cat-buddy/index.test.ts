@@ -88,7 +88,8 @@ test("docks on the current editor through Pi's public editor lifecycle", async (
   const docked = editor.render(40);
   expect(docked).toHaveLength(baseLines.length + 2);
   expect(docked[0]).toContain("⡠");
-  expect(colorCalls).toBeGreaterThan(0);
+  expect(colorCalls).toBe(0);
+  expect(docked[0]).toContain("\x1b[38;2;254;128;25m");
   expect(docked[2]).toContain("⠈⠉");
   expect(docked[3]).toBe("  prompt");
 
