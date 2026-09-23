@@ -7,7 +7,9 @@ import {
 	fileLink,
 	fileUri,
 	firstLine,
+	labelText,
 	resultText,
+	searchTarget,
 	summarize,
 	targetFor,
 	toAbs,
@@ -71,6 +73,25 @@ describe("summarize", () => {
 	test("read flags images", () => {
 		expect(summarize("read", { content: [{ type: "image" }] }, {})).toBe("image");
 	});
+	test("native empty searches and directories report zero", () => {
+		expect(summarize("grep", { content: "No matches found" }, {})).toBe("0 matches");
+		expect(summarize("find", { content: "No files found matching pattern" }, {})).toBe("0 results");
+		expect(summarize("ls", { content: "(empty directory)" }, {})).toBe("0 entries");
+	});
+	test("grep counts matching lines and distinct files, excluding context and notices", () => {
+		const content = "src/a.ts-1- context\nsrc/a.ts:2: match\nsrc/a.ts-3- context\nsrc/a.ts:4: another\nsrc/b.ts:7: match\n\n[3 matches limit reached. Use limit=6 for more, or refine pattern]";
+		expect(summarize("grep", { content, details: { matchLimitReached: 3 } }, {})).toBe("3 matches · 2 files · limited");
+		expect(summarize("grep", { content: "src/a.ts-1- context", details: { truncation: { truncated: true } } }, {})).toBe("0 matches · limited");
+	});
+	test("read counts blank lines and native truncation without counting continuation instructions", () => {
+		expect(summarize("read", { content: "a\n\nb\n\n[8 more lines in file. Use offset=4 to continue.]" }, {})).toBe("3 lines");
+		expect(summarize("read", { content: "a\n\nb", details: { truncation: { truncated: true, outputLines: 3 } } }, {})).toBe("3 lines · limited");
+		expect(summarize("read", { content: "[Line 1 exceeds limit]", details: { truncation: { truncated: true, outputLines: 0 } } }, {})).toBe("0 lines · limited");
+	});
+	test("limited listings do not count the tool's appended notice", () => {
+		expect(summarize("find", { content: "a.ts\nb.ts\n\n[2 results limit reached]", details: { resultLimitReached: 2 } }, {})).toBe("2 results · limited");
+		expect(summarize("ls", { content: "a.ts\n\n[50KB limit reached]", details: { truncation: { truncated: true } } }, {})).toBe("1 entry · limited");
+	});
 	test("write uses args.content line count", () => {
 		expect(summarize("write", { content: "" }, { content: "a\nb\nc" })).toBe("3 lines");
 		expect(summarize("write", { content: "" }, {})).toBe("written");
@@ -82,6 +103,12 @@ describe("summarize", () => {
 	test("bash defers to its own body", () => {
 		expect(summarize("bash", { content: "out" }, {})).toBe("");
 	});
+});
+
+test("search labels preserve scope and glob without terminal controls or extra rows", () => {
+	expect(searchTarget({ pattern: "getUser", path: "src", glob: "*.ts" })).toBe('"getUser" in src (*.ts)');
+	expect(searchTarget({ pattern: "a\nb", path: "." })).toBe('"a b"');
+	expect(labelText("a\x1b[31mb\x1b[0m\n c")).toBe("ab c");
 });
 
 describe("boundTail", () => {

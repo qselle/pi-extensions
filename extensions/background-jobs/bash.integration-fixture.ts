@@ -6,12 +6,22 @@ import { EventEmitter } from "node:events";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { JobService, type StartJob } from "./service.ts";
+import { registerSecretVault, SecretVault } from "../questions/secrets.ts";
+import { COMMAND_PURPOSE_GUIDELINE } from "../../lib/tool-purpose.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pi-managed-bash-"));
 process.env.PI_CODING_AGENT_DIR = root;
 const { default: background } = await import("./index.ts");
 const { default: renderer } = await import("../tool-render/index.ts");
 initTheme("dark", false);
+const vault = new SecretVault();
+const secret = "purpose-fixture-private-value";
+vault.issue("purpose", secret);
+const unregisterSecrets = registerSecretVault(vault);
+const launches: StartJob[] = [];
+const originalStart = JobService.prototype.start;
+JobService.prototype.start = function (input, signal) { launches.push(input); return originalStart.call(this, input, signal); };
 try {
   await writeFile(join(root, "cwd-marker"), "correct-directory");
   for (const order of [[background, renderer], [renderer, background]]) {
@@ -36,9 +46,21 @@ try {
       assert.deepEqual(bash.constrainedSampling, { type: "json_schema", strict: "prefer" });
       for (const name of ["read", "write", "edit"]) assert.deepEqual(tool(name).constrainedSampling, { type: "json_schema", strict: "prefer" });
       assert(bash.parameters.properties.yield_ms, "managed schema must win in either order");
+      assert.equal(bash.parameters.properties.purpose.type, "string");
+      assert(!bash.parameters.required.includes("purpose"), "purpose must remain optional for old calls");
+      assert.equal(bash.parameters.properties.purpose.maxLength, undefined, "display metadata must not reject a long explanation");
+      assert(bash.promptGuidelines.includes(COMMAND_PURPOSE_GUIDELINE));
       assert.equal(bash.renderShell, "self", "renderer must be preserved");
-      const result = await bash.execute("cwd", { command: "cat cwd-marker", yield_ms: 3000 }, undefined, undefined, ctx);
+      const argumentsWithPurpose = { command: "cat cwd-marker", yield_ms: 3000, purpose: "Inspect the active session directory", name: "Directory check", timeout: 2 };
+      const before = launches.length;
+      const result = await bash.execute("cwd", argumentsWithPurpose, undefined, undefined, ctx);
       assert(result.content[0].text.includes("correct-directory"));
+      assert.equal(launches.length, before + 1, "purpose must not cause an extra command execution");
+      assert.equal(launches.at(-1)!.command, argumentsWithPurpose.command);
+      assert.equal(launches.at(-1)!.name, "Directory check");
+      assert.equal(launches.at(-1)!.timeoutMs, 2000);
+      assert(!Object.hasOwn(launches.at(-1)!, "purpose"), "purpose must not reach the process executor");
+      assert.equal(argumentsWithPurpose.purpose, "Inspect the active session directory", "execution must not mutate tool arguments");
       const updates: string[] = [];
       const streamed = await bash.execute("stream", { command: "printf ready; sleep 0.35; printf done", yield_ms: 3000 }, undefined, (value: any) => updates.push(value.content[0].text), ctx);
       assert(updates.some(text => text.includes("ready") && !text.includes("done")), "foreground output must arrive before command completion");
@@ -52,8 +74,18 @@ try {
       const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
       const shell = 'if true; then printf "%s\\n" "$PWD"; fi';
       const shellRows = bash.renderCall({ command: shell }, theme, { args: { command: shell } }).render(100);
-      assert.equal(stripVTControlCharacters(shellRows.join("\n")), `• Ran ${shell}`);
+      assert.deepEqual(shellRows.map((row: string) => stripVTControlCharacters(row).trimEnd()), ["• Ran command", `  │ ${shell}`]);
       assert(new Set(shellRows.join("\n").match(/\x1b\[38;[^m]+m/g)).size >= 3, "managed commands must retain shell syntax colors in both load orders");
+      const purposeArgs = { command: shell, purpose: `Check \x1b[31m${secret.slice(0, 10)}\u202e${secret.slice(10)}\x1b[0m\nconfiguration\u202e` };
+      const purposeRows = stripVTControlCharacters(bash.renderCall(purposeArgs, theme, { args: purposeArgs }).render(100).join("\n"));
+      assert(purposeRows.includes("Check [redacted] configuration"), purposeRows);
+      assert(!purposeRows.includes(secret) && !purposeRows.includes("\u202e"));
+      assert(purposeRows.includes(shell), "purpose must not replace or rewrite the source panel");
+      assert.equal(purposeArgs.command, shell);
+      assert(purposeArgs.purpose.includes("\u202e"), "rendering must not mutate persisted arguments");
+      const atLimit = { command: shell, purpose: "x".repeat(150) + secret };
+      const cappedRows = stripVTControlCharacters(bash.renderCall(atLimit, theme, { args: atLimit, expanded: true }).render(200).join("\n"));
+      assert(!cappedRows.includes(secret.slice(0, 10)), "redact before capping to avoid exposing a partial secret");
       let invalidations = 0;
       const context = { state: {}, args: { command: "cat" }, invalidate: () => invalidations++, cwd: root };
       const options = { expanded: false, isPartial: false };
@@ -74,5 +106,23 @@ try {
       assert(tool("bash").parameters.properties.yield_ms, "session rebinding must not restore native execution");
     } finally { await fire("session_shutdown"); }
   }
+  const standaloneTools = new Map<string, any>();
+  const standaloneHandlers = new Map<string, Function>();
+  background({ registerTool: (tool: any) => standaloneTools.set(tool.name, tool), registerCommand() {},
+    on: (name: string, handler: Function) => standaloneHandlers.set(name, handler),
+    events: { emit() {}, on() { return () => {}; } },
+  } as never);
+  try {
+    const bash = standaloneTools.get("bash");
+    assert(bash.parameters.properties.purpose && !bash.parameters.required.includes("purpose"));
+    const theme = { fg: (_: string, text: string) => text };
+    const args = { command: "printf ok", purpose: `Check ${secret}` };
+    assert.deepEqual(bash.renderCall(args, theme, { args }).render(100), ["Check [redacted]", "$ printf ok"]);
+    assert.deepEqual(bash.renderCall({ command: "printf ok" }, theme, {}).render(100), ["$ printf ok"]);
+  } finally { await standaloneHandlers.get("session_shutdown")!({}, {}); }
   console.log("managed bash and renderer compose in both load orders");
-} finally { await rm(root, { recursive: true, force: true }); }
+} finally {
+  JobService.prototype.start = originalStart;
+  unregisterSecrets();
+  await rm(root, { recursive: true, force: true });
+}

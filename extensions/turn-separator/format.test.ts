@@ -26,8 +26,8 @@ describe("separatorText", () => {
 		expect(line).toContain("Worked for 1m 14s");
 		expect([...line].length).toBe(39); // width - 1
 	});
-	test("bare rule for sub-second work or unknown duration", () => {
-		expect(separatorText(0, 20)).toBe("─".repeat(19));
+	test("sub-second work is labeled while unknown duration stays a bare rule", () => {
+		expect(separatorText(0, 20)).toContain("Worked for <1s");
 		expect(separatorText(undefined, 20)).toBe("─".repeat(19));
 	});
 	test("falls back to a bare rule when too narrow for the label", () => {

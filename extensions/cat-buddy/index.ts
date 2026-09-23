@@ -8,7 +8,6 @@ import {
   sliceByColumn,
   truncateToWidth,
   visibleWidth,
-  type EditorComponent,
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
@@ -30,6 +29,9 @@ import {
 } from "./panel.js";
 
 type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+
+// The companion keeps its orange coat independently of editor/theme state.
+const colorCat = (text: string): string => `\x1b[38;2;254;128;25m${text}\x1b[39m`;
 
 class CatSprite {
   private frameIndex = 0;
@@ -63,18 +65,17 @@ class CatSprite {
     this.schedulePolicy(mode === "smart" && (becameWorking || working));
   }
 
-  renderEditor(editor: EditorComponent, render: (width: number) => string[], width: number): string[] {
+  renderEditor(render: (width: number) => string[], width: number): string[] {
     const base = render(width);
     if (this.disposed) return base;
     const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? 24;
     this.setEligible(width >= 34 && rows >= 10 && base.length > 0);
     if (!this.visible || !this.eligible) return base;
 
-    const color = editor.borderColor ?? ((value: string) => value);
     const padding = " ".repeat(Math.max(0, width - CAT_WIDTH - 2));
     const pose = getCatPose(this.frameIndex);
     const topRows = pose.slice(0, -1).map((line) =>
-      padding + truncateToWidth(color(line), CAT_WIDTH, "")
+      padding + truncateToWidth(colorCat(line), CAT_WIDTH, "")
     );
 
     const border = base[0]!;
@@ -83,13 +84,13 @@ class CatSprite {
     // Status text and other editor decorations own their border columns.
     // Give the cat a separate third row rather than painting over them.
     if (!/^─+$/u.test(stripVTControlCharacters(borderSegment))) {
-      return [...topRows, padding + color(bottom), ...base];
+      return [...topRows, padding + colorCat(bottom), ...base];
     }
     const leadingWidth = bottom.length - bottom.trimStart().length;
     const trailingWidth = Math.max(0, CAT_WIDTH - bottom.length);
     const leadingBorder = sliceByColumn(borderSegment, 0, leadingWidth, true);
     const trailingBorder = sliceByColumn(borderSegment, CAT_WIDTH - trailingWidth, trailingWidth, true);
-    const spriteBorder = leadingBorder + color(bottom.slice(leadingWidth)) + trailingBorder;
+    const spriteBorder = leadingBorder + colorCat(bottom.slice(leadingWidth)) + trailingBorder;
     const left = sliceByColumn(border, 0, width - CAT_WIDTH - 2, true);
     const right = sliceByColumn(border, width - 2, 2, true);
     const mergedBorder = left + spriteBorder + right;
@@ -199,7 +200,7 @@ export default function (pi: ExtensionAPI) {
       const render = editor.render.bind(editor);
       const sprite = new CatSprite(tui, mode, working, visible);
       host = sprite;
-      editor.render = (width: number) => sprite.renderEditor(editor, render, width);
+      editor.render = (width: number) => sprite.renderEditor(render, width);
       return editor;
     };
     ctx.ui.setEditorComponent(installedFactory);

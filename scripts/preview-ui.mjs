@@ -63,14 +63,29 @@ async function snapshot(name, cols, rows) {
   await writeFile(join(output, name + '.txt'), lines.join('\n'));
 }
 try {
+  await phase('gallery');
+  await snapshot('web-results-wide', 100, 28);
+  await snapshot('web-results-narrow', 60, 28);
+  await writeFile(join(root, 'gallery-continue'), 'yes');
+  await phase('tools');
+  await snapshot('tools-wide', 100, 34);
+  await snapshot('tools-narrow', 60, 28);
+  child.write('\x0f'); await delay(100);
+  await snapshot('tools-expanded', 100, 42);
+  child.write('\x0f'); await delay(100);
+  await writeFile(join(root, 'tools-continue'), 'yes');
   await phase('active');
   await snapshot('active-wide', 100, 34);
   await snapshot('active-narrow', 60, 28);
   term.resize(100, 34); child.resize(100, 34);
   await writeFile(join(root, 'continue'), 'yes');
   await phase('settled');
+  await snapshot('settled-roomy', 180, 48);
   await snapshot('settled-wide', 100, 34);
   await snapshot('settled-narrow', 60, 28);
+  child.write('\x14'); await delay(100);
+  await snapshot('thinking-expanded', 100, 34);
+  child.write('\x14'); await delay(100);
   await input('/overlay hide', 'Workflow overlay hidden');
   await snapshot('workflow-hidden', 60, 28);
   await input('/overlay show', 'Workflow overlay shown');
@@ -86,6 +101,10 @@ try {
   await input('/transcript stable phrase across wraps', 'Transcript');
   await snapshot('search-narrow', 60, 28);
   child.write('q'); await delay(100);
+  await input('/palette telegram', 'Commands ·');
+  await snapshot('commands-wide', 100, 34);
+  await snapshot('commands-narrow', 60, 28);
+  child.write('\x1b'); await delay(100);
   await input('/doctor', 'Doctor · local checks');
   await snapshot('doctor-wide', 100, 34);
   await snapshot('doctor-narrow', 60, 28);
@@ -101,6 +120,64 @@ try {
   assert.deepEqual(result.errors, []);
   assert.equal(result.networkAttempts, 0);
   const frame = (name) => frames.find((frame) => frame.name === name).lines.join('\n');
+  for (const name of ['web-results-wide', 'web-results-narrow']) {
+    assert(frame(name).includes('3 sources'));
+    assert(frame(name).includes('typescriptlang.org'));
+    const gallery = frames.find((item) => item.name === name);
+    const messageIndex = gallery.lines.findIndex((line) => line.includes('Find the TypeScript references'));
+    assert(messageIndex >= 1, 'The user message and its top padding must remain visible.');
+    for (const rowIndex of [messageIndex - 1, messageIndex, messageIndex + 1]) {
+      const row = gallery.cells[rowIndex];
+      assert(row.every((cell) => cell.bgRgb && cell.bg === 0x504945), 'User message panels must paint their entire width, including padding.');
+    }
+    const letters = gallery.cells[messageIndex].filter((cell) => cell.text.trim());
+    assert(letters.every((cell) => cell.fgRgb && cell.fg === 0xfbf1c7), 'User messages must retain bright cream text.');
+  }
+  for (const name of ['tools-wide', 'tools-narrow']) {
+    assert(frame(name).includes('Explored'));
+    assert(frame(name).includes('research.ts'));
+    assert(frame(name).includes('2 checks passed'));
+    assert(frame(name).includes('Ran command'), 'Shell tools need a clear status heading above their command.');
+    assert(frame(name).includes('Ran command · Verify the command output display'), 'The command purpose must share the existing header.');
+    assert(frame(name).includes('Ran command · Check both research source files exist'), 'Each command keeps its own purpose.');
+    assert(frame(name).includes('command line'), 'The collapsed multiline command must expose its bounded preview.');
+    const toolFrame = frames.find((item) => item.name === name);
+    const purposeRow = toolFrame.lines.findIndex((line) => line.includes('Verify the command output display'));
+    const caption = toolFrame.cells[purposeRow].slice(toolFrame.lines[purposeRow].indexOf('Verify'), toolFrame.lines[purposeRow].trimEnd().length);
+    assert(caption.every((cell) => cell.fgRgb && cell.fg === 0xebdbb2 && !cell.bgRgb), 'Command purpose must remain neutral and outside the shaded source panel.');
+    const panels = toolFrame.cells.filter((row) => row.some((cell) => cell.bgRgb && cell.bg === 0x3c3836));
+    assert(panels.length >= 2, 'Short and multiline commands must have soft shaded panels.');
+    assert(panels.every((row) => row.some((cell) => cell.text === '│')), 'Each command row must keep its quiet left gutter.');
+  }
+  assert(frame('tools-expanded').includes('Missing source files'), 'Expanding tools must reveal the rest of the multiline command.');
+  assert(!frame('tools-expanded').includes('command line'), 'Expanded commands must show all available fixture lines.');
+  assert(frame('settled-wide').includes('Thinking...'), 'Collapsed thinking must keep Pi\'s default label.');
+  assert(frame('settled-wide').includes('│ const sources'));
+  assert(frame('settled-wide').includes('typescript · src/research.ts'), 'The native TUI must use the Shiki code display.');
+  const settled = frames.find((item) => item.name === 'settled-wide');
+  const catCells = settled.cells.flat().filter((cell) => /[\u2801-\u28ff]/u.test(cell.text));
+  assert(catCells.length > 0 && catCells.every((cell) => cell.fgRgb && cell.fg === 0xfe8019), 'The cat must remain orange.');
+  const orangeBars = settled.cells.filter((row) => row.filter((cell) => cell.text === '─' && cell.fgRgb && cell.fg === 0xfe8019).length > 50);
+  assert(orangeBars.length >= 2, 'Both editor bars must use the visible orange accent.');
+  const workedRow = frames.find((item) => item.name === 'settled-wide').lines.find((row) => row.includes('Worked for'));
+  assert(workedRow?.includes('in 3.5K') && workedRow.includes('out 240') && workedRow.includes('$0.01'), 'Work rules must include readable recorded statistics in compact mode.');
+  const telemetryColors = new Set([0xfe8019, 0xa89984, 0xebdbb2, 0x7c6f64]);
+  for (const name of ['settled-wide', 'settled-narrow']) {
+    const capture = frames.find((item) => item.name === name);
+    const receipt = capture.lines.filter((row) => row.includes('in 7K') && row.includes('out 480'));
+    assert.equal(receipt.length, 1, 'Final compact statistics must occupy exactly one row.');
+    assert(receipt[0].includes('$0.03'));
+    const receiptIndex = capture.lines.indexOf(receipt[0]);
+    assert(receipt[0].trimStart().startsWith('Turn '), 'The final receipt must identify its whole-turn scope.');
+    for (const row of [capture.cells[receiptIndex], capture.cells.at(-1)]) {
+      const content = row.filter((cell) => cell.text.trim());
+      assert(content.every((cell) => cell.fgRgb && telemetryColors.has(cell.fg)), 'Normal footer and turn statistics must share one accent and neutral palette.');
+    }
+    assert(!/(?:ttft|\bctx\b|\bR\d|\bW\d|\d+r\/\d+t)/.test(receipt[0]), 'Telemetry labels must be readable words.');
+  }
+  assert(/finished \d{2}:\d{2}:\d{2}/.test(frame('settled-roomy')), 'Wide turn receipts must label their completion time.');
+  assert(frame('thinking-expanded').includes('I will keep source metadata explicit'));
+
   for (const name of ['active-wide', 'active-narrow', 'settled-wide', 'settled-narrow']) {
     assert(!frame(name).includes('╭ Plan'), 'The default plan must not cover transcript content.');
     assert(frame(name).includes('Plan 1/3 · ● Improve research tools'));
@@ -121,6 +198,12 @@ try {
   assert(frame('search-narrow').includes('╭ Transcript'));
   assert(frame('search-narrow').includes('1/1 matches'));
   assert(frame('search-narrow').includes('q/Esc close'));
+  for (const name of ['commands-wide', 'commands-narrow']) {
+    assert(frame(name).includes('Commands ·'));
+    assert(frame(name).includes('/telegram'));
+    assert(frame(name).includes('Enter insert'));
+    assert(!frame(name).includes('Plan 1/3 · ● Improve research tools'));
+  }
   for (const name of ['doctor-wide', 'doctor-narrow']) {
     assert(frame(name).includes('╭ Doctor · local checks'));
     assert(frame(name).includes('checks passed'));

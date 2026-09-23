@@ -18,6 +18,8 @@ type Handler = (event: any, ctx: any) => any;
 
 class MockPi {
   commands = new Map<string, any>();
+  tools = new Map<string, any>();
+  activeTools = ["read", "bash"];
   handlers = new Map<string, Handler[]>();
   eventHandlers = new Map<string, Set<(value: unknown) => void>>();
   forwardedMessages: unknown[] = [];
@@ -33,6 +35,9 @@ class MockPi {
     },
   };
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
+  registerTool(tool: any) { this.tools.set(tool.name, tool); this.activeTools.push(tool.name); }
+  getActiveTools() { return this.activeTools; }
+  setActiveTools(tools: string[]) { this.activeTools = tools; }
   sendMessage(message: unknown) { this.forwardedMessages.push(message); }
   sendUserMessage(message: unknown) { this.forwardedMessages.push(message); }
   on(name: string, handler: Handler) {
@@ -72,6 +77,7 @@ test("suppresses the entire Telegram hub inside subagent children", () => {
   const runtime = telegramExtension(pi as any, { env: validEnv, configFile: false, isSubagentChild: true });
   expect(runtime).toBeUndefined();
   expect(pi.commands.size).toBe(0);
+  expect(pi.tools.size).toBe(0);
   expect(pi.handlers.size).toBe(0);
   expect(pi.eventHandlers.size).toBe(0);
 });
@@ -82,6 +88,7 @@ test("keeps missing configuration quiet and reports malformed configuration safe
   telegramExtension(disabledPi as any, { env: {}, configFile: false });
   await disabledPi.emit("session_start", {}, disabledCtx);
   expect(disabledCtx.notifications).toHaveLength(0);
+  expect(disabledPi.activeTools).toEqual(["read", "bash"]);
   await disabledPi.commands.get("telegram-test").handler("", disabledCtx);
   expect(disabledCtx.notifications[0]).toMatchObject({ level: "warning" });
 
@@ -120,6 +127,7 @@ test("sets up, reports, disables, and re-enables Telegram without reload", async
 
     await pi.commands.get("telegram").handler("setup", ctx);
     expect(getTelegramService()).toBeDefined();
+    expect(pi.activeTools).toEqual(["read", "bash", "notify_user"]);
     expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({
       status: "enabled",
       config: { botToken: TOKEN, chatId: "987654321", questionDelayMinutes: 0.25 },
@@ -140,9 +148,11 @@ test("sets up, reports, disables, and re-enables Telegram without reload", async
     expect(ctx.notifications.at(-1).message).toContain("15 seconds");
     await pi.commands.get("telegram").handler("off", ctx);
     expect(getTelegramService()).toBeUndefined();
+    expect(pi.activeTools).toEqual(["read", "bash"]);
     expect(loadTelegramConfig({ env: {}, configFile: path }).status).toBe("disabled");
     await pi.commands.get("telegram").handler("on", ctx);
     expect(getTelegramService()).toBeDefined();
+    expect(pi.activeTools).toEqual(["read", "bash", "notify_user"]);
     expect(loadTelegramConfig({ env: {}, configFile: path }).status).toBe("enabled");
 
     await pi.commands.get("telegram").handler("test", ctx);
@@ -253,4 +263,121 @@ test("waits for pending goal delivery during session shutdown", async () => {
   await shutdown;
   expect(stopped).toBe(true);
   expect(runtime.notifier.pendingCount()).toBe(0);
+});
+
+test("explicit command and tool send formatted notifications through the shared destination", async () => {
+  const pi = new MockPi();
+  const ctx = context();
+  const bodies: any[] = [];
+  telegramExtension(pi as any, { env: { ...validEnv, PI_TELEGRAM_THREAD_ID: "42" }, configFile: false, fetch: async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return success();
+  } });
+  await pi.emit("session_start", {}, ctx);
+  const command = pi.commands.get("telegram");
+  await command.handler("send **Ready**\n\nReport available.", ctx);
+  expect(ctx.notifications.at(-1)?.message).toBe("Telegram notification sent.");
+  const result = await pi.tools.get("notify_user").execute("id", { message: "# Complete\n\n[Report](https://example.com)" }, undefined, undefined, ctx);
+  expect(result.details).toEqual({ sent: true, messageId: 1 });
+  expect(result.isError).not.toBe(true);
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toMatchObject({ text: "<b>Ready</b>\n\nReport available.", parse_mode: "HTML", message_thread_id: 42, chat_id: validEnv.PI_TELEGRAM_CHAT_ID, disable_web_page_preview: true });
+  expect(bodies[1].text).toContain("<b>Complete</b>");
+  expect(command.getArgumentCompletions("do")).toEqual([{ value: "doctor", label: "doctor" }]);
+  expect(pi.forwardedMessages).toEqual([]);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("disabled integration and invalid direct messages never contact Telegram", async () => {
+  let calls = 0;
+  const pi = new MockPi();
+  const ctx = context();
+  telegramExtension(pi as any, { env: {}, configFile: false, fetch: async () => { calls++; return success(); } });
+  await pi.commands.get("telegram").handler("doctor", ctx);
+  await pi.commands.get("telegram").handler("send Hello", ctx);
+  const result = await pi.tools.get("notify_user").execute("id", { message: "Hello" }, undefined, undefined, ctx);
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("not enabled");
+  expect(calls).toBe(0);
+  await pi.emit("session_shutdown", {}, ctx);
+
+  const enabledPi = new MockPi();
+  telegramExtension(enabledPi as any, { env: validEnv, configFile: false, fetch: async () => { calls++; return success(); } });
+  await enabledPi.commands.get("telegram").handler("send", ctx);
+  await enabledPi.commands.get("telegram").handler(`send ${"a".repeat(4097)}`, ctx);
+  expect(ctx.notifications.at(-1)?.message).toContain("4096");
+  expect(calls).toBe(0);
+  await enabledPi.emit("session_shutdown", {}, ctx);
+});
+
+test("session startup respects a manually narrowed active tool list", async () => {
+  const pi = new MockPi();
+  const ctx = context();
+  telegramExtension(pi as any, { env: validEnv, configFile: false });
+  pi.activeTools = ["read"];
+  await pi.emit("session_start", {}, ctx);
+  expect(pi.activeTools).toEqual(["read"]);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("tool failures are sanitized and unconfirmed delivery is never retried automatically", async () => {
+  for (const failure of ["network", "unconfirmed", "rejected"]) {
+    const pi = new MockPi();
+    const ctx = context();
+    let calls = 0;
+    telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async () => {
+      calls++;
+      if (failure === "network") throw new Error(`secret ${TOKEN}`);
+      return failure === "unconfirmed" ? Response.json({ ok: true, result: {} }) : Response.json({ ok: false, description: TOKEN }, { status: 403 });
+    } });
+    const result = await pi.tools.get("notify_user").execute("id", { message: "Hello" }, undefined, undefined, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.details.sent).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+    if (failure !== "rejected") expect(result.content[0].text.toLowerCase()).toContain("check the chat before retrying");
+    expect(calls).toBe(1);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
+});
+
+test("cancelling an in-flight notification warns about unconfirmed delivery", async () => {
+  const pi = new MockPi();
+  const ctx = context();
+  const controller = new AbortController();
+  let started!: () => void;
+  const pending = new Promise<void>((resolve) => { started = resolve; });
+  let calls = 0;
+  telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async (_url, init) => {
+    calls++;
+    started();
+    return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+  } });
+  const response = pi.tools.get("notify_user").execute("id", { message: "Hello" }, controller.signal, undefined, ctx);
+  await pending;
+  controller.abort();
+  const result = await response;
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("cancelled");
+  expect(result.content[0].text).toContain("check the chat before retrying");
+  expect(calls).toBe(1);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("doctor command performs only read-only checks and leaves the bot untouched", async () => {
+  const pi = new MockPi();
+  const ctx = context();
+  const calls: string[] = [];
+  telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async (url) => {
+    const method = String(url).split("/").at(-1)!;
+    calls.push(method);
+    const result = method === "getMe" ? { id: 123456789, is_bot: true, has_topics_enabled: true }
+      : method === "getChat" ? { type: "private" } : { url: "https://example.com/private-hook" };
+    return Response.json({ ok: true, result });
+  } });
+  await pi.commands.get("telegram").handler("doctor", ctx);
+  expect(calls.sort()).toEqual(["getChat", "getMe", "getWebhookInfo"]);
+  expect(ctx.notifications.at(-1)?.level).toBe("error");
+  expect(ctx.notifications.at(-1)?.message).toContain("webhook blocks");
+  expect(ctx.notifications.at(-1)?.message).not.toContain("private-hook");
+  await pi.emit("session_shutdown", {}, ctx);
 });

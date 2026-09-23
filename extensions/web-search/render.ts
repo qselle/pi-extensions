@@ -25,19 +25,27 @@ function sourceRows(hit: SearchHit, index: number, width: number, theme: Theme, 
   const title = cleanText(hit.title, 240);
   const available = Math.max(0, width - visibleWidth(prefix));
   const link = (label: string) => hyperlinkUrl(truncateToWidth(label, available, "…"), url);
-  const urlRows = () => expanded && available > 0
-    ? wrapTextWithAnsi(url, available).map((line) => indent + theme.fg("muted", hyperlinkUrl(line, url)))
-    : [indent + theme.fg("muted", link(url))];
-  // A visible origin takes priority over a title in narrow terminals.
-  if (width < 36 && !expanded) return [theme.fg("dim", prefix) + theme.fg("muted", link(host))];
-  const lines: string[] = [];
   let titleIsUrl = false;
   try { titleIsUrl = webUrl(cleanText(hit.title, 4096)) === url; } catch { /* descriptive title */ }
+  if (!expanded) {
+    // Keep the full origin visible before spending space on a descriptive title.
+    // Both labels point at the source, including terminals with no mouse support.
+    const titleWidth = available - visibleWidth(host) - 3;
+    if (!title || titleIsUrl || title === host || titleWidth < 12) {
+      return [theme.fg("dim", prefix) + theme.fg("muted", link(host))];
+    }
+    const subject = hyperlinkUrl(truncateToWidth(title, titleWidth, "…"), url);
+    return [theme.fg("dim", prefix) + theme.fg("text", subject) + theme.fg("dim", " · ") + theme.fg("muted", hyperlinkUrl(host, url))];
+  }
+  const urlRows = () => available > 0
+    ? wrapTextWithAnsi(url, available).map((line) => indent + theme.fg("muted", hyperlinkUrl(line, url)))
+    : [indent + theme.fg("muted", link(url))];
+  const lines: string[] = [];
   if (titleIsUrl || !title || title === host) {
     const urls = urlRows();
     lines.push(theme.fg("dim", prefix) + urls[0]!.slice(indent.length), ...urls.slice(1));
   } else {
-    const titles = expanded ? wrapped(theme.fg("text", title), width, indent) : [indent + theme.fg("text", truncateToWidth(title, available, "…"))];
+    const titles = wrapped(theme.fg("text", title), width, indent);
     lines.push(theme.fg("dim", prefix) + titles[0]!.slice(indent.length), ...titles.slice(1));
     lines.push(...urlRows());
   }

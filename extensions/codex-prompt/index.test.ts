@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import codexPromptExtension from "./index.ts";
@@ -121,4 +121,57 @@ test("repeated session start never captures the installed factory itself", async
     await pi.emit("session_shutdown", {}, ctx);
     expect(current).toBe(original);
   } finally { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("explicit prompt and frame colors are independent without altering the host editor", () => {
+  const host = (value: string) => value;
+  const editor = { borderColor: host, render(_width: number) { return [this.borderColor("────"), "  input", this.borderColor("────")]; }, handleInput() {}, invalidate() {}, getText: () => "input", setText() {} };
+  decorateCodexEditor(editor, (text) => `\x1b[33m${text}\x1b[39m`, (text) => `\x1b[90m${text}\x1b[39m`);
+  const rows = editor.render(40);
+  expect(rows[0]).toBe("\x1b[90m────\x1b[39m");
+  expect(rows[1]).toContain("\x1b[33m›\x1b[39m input");
+  expect(editor.borderColor).toBe(host);
+});
+
+test("default bars use the visible theme accent while thinking and hex modes retain their colors", async () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-prompt-bars-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const orange = (text: string) => `\x1b[38;2;254;128;25m${text}\x1b[39m`;
+  const hostColor = (text: string) => `\x1b[35m${text}\x1b[39m`;
+  try {
+    for (const accent of ["theme", "thinking", "#83a598"]) {
+      writeFileSync(join(agentDir, "codex-prompt.json"), JSON.stringify({ accent }));
+      const pi = new MockPi();
+      const original = () => ({
+        borderColor: hostColor,
+        render(_width: number) { return [this.borderColor("────"), "  input", this.borderColor("────")]; },
+        handleInput() {}, invalidate() {}, getText: () => "input", setText() {},
+      });
+      let current: any = original;
+      const theme = {
+        fg: (token: string, text: string) => token === "border" ? `\x1b[90m${text}\x1b[39m` : orange(text),
+      };
+      const ctx = { mode: "tui", ui: {
+        theme,
+        getEditorComponent: () => current,
+        setEditorComponent: (factory: any) => { current = factory; },
+      } };
+      codexPromptExtension(pi as any);
+      await pi.emit("session_start", {}, ctx);
+      const editor = current({}, editorTheme, keybindings);
+      const expected = accent === "theme" ? orange
+        : accent === "thinking" ? hostColor
+        : (text: string) => `\x1b[38;2;131;165;152m${text}\x1b[39m`;
+      expect(editor.render(40)).toEqual([expected("────"), `${expected("›")} input`, expected("────")]);
+      expect(editor.borderColor).toBe(hostColor);
+      await pi.emit("session_shutdown", {}, ctx);
+      expect(current).toBe(original);
+    }
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });

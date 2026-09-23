@@ -45,6 +45,9 @@ try {
     await session.prompt("/telegram test");
     assert.equal(calls.find((call) => call.method === "createForumTopic")?.body.name, "API Review");
     assert.equal(calls.at(-1)?.body.message_thread_id, 100);
+    await session.prompt("/telegram send **Requested update**");
+    assert.equal(calls.at(-1)?.body.text, "<b>Requested update</b>");
+    assert.equal(calls.at(-1)?.body.message_thread_id, 100);
     session.setSessionName("API Rollout");
     await runtime!.service.send("Follow-up");
     assert.ok(calls.some((call) => call.method === "editForumTopic" && call.body.name === "API Rollout"));

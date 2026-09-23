@@ -56,6 +56,7 @@ try {
   assert.equal((summary as any).data.tools, 1);
   assert.equal((summary as any).data.usage.output.known, 10);
   const data = (summary as any).data;
+  assert(Number.isFinite(data.endedAt), "completion clock must persist with the entry");
   assert.equal(data.timing.latencySamples, 2);
   assert.equal(data.timing.streamSamples, 2);
   assert.equal(data.timing.outputTokens, 10);
@@ -75,7 +76,14 @@ try {
   for (const expanded of [false, true]) {
     const component = renderer(summary as any, { expanded } as any, { fg: (_: string, text: string) => text } as any);
     assert(component);
-    if (expanded) assert(component.render(120).join("\n").includes("2/2 responses measured"));
+    const compact = component.render(120).join("\n");
+    assert(compact.includes("first token ") && compact.includes("tokens/s"));
+    assert(compact.includes("$0.06"), "turn cost is visible without expansion");
+    assert(compact.includes("2 replies") && compact.includes("1 tool"), "work counts are readable without expansion");
+    assert(compact.includes("in 20 · out 10") && compact.includes("cache hit 0%"), "input/output and a known uncached prompt are visible");
+    if (!expanded) assert(!compact.includes("cache write 0"), "irrelevant zero cache writes are omitted");
+    if (!expanded) assert.equal(component.render(120).length, 1, "default receipt is exactly one row");
+    if (expanded) assert(component.render(120).join("\n").includes("2/2 replies measured"));
     for (const width of [0, 1, 12, 80]) assert(component.render(width).every((line: string) => visibleWidth(line) <= width));
   }
   await session.prompt("/turn-stats hide");
@@ -89,7 +97,7 @@ try {
   assert.deepEqual(renderWork(), []);
   await session.prompt("/turn-stats compact");
   assert(restoredRenderer(summary as any, { expanded: false } as any, { fg: (_: string, text: string) => text } as any)!.render(120).length > 0);
-  assert(!renderWork().join("\n").includes("$"));
+  assert(renderWork().join("\n").includes("$"), "compact Worked for rules include usage");
   await session.prompt("/turn-stats full");
   assert(renderWork().join("\n").includes("$"));
   assert.equal(calls, 2);

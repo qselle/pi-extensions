@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { separatorText } from "./format.ts";
 import { addUsage, emptyStats, hasStats, tokensPerSecond, type TurnStats } from "./stats.ts";
 import { isTelemetryStyle, telemetryStyle, TELEMETRY_CHANGED } from "../../lib/telemetry.ts";
+import { isFirstOutputEvent } from "../turn-stats/timing.ts";
 
 const ENTRY_TYPE = "worked-for-separator";
 
@@ -10,7 +12,7 @@ interface SeparatorEntry {
 	stats?: TurnStats;
 }
 
-export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => number = Date.now): void {
+export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => number = () => performance.now()): void {
 	// Timestamp of the first tool run since the last assistant message, if any.
 	// Reset when a separator is emitted (below), not on turn_start — turn_start
 	// re-fires per model round-trip and would wipe it before the post-tool message.
@@ -22,6 +24,7 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 	let firstTokenAt: number | undefined;
 	let style = telemetryStyle([]);
 	let sessionId: string | undefined;
+	let seen = new WeakSet<object>();
 	pi.events?.on(TELEMETRY_CHANGED, (value: any) => {
 		if (value?.sessionId === sessionId && isTelemetryStyle(value.style)) style = value.style;
 	});
@@ -31,6 +34,7 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 		stats = emptyStats();
 		requestSentAt = undefined;
 		firstTokenAt = undefined;
+		seen = new WeakSet();
 	};
 
 	pi.registerEntryRenderer(ENTRY_TYPE, (entry, options, theme) => {
@@ -39,8 +43,8 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 			invalidate() {},
 			render(width: number): string[] {
 				if (style === "hide") return [];
-				const line = separatorText(data?.seconds, width, style === "full" || options.expanded ? data?.stats : undefined);
-				return line ? [theme.fg("dim", line)] : [];
+				const line = separatorText(data?.seconds, width, data?.stats, (color, text) => theme.fg(color, text), visibleWidth);
+				return line ? [line] : [];
 			},
 		};
 	});
@@ -66,7 +70,7 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 	pi.on("message_start", (event) => {
 		if (event.message.role !== "assistant") return;
 		if (workStart != null) {
-			const seconds = Math.round((now() - workStart) / 1000);
+			const seconds = Math.max(0, Math.round((now() - workStart) / 1000));
 			const data: SeparatorEntry = { seconds, stats: hasStats(stats) ? stats : undefined };
 			workStart = undefined;
 			stats = emptyStats();
@@ -75,14 +79,14 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 	});
 
 	pi.on("message_update", (event) => {
-		if (firstTokenAt != null) return;
-		const type = event.assistantMessageEvent.type;
-		if (type === "text_delta" || type === "thinking_delta") firstTokenAt = now();
+		if (requestSentAt == null || firstTokenAt != null) return;
+		if (isFirstOutputEvent(event.assistantMessageEvent)) firstTokenAt = now();
 	});
 
 	pi.on("message_end", (event) => {
 		const message = event.message;
-		if (message?.role !== "assistant") return;
+		if (message?.role !== "assistant" || seen.has(message)) return;
+		seen.add(message);
 		const endedAt = now();
 		stats = addUsage(stats, message.usage);
 		delete stats.ttftMs;
@@ -93,7 +97,7 @@ export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => numb
 		if (requestSentAt != null && firstTokenAt != null && firstTokenAt >= requestSentAt) {
 			stats.ttftMs = firstTokenAt - requestSentAt;
 		}
-		const rate = tokensPerSecond(message.usage?.output ?? 0, firstTokenAt, endedAt);
+		const rate = tokensPerSecond(message.usage?.output, firstTokenAt, endedAt);
 		if (rate !== undefined) stats.tps = rate;
 		requestSentAt = undefined;
 		firstTokenAt = undefined;

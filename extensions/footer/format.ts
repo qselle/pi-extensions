@@ -1,3 +1,5 @@
+import { PlainOutput } from "../../lib/output.ts";
+
 export interface ContextUsageLike {
 	tokens: number | null;
 	contextWindow: number;
@@ -7,24 +9,13 @@ export interface ContextUsageLike {
 export interface UsageTotals {
 	input: number;
 	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
 	cost: number;
-}
-
-export type CellId =
-	| "session"
-	| "model"
-	| "badges"
-	| "status"
-	| "context"
-	| "contextTokens"
-	| "traffic"
-	| "cost";
-
-export interface Cell {
-	id: CellId;
-	text: string;
-	/** 0 = never dropped; higher = dropped earlier when the line is too wide. */
-	priority: number;
+	/** Number of attributable model-usage records, including nested calls and warming. */
+	responses?: number;
+	/** Records with an absent or invalid value; omitted metadata means complete. */
+	missing?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite" | "cost", number>>;
 }
 
 const trimZeros = (s: string): string => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
@@ -77,49 +68,6 @@ export function formatCwd(cwd: string, home: string | undefined): string {
 	return cwd;
 }
 
-export interface FooterInput {
-	/** User-facing session name. Omitted until the session has been named. */
-	session?: string;
-	/** Pre-composed model + effort label, e.g. "claude-opus-4-8 max". */
-	model: string;
-	/** Short first-line contributions from optional extensions. */
-	badges?: readonly string[];
-	status: "ready" | "working";
-	usage: ContextUsageLike | undefined;
-	totals: UsageTotals;
-}
-
-export function buildCells(input: FooterInput): Cell[] {
-	const { session, model, badges = [], status, usage, totals } = input;
-	const usedPercent = usage?.percent ?? null;
-	const leftPercent = usedPercent == null ? null : Math.max(0, Math.min(100, 100 - usedPercent));
-	const contextTokens = usage
-		? `${formatTokens(usage.tokens)}/${formatTokens(usage.contextWindow)}`
-		: undefined;
-	const badgeText = badges.length > 0 ? badges.map((badge) => `[${badge}]`).join(" ") : undefined;
-	const cells: Cell[] = [
-		{ id: "session", text: session ?? "", priority: 7 },
-		{ id: "model", text: model, priority: 0 },
-		{ id: "badges", text: badgeText ?? "", priority: 5 },
-		{ id: "status", text: `● ${status}`, priority: 4 },
-		{ id: "context", text: `ctx ${formatPercent(leftPercent)} left`, priority: 0 },
-		{ id: "contextTokens", text: contextTokens ?? "", priority: 8 },
-		{
-			id: "traffic",
-			text: totals.input > 0 || totals.output > 0
-				? `↓${formatTokens(totals.input)} ↑${formatTokens(totals.output)}`
-				: "",
-			priority: 9,
-		},
-	];
-	if (totals.cost > 0) cells.push({ id: "cost", text: formatCost(totals.cost), priority: 6 });
-	return cells.filter((cell) => cell.text.length > 0);
-}
-
-export function workspaceLabel(dir: string, branch?: string | null): string {
-	return branch ? `${dir} · ${branch}` : dir;
-}
-
 /**
  * Drop the highest-priority cells (ties: rightmost) until the joined line fits.
  * `widthOf` defaults to code-point count; render passes an ANSI-aware measurer.
@@ -149,125 +97,12 @@ export function fitCells<T extends { text: string; priority: number }>(
 	return kept;
 }
 
-export interface FooterLayout<T extends { text: string }> {
-	cells: T[];
-	workspace: string;
-	gap: number;
-}
-
-/**
- * Fit a left information rail and right-anchored workspace into one row.
- * Optional information is removed before the workspace, then long workspaces
- * are shortened from the start so the repository and branch remain visible.
- */
-export function layoutFooter<T extends { text: string; priority: number }>(
-	cells: T[],
-	workspace: string,
-	maxWidth: number,
-	separator = " · ",
-	widthOf: (s: string) => number = (s) => [...s].length,
-): FooterLayout<T> {
-	if (maxWidth <= 0) return { cells: [], workspace: "", gap: 0 };
-	const separatorWidth = widthOf(separator);
-	const minGap = 2;
-	const rightLimit = Math.min(maxWidth, Math.max(16, Math.floor(maxWidth * 0.42)));
-	let right = truncateWorkspaceToWidth(workspace.trim(), rightLimit, widthOf);
-	const budget = Math.max(1, maxWidth - (right ? widthOf(right) + minGap : 0));
-	let kept = fitCells(cells, budget, separatorWidth, widthOf);
-	// Essential cells can exceed even the entire terminal (long routed model
-	// identifiers are common). Reclaim the workspace before shortening identity.
-	if (joinedWidth(kept, separatorWidth, widthOf) > maxWidth) {
-		right = "";
-		kept = fitCells(cells, maxWidth, separatorWidth, widthOf).map((cell) => ({ ...cell }));
-		while (kept.length > 1 && joinedWidth(kept, separatorWidth, widthOf) > maxWidth) {
-			const first = kept[0]!;
-			const overflow = joinedWidth(kept, separatorWidth, widthOf) - maxWidth;
-			const target = widthOf(first.text) - overflow;
-			if (target < 1) kept.shift();
-			else first.text = truncateEndToWidth(first.text, target, widthOf);
-		}
-		if (kept.length === 1) kept[0]!.text = truncateEndToWidth(kept[0]!.text, maxWidth, widthOf);
-	}
-	const leftWidth = joinedWidth(kept, separatorWidth, widthOf);
-
-	if (right && leftWidth + minGap + widthOf(right) > maxWidth) {
-		const available = maxWidth - leftWidth - minGap;
-		right = available >= 8 ? truncateWorkspaceToWidth(right, available, widthOf) : "";
-	}
-	const rightWidth = widthOf(right);
-	const gap = right ? Math.max(minGap, maxWidth - leftWidth - rightWidth) : 0;
-	return { cells: kept, workspace: right, gap };
-}
-
-function joinedWidth<T extends { text: string }>(
-	cells: readonly T[],
-	separatorWidth: number,
-	widthOf: (s: string) => number,
-): number {
-	return cells.reduce((sum, cell) => sum + widthOf(cell.text), 0)
-		+ separatorWidth * Math.max(0, cells.length - 1);
-}
-
-function truncateWorkspaceToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
-	if (widthOf(text) <= maxWidth) return text;
-	const separator = " · ";
-	const split = text.lastIndexOf(separator);
-	if (split < 0) return truncateStartToWidth(text, maxWidth, widthOf);
-	const directory = text.slice(0, split);
-	const branch = text.slice(split + separator.length);
-	const contentWidth = maxWidth - widthOf(separator);
-	if (contentWidth < 8) return truncateStartToWidth(text, maxWidth, widthOf);
-	const branchWidth = Math.max(5, Math.floor(contentWidth * 0.52));
-	const directoryWidth = contentWidth - branchWidth;
-	return `${truncateStartToWidth(directory, directoryWidth, widthOf)}${separator}${truncateEndToWidth(branch, branchWidth, widthOf)}`;
-}
-
-function truncateStartToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
-	if (!text || maxWidth <= 0) return "";
-	if (widthOf(text) <= maxWidth) return text;
-	const ellipsis = "…";
-	if (widthOf(ellipsis) >= maxWidth) return ellipsis;
-	const characters = [...text];
-	while (characters.length > 0 && widthOf(`${ellipsis}${characters.join("")}`) > maxWidth) characters.shift();
-	return `${ellipsis}${characters.join("")}`;
-}
-
-function truncateEndToWidth(text: string, maxWidth: number, widthOf: (s: string) => number): string {
-	if (!text || maxWidth <= 0) return "";
-	if (widthOf(text) <= maxWidth) return text;
-	const ellipsis = "…";
-	if (widthOf(ellipsis) >= maxWidth) return ellipsis;
-	const characters = [...text];
-	while (characters.length > 0 && widthOf(`${characters.join("")}${ellipsis}`) > maxWidth) characters.pop();
-	return `${characters.join("")}${ellipsis}`;
-}
-
 /** Plain, bounded text suitable for a one-line session label or footer badge. */
 export function compactInlineText(value: unknown, maxCharacters: number): string {
 	if (typeof value !== "string" || maxCharacters <= 0) return "";
-	const normalized = value
-		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/[\x00-\x1f\x7f]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	const normalized = new PlainOutput().push(value).replace(/\s+/g, " ").trim();
 	const characters = [...normalized];
 	return characters.length <= maxCharacters
 		? normalized
 		: `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
-}
-
-/** Flatten whitespace while preserving extension-supplied colors. */
-export function sanitizeStatusText(text: string): string {
-	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
-}
-
-/** Sort by owner key to keep status order stable. */
-export function statusLine(statuses: Iterable<readonly [string, string]> | undefined, separator = " · "): string {
-	if (!statuses) return "";
-	return [...statuses]
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([, text]) => sanitizeStatusText(text))
-		.filter((text) => text.length > 0)
-		.join(separator);
 }

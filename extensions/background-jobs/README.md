@@ -19,7 +19,7 @@ registered but inactive by default.
 
 With this extension enabled, `bash` uses the managed executor. It accepts the
 usual `command` and `timeout` (seconds), plus `yield_ms` (default 1000), optional
-`name`, `pty`, `columns`, and `rows`. Quick commands finish inline. Longer commands
+`name`, `purpose`, `pty`, `columns`, and `rows`. Quick commands finish inline. Longer commands
 return a job ID; use `job_wait` for the final status and exit code. Commands failing during the initial wait return
 a tool error. Cancelling the initial wait stops the command; cancelling a later
 `job_wait` leaves it running. The four-job limit also applies to bash calls.
@@ -28,6 +28,15 @@ When `tool-render` is enabled, its compact bash appearance is retained regardles
 of extension load order. Status and job ID remain visible above collapsed output.
 Disable this extension to restore Pi's built-in bash execution; the renderer still
 works independently. Pi's user-entered `!` shell commands are unchanged.
+
+The optional `purpose` is a short, model-written explanation of what the command
+checks or changes, typically 3–8 words. It appears with the command, including
+when the compact renderer is disabled. It is display metadata, separate from the
+job `name`; it never reaches the process executor and does not expose thinking
+blocks. Known secret values and terminal controls are removed before display.
+The UI caps it at 160 characters. The schema deliberately imposes no length
+validation failure, so an overly long explanation cannot prevent the command
+from running. Commands without a purpose keep their existing appearance.
 
 The agent can also use:
 

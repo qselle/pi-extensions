@@ -23,7 +23,11 @@ export default function codexPromptExtension(pi: ExtensionAPI): void {
 		installedFactory = (tui, theme, keybindings) => {
 			const editor = wrappedFactory?.(tui, theme, keybindings)
 				?? new CustomEditor(tui, theme, keybindings, { embedWorkingStatus: true });
-			return decorateCodexEditor(editor, accentColor(settings.accent, (text) => ctx.ui.theme?.fg("accent", text) ?? theme.borderColor(text)));
+			const accent = accentColor(settings.accent, (text) => ctx.ui.theme?.fg("accent", text) ?? theme.borderColor(text));
+			const border = settings.accent === "theme"
+				? (text: string) => ctx.ui.theme?.fg("borderAccent", text) ?? theme.borderColor(text)
+				: accent;
+			return decorateCodexEditor(editor, accent, border);
 		};
 		ctx.ui.setEditorComponent(installedFactory);
 	});

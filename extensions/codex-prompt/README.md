@@ -1,6 +1,7 @@
 # codex-prompt
 
-Replaces the editor's two-space gutter with a flat `›` prompt and gives the prompt and borders a consistent theme accent.
+Replaces the editor's two-space gutter with a flat `›` prompt and keeps the input
+area visible with accent-colored bars.
 
 ```text
 ────────────────────────
@@ -13,12 +14,14 @@ Replaces the editor's two-space gutter with a flat `›` prompt and gives the pr
 ```text
 /codex-prompt          Show status
 /codex-prompt on|off   Save the setting; run /reload to apply it
-/codex-prompt accent theme     Use the current theme's accent (default)
+/codex-prompt accent theme     Theme accent prompt and bars (default)
 /codex-prompt accent thinking  Use Pi's thinking-level border colors
 /codex-prompt accent #83a598   Use a fixed hex color; #abc also works
 ```
 
-Run `/reload` after changing an accent. The extension wraps rendering and falls back to Pi's editor if the transform fails. Input handling and other editor decorators are preserved.
+The default uses the theme's `accent` for `›` and `borderAccent` for its frame;
+both are bright orange in Gruvbox. Thinking and fixed-hex choices color both together. Run `/reload` after
+changing an accent. The extension wraps rendering and falls back to Pi's editor if the transform fails. Input handling and other editor decorators are preserved.
 
 ## Configuration
 
