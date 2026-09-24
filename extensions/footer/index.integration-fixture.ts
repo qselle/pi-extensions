@@ -89,7 +89,7 @@ function createContext(mode: string) {
   const ctx = {
     mode,
     cwd: "/work/project",
-    model: { id: "claude-opus-4-8" },
+    model: { id: "claude-opus-4-8", provider: "anthropic" },
     isIdle: () => idle,
     getContextUsage: () => ({ tokens: 28_200, contextWindow: 258_000, percent: 6 }),
     sessionManager: {
@@ -145,6 +145,7 @@ assert.equal(session.scans(), 1, "render must not rescan the branch every frame"
 // Identity, state, compact usage, and the idle terminal title are present.
 assert(first.includes("Footer refresh"), first);
 assert(first.includes("claude-opus-4-8 high"), first);
+assert(!footer.render(300).join("").includes("anthropic"), "provider metadata stays out of the footer even with spare space");
 assert(!first.includes("● ready"), first);
 assert(first.includes("6% 28.2K/258K"), first);
 // Tool-result usage (nested subagent/side-chat model calls) is included.

@@ -91,8 +91,8 @@ Telegram configuration continue to apply.
 The footer adds readable local Git counts when relevant: staged, changed, new,
 conflicts, and commits ahead/behind the locally known upstream. Its single line
 packs context, input/output, cache reads/writes, hit rate
-and cost into compact groups; wide terminals add prompt volume and more identity
-details. Work separators and final turn receipts both show compact statistics on
+and cost into compact groups. Cache shares one `cache R … W … hit …` label;
+wide terminals add more identity details. Work separators and final turn receipts both show compact statistics on
 one line. The final `Turn` row covers the whole run; `finished` labels its local
 completion time. `/turn-stats` opens the full accounting; `/turn-stats full` keeps those
 details expanded. The working row names the active file or executable and counts

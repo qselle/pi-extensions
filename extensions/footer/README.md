@@ -4,14 +4,14 @@ A readable **single-line** footer. The model uses the theme accent; normal label
 values and workspace details stay neutral. Quiet dots separate related groups.
 
 ```text
- GPT-5.6 Sol high │ context 6% 15.5K/258K · in 1.2K out 521 · $0.21 │ pi-extensions · main
+ GPT-5.6 Sol high │ context 6% 15.5K/258K · in 1.2K out 521 · cache R 8.4K W 400 hit 84% · $0.21 │ pi-extensions · main
 ```
 
 ## Usage
 
 Enabled automatically when this extension is loaded. Use `/reload` after updating.
 
-The line can show model and reasoning effort, session name, provider, model badges,
+The line can show model and reasoning effort, session name, model badges,
 context, usage, cost, directory, Git branch/change counts, and extension statuses.
 It never adds a second row, even when extensions publish long statuses.
 Reasoning is omitted when off or unsupported.
@@ -21,23 +21,27 @@ The metric labels are:
 | Label | Meaning |
 | --- | --- |
 | `context 6% 15.5K/258K` | Used context percentage, measured tokens and model capacity |
-| `prompt 10K` | Cumulative fresh input plus cache reads and writes |
 | `in 1.2K out 521` | Fresh input and output tokens |
-| `cache read 8.4K` | Cache tokens read |
-| `cache write 400` | Cache tokens written; measured zero is omitted |
-| `cache hit 84%` | Cache reads divided by total fresh, cached and written prompt tokens |
+| `cache R 8.4K W 400 hit 84%` | Cache tokens read (`R`), written (`W`), and cache-hit percentage |
 | `$0.21` | Cumulative recorded cost |
 
-Wide terminals preserve detailed metrics with full labels. Session/provider/status
-metadata gives way first, followed by optional prompt and cache details. Workspace
+Cache metrics share one label, with spaces separating each counter from its value.
+The hit rate is cache reads divided by fresh input plus cache reads and writes.
+That cumulative prompt total is not shown separately because it repeats these
+counters; `context` remains the current context measurement.
+
+Wide terminals preserve detailed metrics. Session/status
+metadata gives way first, followed by optional cache details. Workspace
 identity stays on the right; paths and branches shorten before disappearing.
 Narrow layouts retain the model, context percentage and cost, then use available
-space for other fields. Labels are never compressed into letter codes or arrows.
+space for other fields. Cache writes give way before reads, then the remaining
+`cache hit` field disappears as a unit. The `cache` label always stays with its
+counters; other metric labels keep their readable words.
 The model retains its reasoning effort when shortened; conflicts outlast ordinary
 Git details and other optional fields. A final cell-aware clip handles exceptionally
 tiny widths.
 
-Unused cache counters and an empty prompt total are omitted. A measured cache-hit
+Measured-zero cache read/write counters are omitted. A measured cache-hit
 rate of `0%` remains visible when prompt tokens were reported without cache reads.
 Missing usage fields show `?` (`$?` for cost); partial totals show a yellow `≥` lower
 bound. The cache-hit rate is unknown whenever a prompt component is incomplete.

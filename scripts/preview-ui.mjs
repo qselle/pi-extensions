@@ -176,6 +176,9 @@ try {
     assert(!/(?:ttft|\bctx\b|\bR\d|\bW\d|\d+r\/\d+t)/.test(receipt[0]), 'Telemetry labels must be readable words.');
   }
   assert(/finished \d{2}:\d{2}:\d{2}/.test(frame('settled-roomy')), 'Wide turn receipts must label their completion time.');
+  const footer = frames.find((item) => item.name === 'settled-roomy').lines.at(-1);
+  assert(footer.includes('cache R 3.6K hit 34%'), 'Footer cache metrics share one concise label.');
+  assert(!footer.includes('prompt ') && !footer.includes('cache read') && !footer.includes('cache write'), 'Footer must omit repeated totals and verbose cache labels.');
   assert(frame('thinking-expanded').includes('I will keep source metadata explicit'));
 
   for (const name of ['active-wide', 'active-narrow', 'settled-wide', 'settled-narrow']) {
