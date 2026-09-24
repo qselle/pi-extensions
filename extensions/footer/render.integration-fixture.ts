@@ -4,19 +4,20 @@ import { renderFooter, type FooterView } from "./render.ts";
 
 const colors: Array<{ color: string; value: string }> = [];
 const theme = { fg(color: string, value: string) { colors.push({ color, value }); return `\x1b[36m${value}\x1b[39m`; } };
-const sample: FooterView = { session: "Footer refresh", model: "GPT-5.6 Sol high", provider: "openai-codex", badges: ["fast"],
+const sample: FooterView = { session: "Footer refresh", model: "GPT-5.6 Sol high", badges: ["fast"],
   usage: { tokens: 15480, contextWindow: 258000, percent: 6 }, totals: { input: 1200, output: 521, cacheRead: 8400, cacheWrite: 400, cost: 0.21 },
   directory: "~/pi-extensions", branch: "main", git: "git changed 2 new 1" };
 const line = (input: FooterView, width: number) => renderFooter(input, width, theme).map(stripTerminalSequences).join("\n");
 const wide = line(sample, 280);
-assert(wide.startsWith(" GPT-5.6 Sol high · Footer refresh · openai-codex · fast"), wide);
+assert(wide.startsWith(" GPT-5.6 Sol high · Footer refresh · fast"), wide);
 assert(wide.endsWith("~/pi-extensions · main · git changed 2 new 1"), wide);
-const telemetry = ["context 6% 15.5K/258K", "prompt 10K", "in 1.2K out 521", "cache read 8.4K", "cache write 400", "cache hit 84%", "$0.21"];
+const telemetry = ["context 6% 15.5K/258K", "in 1.2K out 521", "cache R 8.4K W 400 hit 84%", "$0.21"];
 for (const field of telemetry) assert(wide.includes(field), wide);
-assert(wide.includes("15.5K/258K · prompt 10K · in 1.2K out 521"));
+assert(wide.includes("15.5K/258K · in 1.2K out 521"));
+assert(!wide.includes("prompt "), "the cumulative prompt sum must not compete with actual context");
 assert(colors.every(({ color }) => ["accent", "muted", "text", "dim"].includes(color)), "normal telemetry must use the quiet palette");
 assert(colors.filter(({ color }) => color === "accent").every(({ value }) => value === sample.model), "only the model gets accent color");
-for (const label of ["context", "in", "out", "cache read", "cache write", "cache hit", "changed", "new"]) {
+for (const label of ["context", "in", "out", "cache", "R", "W", "hit", "changed", "new"]) {
   assert(colors.some(({ color, value }) => color === "muted" && value === label), `${label} must remain legible`);
 }
 assert(colors.some(({ color, value }) => color === "text" && value === "84%"));
@@ -38,6 +39,8 @@ for (const session of ["Footer refresh", "界🌍é".repeat(25)]) {
     if (width >= 20) assert(plain.includes("$0.21"), `lost cost at ${width}: ${plain}`);
     if (width >= 40) assert(plain.includes("high"), `lost model effort at ${width}: ${plain}`);
     assert(!/\bctx\b|[↓↑▰▱]|\bR\d|\bW\d|\bhit\d/.test(plain), `cryptic label at ${width}: ${plain}`);
+    assert(!/(?:^| · )R |(?:^| · )W |(?:^| · )hit /.test(plain), `orphaned cache metric at ${width}: ${plain}`);
+    assert((plain.match(/\bcache\b/g) ?? []).length <= 1, `repeated cache label at ${width}: ${plain}`);
   }
 }
 for (const width of [60, 80, 100, 120, 180]) {
@@ -59,21 +62,38 @@ assert(unknown.includes("context ?% ?/258K"), unknown);
 const empty = line({ ...sample, totals: { input: 0, output: 0, cost: 0 }, usage: undefined }, 280);
 for (const field of ["context ?% ?/?", "in 0 out 0", "$0.00"]) assert(empty.includes(field), empty);
 assert(!empty.includes("cache") && !empty.includes("prompt 0"), "unused cache fields add no clutter");
-assert(!line({ ...sample, totals: { ...sample.totals, cacheWrite: 0 } }, 280).includes("cache write"));
+assert(line({ ...sample, totals: { ...sample.totals, cacheWrite: 0 } }, 280).includes("cache R 8.4K hit 88%"));
+assert(!line({ ...sample, totals: { ...sample.totals, cacheWrite: 0 } }, 280).includes(" W "));
+assert(line({ ...sample, totals: { ...sample.totals, cacheRead: 0 } }, 280).includes("cache W 400 hit 0%"));
 assert(line({ ...sample, totals: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } }, 280).includes("cache hit 0%"));
 
 // Missing reports stay unknown; partial recorded totals are lower bounds.
 colors.length = 0;
 const missing = line({ ...sample, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
   responses: 1, missing: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, cost: 1 } } }, 280);
-for (const field of ["in ? out ?", "cache read ?", "cache write ?", "cache hit ?", "$?"]) assert(missing.includes(field), missing);
+for (const field of ["in ? out ?", "cache R ? W ? hit ?", "$?"]) assert(missing.includes(field), missing);
 assert(!colors.some(({ color }) => color === "warning" || color === "error"));
 colors.length = 0;
 const partial = line({ ...sample, totals: { ...sample.totals, responses: 2, missing: { input: 1, cacheRead: 1, cost: 1 } } }, 280);
-for (const field of ["in ≥1.2K out 521", "cache read ≥8.4K", "prompt ≥10K", "cache hit ?", "≥$0.21"]) assert(partial.includes(field), partial);
+for (const field of ["in ≥1.2K out 521", "cache R ≥8.4K W 400 hit ?", "≥$0.21"]) assert(partial.includes(field), partial);
 assert(colors.some(({ color, value }) => color === "warning" && value === "≥$0.21"));
 assert(colors.some(({ color, value }) => color === "muted" && value === "?"));
-assert(!partial.includes("cache hit 84%"));
+assert(!partial.includes("hit 84%"));
+const unknownInput = line({ ...sample, totals: { ...sample.totals, responses: 2, missing: { input: 1 } } }, 280);
+assert(unknownInput.includes("cache R 8.4K W 400 hit ?"), unknownInput);
+
+// Each intermediate layout keeps the cache context and drops less useful detail first.
+const cacheLayouts = new Set<string>();
+for (let width = 40; width <= 280; width++) {
+  const rendered = line(sample, width);
+  const cache = rendered.match(/cache [^·│]+/)?.[0]?.trim();
+  if (cache) cacheLayouts.add(cache);
+  if (rendered.includes(" W ")) assert(rendered.includes("cache R 8.4K W 400 hit 84%"), rendered);
+  if (rendered.includes(" R ")) assert(rendered.includes("cache R 8.4K"), rendered);
+}
+for (const expected of ["cache R 8.4K W 400 hit 84%", "cache R 8.4K hit 84%", "cache hit 84%"]) {
+  assert(cacheLayouts.has(expected), `missing width-adaptive layout ${expected}`);
+}
 
 for (const [percent, expected] of [[80, "warning"], [97, "error"]] as const) {
   colors.length = 0;

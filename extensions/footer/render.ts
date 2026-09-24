@@ -10,7 +10,6 @@ interface Group { zone: "identity" | "usage" | "workspace"; segments: Segment[];
 export interface FooterView {
   session: string;
   model: string;
-  provider?: string;
   badges: readonly string[];
   usage: ContextUsageLike | undefined;
   contextWindow?: number;
@@ -43,7 +42,7 @@ function usageSegment(totals: UsageTotals, key: UsageField, label?: string): Seg
   return segment(`≥${formatted}`, "warning", label);
 }
 
-/** Keep complete labels; optional detail gives way before core identity and context. */
+/** Keep metrics contextual; optional detail gives way before core identity and context. */
 function groupsFor(input: FooterView): Group[] {
   const groups: Group[] = [];
   const add = (zone: Group["zone"], segments: Segment[], reductions: Reduction[] = []) => {
@@ -58,7 +57,6 @@ function groupsFor(input: FooterView): Group[] {
     { priority: 8, segments: [segment(shortenModel(model, 10), "accent")] }, hide(5),
   ]);
   add("identity", [segment(session, "muted")], [hide(98)]);
-  if (input.provider) add("identity", [segment(compactInlineText(input.provider, 80), "muted")], [hide(100)]);
   if (input.badges.length) add("identity", input.badges.map((badge) => segment(compactInlineText(badge, 18), "muted")), [hide(92)]);
 
   const window = input.usage?.contextWindow ?? input.contextWindow;
@@ -76,11 +74,19 @@ function groupsFor(input: FooterView): Group[] {
   const promptFields = ["input", "cacheRead", "cacheWrite"] as const;
   const incompletePrompt = promptFields.some((key) => (totals.missing?.[key] ?? 0) > 0);
   const hit = prompt > 0 && !incompletePrompt ? 100 * cached / prompt : undefined;
-  if (prompt > 0) add("usage", [segment(`${incompletePrompt ? "≥" : ""}${formatTokens(prompt)}`, incompletePrompt ? "warning" : "text", "prompt")], [hide(85)]);
   add("usage", [usageSegment(totals, "input", "in"), usageSegment(totals, "output", "out")], [hide(40)]);
-  if (cached > 0 || totals.missing?.cacheRead) add("usage", [usageSegment(totals, "cacheRead", "cache read")], [hide(70)]);
-  if (written > 0 || totals.missing?.cacheWrite) add("usage", [usageSegment(totals, "cacheWrite", "cache write")], [hide(80)]);
-  if (hit !== undefined || incompletePrompt) add("usage", [segment(hit === undefined ? "?" : formatPercent(hit), hit === undefined ? "muted" : "text", "cache hit")], [hide(65)]);
+  const reads = cached > 0 || totals.missing?.cacheRead ? [usageSegment(totals, "cacheRead", "R")] : [];
+  const writes = written > 0 || totals.missing?.cacheWrite ? [usageSegment(totals, "cacheWrite", "W")] : [];
+  const hits = hit !== undefined || incompletePrompt
+    ? [segment(hit === undefined ? "?" : formatPercent(hit), hit === undefined ? "muted" : "text", "hit")] : [];
+  const cacheGroup = (parts: Segment[]) => parts.length ? [segment("cache", "muted"), ...parts] : [];
+  // Keep the shared label through every reduction; never leave unexplained R/W
+  // counters behind when another metric yields to a narrower terminal.
+  add("usage", cacheGroup([...reads, ...writes, ...hits]), [
+    ...(writes.length ? [{ priority: 80, segments: cacheGroup([...reads, ...hits]) }] : []),
+    ...(reads.length ? [{ priority: 70, segments: cacheGroup(hits) }] : []),
+    hide(65),
+  ]);
   add("usage", [usageSegment(totals, "cost")]);
 
   const directory = compactInlineText(input.directory, 500);

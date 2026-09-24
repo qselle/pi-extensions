@@ -184,7 +184,6 @@ export default function footerExtension(pi: ExtensionAPI): void {
 					return renderFooter({
 						session: currentSessionName(pi) ?? current.sessionManager.getSessionId?.().slice(0, 8) ?? "pi",
 						model: modelLabel(current.model?.name ?? current.model?.id, current.model?.reasoning === false ? undefined : currentEffort(pi)),
-						provider: current.model?.provider,
 						badges: badgeLabels,
 						git: gitStatusLabel(git.value),
 						gitConflicts: !!git.value?.conflicts,
