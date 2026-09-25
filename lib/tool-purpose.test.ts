@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Type } from "typebox";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE } from "./tool-purpose.ts";
+import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "./tool-purpose.ts";
 
 test("command purpose is optional metadata without a validation length failure", () => {
   const schema = Type.Object({ command: Type.String(), purpose: commandPurposeParameter });
@@ -39,4 +39,15 @@ test("purpose bounds both source work and displayed Unicode without broken surro
   expect(commandPurpose("🌍".repeat(200))).toBe("🌍".repeat(159) + "…");
   expect(commandPurpose("Check tests " + " ".repeat(4096) + "unread tail")).toBe("Check tests…");
   expect(commandPurpose("x".repeat(4095) + "🌍")).toBe("x".repeat(159) + "…");
+});
+
+test("general tool purposes remain optional and omit redundant target captions", () => {
+  const schema = Type.Object({ purpose: toolPurposeParameter, path: Type.String() });
+  expect(schema.required).toEqual(["path"]);
+  expect((toolPurposeParameter as any).description).toContain("Do not repeat paths");
+  expect(toolPurpose("src/app.ts", ["src/app.ts"])).toBe("");
+  expect(toolPurpose("  JOB-123 ", ["job-123"])).toBe("");
+  expect(toolPurpose("Find the authentication boundary", ["src/app.ts"])).toBe("Find the authentication boundary");
+  expect(toolPurpose("\x1b[31mCheck\x1b[0m input\u202e")).toBe("Check input");
+  expect(toolPurpose("🌍".repeat(200))).toBe("🌍".repeat(159) + "…");
 });

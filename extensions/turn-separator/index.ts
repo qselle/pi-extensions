@@ -1,105 +1,122 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { separatorText } from "./format.ts";
-import { addUsage, emptyStats, hasStats, tokensPerSecond, type TurnStats } from "./stats.ts";
-import { isTelemetryStyle, telemetryStyle, TELEMETRY_CHANGED } from "../../lib/telemetry.ts";
-import { isFirstOutputEvent } from "../turn-stats/timing.ts";
+import { separatorText, type StepTiming } from "./format.ts";
+import { isTelemetryStyle, telemetryStyle, TELEMETRY_CHANGED, RESPONSE_TIMING_EVENT } from "../../lib/telemetry.ts";
 
 const ENTRY_TYPE = "worked-for-separator";
+export const SEPARATOR_STATE_ENTRY = "turn-separator-state";
 
 interface SeparatorEntry {
-	seconds?: number;
-	stats?: TurnStats;
+  seconds?: number;
+  timing?: StepTiming;
+  /** Old work-block entries remain readable without repeating their usage totals. */
+  stats?: StepTiming;
 }
 
-export default function turnSeparatorExtension(pi: ExtensionAPI, now: () => number = () => performance.now()): void {
-	// Timestamp of the first tool run since the last assistant message, if any.
-	// Reset when a separator is emitted (below), not on turn_start — turn_start
-	// re-fires per model round-trip and would wipe it before the post-tool message.
-	let workStart: number | undefined;
-	// Usage accumulated across every response in the current work block.
-	let stats: TurnStats = emptyStats();
-	// Per-response timing, used for ttft and tps of the latest response.
-	let requestSentAt: number | undefined;
-	let firstTokenAt: number | undefined;
-	let style = telemetryStyle([]);
-	let sessionId: string | undefined;
-	let seen = new WeakSet<object>();
-	pi.events?.on(TELEMETRY_CHANGED, (value: any) => {
-		if (value?.sessionId === sessionId && isTelemetryStyle(value.style)) style = value.style;
-	});
+export function loadSeparatorDefault(path = join(getAgentDir(), "turn-separator.json")): boolean {
+  try { return JSON.parse(readFileSync(path, "utf8"))?.enabled === true; }
+  catch { return false; }
+}
 
-	const reset = () => {
-		workStart = undefined;
-		stats = emptyStats();
-		requestSentAt = undefined;
-		firstTokenAt = undefined;
-		seen = new WeakSet();
-	};
+function enabledOnBranch(entries: readonly any[], fallback: boolean): boolean {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type === "custom" && entry.customType === SEPARATOR_STATE_ENTRY
+      && entry.data?.version === 1 && typeof entry.data.enabled === "boolean") return entry.data.enabled;
+  }
+  return fallback;
+}
 
-	pi.registerEntryRenderer(ENTRY_TYPE, (entry, options, theme) => {
-		const data = entry?.data as SeparatorEntry | undefined;
-		return {
-			invalidate() {},
-			render(width: number): string[] {
-				if (style === "hide") return [];
-				const line = separatorText(data?.seconds, width, data?.stats, (color, text) => theme.fg(color, text), visibleWidth);
-				return line ? [line] : [];
-			},
-		};
-	});
+/** Optional timing between model steps; whole-turn usage belongs in turn-stats. */
+export default function turnSeparatorExtension(
+  pi: ExtensionAPI,
+  now: () => number = () => performance.now(),
+  defaultEnabled = loadSeparatorDefault(),
+): void {
+  let enabled = defaultEnabled;
+  let stepStart: number | undefined;
+  let didWork = false;
+  let timing: StepTiming | undefined;
+  let style = telemetryStyle([]);
+  let sessionId: string | undefined;
 
-	const restore = (_event: unknown, ctx: any) => { reset(); style = telemetryStyle(ctx?.sessionManager?.getBranch() ?? []); sessionId = ctx?.sessionManager?.getSessionId?.(); };
-	pi.on("session_start", restore);
-	pi.on("session_tree", restore);
-	pi.on("session_shutdown", () => reset());
-	pi.on("agent_start", () => reset());
-	pi.on("agent_settled", () => reset());
+  const reset = () => { stepStart = undefined; didWork = false; timing = undefined; };
+  const unsubscribeStyle = pi.events?.on(TELEMETRY_CHANGED, (value: any) => {
+    if (value?.sessionId === sessionId && isTelemetryStyle(value.style)) style = value.style;
+  });
+  const unsubscribeTiming = pi.events?.on(RESPONSE_TIMING_EVENT, (value: any) => {
+    if (!enabled || value?.sessionId !== sessionId) return;
+    timing = {
+      ttftMs: Number.isFinite(value.ttftMs) && value.ttftMs >= 0 ? value.ttftMs : undefined,
+      tps: Number.isFinite(value.tps) && value.tps >= 0 ? value.tps : undefined,
+    };
+  });
 
-	// The request-send moment. message_start fires when the first chunk arrives, so
-	// anchoring ttft there measures ~0 and is meaningless.
-	pi.on("before_provider_request", () => {
-		requestSentAt = now();
-		firstTokenAt = undefined;
-	});
+  pi.registerEntryRenderer(ENTRY_TYPE, (entry, _options, theme) => ({
+    invalidate() {},
+    render(width: number): string[] {
+      if (!enabled || style === "hide") return [];
+      const data = entry?.data as SeparatorEntry | undefined;
+      const line = separatorText(data?.seconds, width, data?.timing ?? data?.stats, (text) => theme.fg("dim", text), visibleWidth);
+      return line ? [line] : [];
+    },
+  }));
 
-	pi.on("tool_execution_start", () => {
-		if (workStart == null) workStart = now();
-	});
+  const restore = (_event: unknown, ctx: any) => {
+    reset();
+    const entries = ctx?.sessionManager?.getBranch() ?? [];
+    enabled = enabledOnBranch(entries, defaultEnabled);
+    style = telemetryStyle(entries);
+    sessionId = ctx?.sessionManager?.getSessionId?.();
+  };
+  pi.on("session_start", restore);
+  pi.on("session_tree", restore);
+  pi.on("session_shutdown", () => {
+    reset();
+    sessionId = undefined;
+    unsubscribeStyle?.();
+    unsubscribeTiming?.();
+  });
+  pi.on("agent_settled", reset);
 
-	pi.on("message_start", (event) => {
-		if (event.message.role !== "assistant") return;
-		if (workStart != null) {
-			const seconds = Math.max(0, Math.round((now() - workStart) / 1000));
-			const data: SeparatorEntry = { seconds, stats: hasStats(stats) ? stats : undefined };
-			workStart = undefined;
-			stats = emptyStats();
-			pi.appendEntry(ENTRY_TYPE, data);
-		}
-	});
+  pi.on("tool_execution_start", () => {
+    if (!enabled) return;
+    didWork = true;
+    stepStart ??= now();
+  });
+  pi.on("message_start", (event) => {
+    if (!enabled || event.message.role !== "assistant") return;
+    const timestamp = now();
+    if (didWork && stepStart !== undefined) {
+      pi.appendEntry<SeparatorEntry>(ENTRY_TYPE, { seconds: Math.max(0, (timestamp - stepStart) / 1000), timing });
+    }
+    stepStart = timestamp;
+    didWork = false;
+    timing = undefined;
+  });
 
-	pi.on("message_update", (event) => {
-		if (requestSentAt == null || firstTokenAt != null) return;
-		if (isFirstOutputEvent(event.assistantMessageEvent)) firstTokenAt = now();
-	});
-
-	pi.on("message_end", (event) => {
-		const message = event.message;
-		if (message?.role !== "assistant" || seen.has(message)) return;
-		seen.add(message);
-		const endedAt = now();
-		stats = addUsage(stats, message.usage);
-		delete stats.ttftMs;
-		delete stats.tps;
-		// ttft/tps describe the latest response; averaging them across a block
-		// would be meaningless, so the newest value wins. With no send anchor the
-		// latency is unknown, which is reported by omitting it rather than as 0ms.
-		if (requestSentAt != null && firstTokenAt != null && firstTokenAt >= requestSentAt) {
-			stats.ttftMs = firstTokenAt - requestSentAt;
-		}
-		const rate = tokensPerSecond(message.usage?.output, firstTokenAt, endedAt);
-		if (rate !== undefined) stats.tps = rate;
-		requestSentAt = undefined;
-		firstTokenAt = undefined;
-	});
+  pi.registerCommand("turn-separator", {
+    description: "Optional per-step timing: on|off|toggle|status (off by default)",
+    getArgumentCompletions: (prefix) => {
+      const values = ["on", "off", "toggle", "status"].filter((value) => value.startsWith(prefix.toLowerCase()));
+      return values.length ? values.map((value) => ({ value, label: value })) : null;
+    },
+    handler: async (args, ctx) => {
+      const action = args.trim().toLowerCase() || "toggle";
+      if (action === "status") {
+        ctx.ui.notify(`Step timing: ${enabled ? "on" : "off"}. Whole-turn totals remain available through /turn-stats.`, "info");
+        return;
+      }
+      if (!["on", "off", "toggle"].includes(action)) {
+        ctx.ui.notify("Usage: /turn-separator [on|off|toggle|status]", "info");
+        return;
+      }
+      enabled = action === "toggle" ? !enabled : action === "on";
+      reset();
+      pi.appendEntry(SEPARATOR_STATE_ENTRY, { version: 1, enabled });
+      ctx.ui.notify(`Step timing ${enabled ? "enabled" : "disabled"} for this branch.`, "info");
+    },
+  });
 }

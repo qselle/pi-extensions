@@ -26,6 +26,24 @@ their status and progress are derived from descendants, so a parent cannot claim
 completion over unfinished children. Progress counts leaves, not parent groups.
 Cancelled work remains separate from successful completion in progress totals.
 
+Steps and groups accept an optional `description` (up to 600 characters) for
+implementation context or verification details. Keep `step` concise. Descriptions
+are saved with the plan, included in active model context, and shown when their
+row is selected in `/plan`. Long descriptions remain complete in `/plan status`
+and expanded tool results; the passive progress line stays compact.
+
+While a plan is unfinished, updates must retain every completed leaf at its
+existing group path with `completed` status. Future work can be refined and
+reordered. Matching ignores case and extra whitespace; identically named steps
+in different groups remain separate milestones. An invalid replacement leaves
+the current plan and saved history intact.
+
+For a new objective requested by the user, `update_plan` accepts `reset: true`
+with a required `explanation` describing the change. `/plan clear` is the
+interactive reset and asks for confirmation. Once all work is completed or
+cancelled, the next plan can start fresh without reset. Earlier snapshots remain
+in the session history.
+
 Example tool input:
 
 ```json
@@ -35,7 +53,7 @@ Example tool input:
       "step": "Build the feature",
       "children": [
         { "step": "Implement", "status": "completed" },
-        { "step": "Verify behavior", "status": "in_progress" }
+        { "step": "Verify behavior", "description": "Check reload, cancellation and narrow-terminal rendering.", "status": "in_progress" }
       ]
     },
     { "step": "Document usage", "status": "pending" }

@@ -4,11 +4,22 @@ import { decodeSummary, emptySummary, recordResponse, summaryText } from "./stat
 function harness() {
   let clock = 0;
   let wallClock = Date.UTC(2026, 8, 23, 12, 32);
-  const handlers = new Map<string, any>(); const entries: any[] = [];
+  const handlers = new Map<string, any>(); const entries: any[] = []; const events: any[] = [];
   let command: any;
-  extension({ on: (name: string, fn: any) => handlers.set(name, fn), appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }), registerEntryRenderer() {}, registerCommand: (_: string, value: any) => { command = value; } } as any, () => clock, () => wallClock);
-  return { entries, setTime: (time: number) => { clock = time; }, setWallTime: (time: number) => { wallClock = time; }, fire: (name: string, event = {}) => handlers.get(name)?.(event), command: () => command };
+  extension({ on: (name: string, fn: any) => handlers.set(name, fn), events: { emit: (name: string, data: any) => events.push({ name, data }) }, appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }), registerEntryRenderer() {}, registerCommand: (_: string, value: any) => { command = value; } } as any, () => clock, () => wallClock);
+  return { entries, events, setTime: (time: number) => { clock = time; }, setWallTime: (time: number) => { wallClock = time; }, fire: (name: string, event = {}) => handlers.get(name)?.(event, { sessionManager: { getSessionId: () => "a", getBranch: () => entries } }), command: () => command };
 }
+
+test("publishes one session-scoped timing sample per response, including missing timing", () => {
+  const h = harness();
+  h.fire("agent_start"); h.fire("before_provider_request");
+  h.setTime(100); h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "{}" } });
+  const message = { role: "assistant", usage: { output: 40 } };
+  h.setTime(1100); h.fire("message_end", { message }); h.fire("message_end", { message });
+  expect(h.events).toEqual([{ name: "turn-stats:response", data: { sessionId: "a", ttftMs: 100, tps: 40 } }]);
+  h.fire("message_end", { message: { role: "assistant", usage: { output: 1 } } });
+  expect(h.events.at(-1)).toEqual({ name: "turn-stats:response", data: { sessionId: "a" } });
+});
 test("full runs accumulate multiple responses and tool rounds exactly once", () => {
   const h = harness(); h.fire("agent_start");
   const message = { role: "assistant", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } };

@@ -2,6 +2,34 @@ import type { GoalState } from "./goal.ts";
 
 export const GOAL_COMPLETED_EVENT = "goal:completed";
 export const GOAL_CHANGED_EVENT = "goal:changed";
+export const GOAL_ATTENTION_EVENT = "goal:attention";
+
+export type GoalAttentionStatus = "blocked" | "stalled" | "budget_limited" | "usage_limited";
+
+/** Safe notification metadata; objectives and provider/blocker text stay in Pi. */
+export interface GoalAttentionEvent {
+  readonly version: 1;
+  readonly attentionId: string;
+  readonly sessionId: string;
+  readonly goalId: string;
+  readonly status: GoalAttentionStatus;
+  readonly turns: number;
+  readonly tokensUsed: number;
+  readonly tokenBudget: number | null;
+}
+
+export function isGoalAttentionStatus(status: unknown): status is GoalAttentionStatus {
+  return status === "blocked" || status === "stalled" || status === "budget_limited" || status === "usage_limited";
+}
+
+export function isGoalAttentionEvent(value: unknown): value is GoalAttentionEvent {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Partial<GoalAttentionEvent>;
+  return event.version === 1 && isGoalAttentionStatus(event.status)
+    && [event.attentionId, event.sessionId, event.goalId].every((id) => typeof id === "string" && /^[\w:-]{1,200}$/u.test(id))
+    && isNonNegativeFinite(event.turns) && isNonNegativeFinite(event.tokensUsed)
+    && (event.tokenBudget === null || isNonNegativeFinite(event.tokenBudget));
+}
 
 export interface GoalCompletedEvent {
   readonly version: 1;

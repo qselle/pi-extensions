@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { PlainOutput } from "../../lib/output.ts";
 import { toolHeadline, toolText } from "../../lib/tool-ui.ts";
-import { GOAL_COMPLETED_EVENT } from "../goal/events.ts";
+import { GOAL_ATTENTION_EVENT, GOAL_COMPLETED_EVENT, isGoalAttentionEvent } from "../goal/events.ts";
+import { MONITOR_ALERT_EVENT, isMonitorAlertEvent } from "../monitor/events.ts";
+import { SCHEDULE_ATTENTION_EVENT, isScheduleAttentionEvent } from "../schedule/events.ts";
 import { safeTelegramError, TelegramApiClient, TelegramApiError } from "./api.ts";
 import { SessionTopics, TOPIC_ENTRY } from "./topics.ts";
 import { BotInbox } from "./inbox.ts";
@@ -55,6 +57,8 @@ export default function telegramExtension(
   let registration: { unregister(): void } | undefined;
   let activeContext: ExtensionContext | undefined;
   let topics: SessionTopics | undefined;
+  type AttentionSource = "goal" | "monitor" | "schedule";
+  const pendingAttention: Array<{ source: AttentionSource; value: unknown }> = [];
 
   const syncToolAvailability = (enableExplicitly = false) => {
     const selected = pi.getActiveTools();
@@ -105,6 +109,7 @@ export default function telegramExtension(
     service = undefined;
     topics?.shutdown();
     topics = undefined;
+    pendingAttention.length = 0;
     previousRegistration?.unregister();
     await previousNotifier?.drain();
     await previousService?.shutdown();
@@ -122,6 +127,26 @@ export default function telegramExtension(
   });
 
   const stopGoalListener = pi.events.on(GOAL_COMPLETED_EVENT, (event) => notifier?.handle(event));
+  const routeAttention = (source: AttentionSource, value: unknown) => {
+    const valid = source === "goal" ? isGoalAttentionEvent(value)
+      : source === "monitor" ? isMonitorAlertEvent(value) : isScheduleAttentionEvent(value);
+    if (!valid || !notifier) return;
+    // Startup events can precede Telegram's session_start handler because the
+    // extension loader order is arbitrary. Bind the destination before flushing.
+    if (!activeContext) {
+      pendingAttention.push({ source, value });
+      if (pendingAttention.length > 16) pendingAttention.shift();
+      return;
+    }
+    if ((value as { sessionId: string }).sessionId !== activeContext.sessionManager?.getSessionId?.()) return;
+    bindTopics(activeContext);
+    if (source === "goal") notifier.handleGoalAttention(value);
+    else if (source === "monitor") notifier.handleMonitor(value);
+    else notifier.handleSchedule(value);
+  };
+  const stopGoalAttentionListener = pi.events.on(GOAL_ATTENTION_EVENT, (event) => routeAttention("goal", event));
+  const stopMonitorListener = pi.events.on(MONITOR_ALERT_EVENT, (event) => routeAttention("monitor", event));
+  const stopScheduleListener = pi.events.on(SCHEDULE_ATTENTION_EVENT, (event) => routeAttention("schedule", event));
 
   const sendDirect = async (message: string, ctx: ExtensionContext, signal?: AbortSignal) => {
     if (!service) throw new TelegramMessageError("Telegram is not enabled. Run /telegram setup or /telegram on.");
@@ -308,6 +333,7 @@ export default function telegramExtension(
     activeContext = ctx;
     syncToolAvailability();
     bindTopics(ctx);
+    for (const event of pendingAttention.splice(0)) routeAttention(event.source, event.value);
     if (configuration?.status === "invalid") ctx.ui.notify(configuration.message, "warning");
   });
   pi.on("session_info_changed", (event, ctx) => {
@@ -317,6 +343,9 @@ export default function telegramExtension(
 
   pi.on("session_shutdown", async () => {
     stopGoalListener();
+    stopMonitorListener();
+    stopGoalAttentionListener();
+    stopScheduleListener();
     await stopRuntime();
     activeContext = undefined;
   });

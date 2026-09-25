@@ -21,6 +21,8 @@ Animation pauses while hidden or when the terminal is too small. Use static mode
 
 The cat normally sits on the editor's top border. If status text or another decoration occupies that space, it uses a separate row above the border so the text stays readable.
 
+On quit, teardown restores the parent shell's cursor visibility after the editor is released. Session switches and reloads leave cursor control with the active TUI.
+
 Its coat stays bright orange (`#fe8019`) regardless of the theme, thinking level,
 or custom editor border color. This uses terminal truecolor escape sequences.
 

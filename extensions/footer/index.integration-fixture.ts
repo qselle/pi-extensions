@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import footerExtension from "./index.ts";
+import { SUBAGENT_USAGE_EVENT } from "../subagents/usage.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -19,6 +20,7 @@ const events = {
     const existing = eventHandlers.get(name);
     if (existing) existing.push(handler);
     else eventHandlers.set(name, [handler]);
+    return () => { eventHandlers.set(name, (eventHandlers.get(name) ?? []).filter((candidate) => candidate !== handler)); };
   },
   emit(name: string, value: unknown) {
     for (const handler of eventHandlers.get(name) ?? []) handler(value);
@@ -204,16 +206,32 @@ assert.equal(session.scans(), 5);
 footer.render(200);
 assert.equal(session.scans(), 5);
 
+// Child response deltas refresh the idle footer without changing parent context.
+const beforeChildRender = session.renders();
+session.branch.push({
+  id: "child-usage-1", type: "custom", customType: "subagent-usage",
+  data: { version: 1, agentId: "reviewer", agentName: "Review", usage: { input: 200, output: 20, cacheRead: 60, cacheWrite: 4, cost: 0.02 } },
+});
+events.emit(SUBAGENT_USAGE_EVENT, undefined);
+assert.equal(session.renders(), beforeChildRender + 1, "child usage must refresh even while the parent is idle");
+const withChild = footer.render(300);
+assert.equal(withChild.length, 1);
+assert(withChild[0].includes("in 332 out 34"), withChild[0]);
+assert(withChild[0].includes("$0.05"), withChild[0]);
+assert(withChild[0].includes("6% 28.2K/258K"), "child context must not affect the parent context measurement");
+assert(!withChild[0].includes("agents "), "child usage belongs in primary totals");
+const savedBranch = JSON.stringify(session.branch);
+
 // Extension statuses share the single footer row, sorted by key when space permits.
 assert.equal(footer.render(200).length, 1, "all footer content occupies one row");
 session.statuses.set("verify", "verifying tests…");
-session.statuses.set("subagents-usage", "agents ↑12k ↓850 $0.0421");
+session.statuses.set("context-journal", "ctx:auto");
 const withStatuses = footer.render(300);
 assert.equal(withStatuses.length, 1, "extension statuses must never add another row");
-assert(withStatuses[0].includes("agents ↑12k ↓850 $0.0421"), withStatuses[0]);
+assert(withStatuses[0].includes("ctx:auto"), withStatuses[0]);
 assert(withStatuses[0].includes("verifying tests…"), withStatuses[0]);
 assert(
-  withStatuses[0].indexOf("agents") < withStatuses[0].indexOf("verifying"),
+  withStatuses[0].indexOf("ctx:auto") < withStatuses[0].indexOf("verifying"),
   `statuses must be sorted by key: ${withStatuses[0]}`,
 );
 // Session/context remain visible when statuses are present.
@@ -269,6 +287,7 @@ assert.equal(session.renders(), beforeBranchRender + 1);
 // Shutdown hands the built-in footer back and drops the stale TUI reference,
 // so nothing renders through the replaced session context.
 fire("session_shutdown", session.ctx, { reason: "resume" });
+assert([...eventHandlers.values()].every((listeners) => listeners.length === 0), "shutdown releases every shared-bus listener");
 assert.equal(session.footers.length, 2);
 assert.equal(session.footers.at(-1), undefined, "session_shutdown must restore pi's footer");
 assert.equal(session.titles.at(-1), "pi", "session shutdown must release the terminal title");
@@ -277,6 +296,7 @@ const gitCallsAfterShutdown = gitCalls.length;
 fire("agent_start", session.ctx);
 fire("model_select", session.ctx);
 fire("thinking_level_select", session.ctx);
+events.emit(SUBAGENT_USAGE_EVENT, undefined);
 events.emit("terminal-title:override", { source: "late-event", title: "Do not restore the old session" });
 assert.equal(session.titles.at(-1), "pi", "late selection events cannot revive the old UI context");
 events.emit("terminal-title:override", { source: "late-event" });
@@ -292,14 +312,27 @@ assert.equal(session.renders(), rendersAfterShutdown, "a released subscription c
 // A replacement session installs a fresh footer bound to the new context.
 const replacement = createContext("tui");
 fire("session_start", replacement.ctx);
+assert([...eventHandlers.values()].every((listeners) => listeners.length === 1), "reused runtimes subscribe once again");
 const replacementFooter = replacement.mount();
 assert(replacementFooter.render(200).join("").includes("in 105"));
 assert.equal(replacement.scans(), 1);
 
+// Restoring saved deltas includes children immediately. Navigating before the
+// child entry removes only its contribution, and stale events cannot import it.
+replacement.branch.splice(0, replacement.branch.length, ...JSON.parse(savedBranch));
+fire("session_tree", replacement.ctx);
+assert(replacementFooter.render(300)[0].includes("in 332 out 34"));
+assert(replacementFooter.render(300)[0].includes("6% 28.2K/258K"));
+replacement.branch.pop();
+fire("session_tree", replacement.ctx);
+events.emit(SUBAGENT_USAGE_EVENT, undefined);
+assert(replacementFooter.render(300)[0].includes("in 132 out 14"));
+
 // dispose() releases the TUI reference when pi swaps footers itself.
 replacementFooter.dispose?.();
+const replacementRenders = replacement.renders();
 fire("agent_start", replacement.ctx);
-assert.equal(replacement.renders(), 0);
+assert.equal(replacement.renders(), replacementRenders);
 
 // Non-interactive modes never install a footer.
 const headless = createContext("json");

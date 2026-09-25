@@ -1,61 +1,55 @@
 # turn-separator
 
-Adds a width-aware timing and usage rule before an assistant message that follows tool work.
+Optional quiet timing rules between assistant responses that follow tool work.
+Off by default: normal tool loops show their results and one final receipt from
+[`turn-stats`](../turn-stats/), without repeated token, cache, and cost summaries.
 
 ## Usage
 
-The default compact rule shows elapsed work time and recorded usage on one line.
-`/turn-stats compact|full|hide` (when turn-stats is loaded) controls both
-transcript telemetry displays for the current branch, without disabling recording.
-
 ```text
-── Worked for 2m 4s · in 100 · out 318 · $0.21 · cache hit 98% · 42 tokens/s · first token 480ms ──
+/turn-separator on      Show per-step timing
+/turn-separator off     Hide it, including old saved work-block receipts
+/turn-separator toggle  Toggle it (also the default action)
+/turn-separator status  Inspect the current setting
 ```
 
-The fields are:
+The choice persists on the current session branch and survives reload. Optional
+`$PI_CODING_AGENT_DIR/turn-separator.json` supplies the default for branches without
+a saved choice:
 
-- elapsed time from the first tool call to the next assistant message, measured
-  with a monotonic clock; sub-second work shows `<1s`
-- fresh input (`in`) and output (`out`) tokens for finalized replies in the block
-- `cache hit`, `cache read` and `cache write` when present; the hit-rate
-  denominator includes fresh input, cache reads and writes
-- streaming output `tokens/s` and request-to-first-output latency
-  (`first token`) for the latest finalized reply
-- cost recorded by Pi (provider/adapter-dependent, not authoritative billing)
+```json
+{ "enabled": false }
+```
 
-The leading work duration uses one accent color. Labels are muted, values use
-normal text, and the rule/separators are dim. Only partial reported totals use
-warning color. Known-zero cache counters are omitted; measured zero timing and
-input/output values remain visible.
+Enabled rules use the theme's dim color and put measured response timing at the
+right edge:
 
-Work blocks reset at agent start/settlement and session navigation/shutdown;
-a previous turn cannot contribute usage or pending work to the next one.
-A latest response without measured latency or throughput omits those fields
-instead of inheriting the prior response's timing. These are work-block totals,
-not a summary of the entire user turn.
+```text
+────────────────────────────── first token 480ms · 42 tokens/s ─
+─ Worked for 1m 14s ─────────── first token 480ms · 42 tokens/s ─
+```
 
-First output includes nonempty text, thinking and tool-call data. Empty chunks do
-not establish timing anchors. Throughput needs at least 250 ms of streaming and
-known output usage; a reported zero is kept, while missing usage is not treated as
-zero. Retries use the latest request anchor. Emitting a work separator preserves
-the upcoming response's anchor, and duplicate finalized response events are ignored.
+Only steps lasting at least a minute receive an elapsed-work label. Duration
+covers the interval from one assistant response starting to the next, including
+generation and intervening tools. One step may contain several tools. It uses a
+monotonic clock and does not reset at internal provider round trips.
 
-New records distinguish known zero (`0`), missing usage (`?`), and partial totals
-(`≥`). Cache hit shows `0%` for an uncached known prompt or `?` when prompt usage
-is incomplete; known empty prompts omit the rate. Legacy entries remain readable.
-Narrow terminals drop cache counters, reply counts, first-token latency,
-throughput, cache hit, input/output, then cost before dropping duration.
-Labels stay readable instead of becoming abbreviations.
-When even the duration cannot fit, the result is a bare rule. Rules never wrap.
-Stored session entries preserve the same display after reload.
+Response timing comes from `turn-stats`' finalized-response event, using the same
+measurements as the final receipt. Missing measurements are omitted; a response
+without timing clears the previous sample. Without `turn-stats`, rules still work
+but omit model timing. No tokens or costs are repeated here. Legacy work-block
+entries render their timing only. Enabling separators cannot recreate steps that
+were never recorded while they were off.
 
-The extension is event-driven and has no command, configuration file, or timer.
+Rules reserve two terminal columns to prevent wrapping. Narrow terminals drop
+the elapsed label and then optional timing fields. `/turn-stats hide` also hides
+enabled rules; `compact` or `full` restores them only when explicitly enabled.
+Session changes, shutdown, settlement, and toggles clear pending work.
 
 ## Dependencies and limitations
 
-- Uses Pi's public lifecycle, message, session-entry, and renderer APIs.
-- Imports formatting and width-priority helpers from [`footer`](../footer/).
-- Shares the first-output event predicate with [`turn-stats`](../turn-stats/);
-  the turn-stats extension itself does not need to be enabled.
-- No third-party packages.
-- Interactive TUI only; cross-platform.
+- Uses Pi's public lifecycle, event bus, custom entry, command and renderer APIs.
+- Optional [`turn-stats`](../turn-stats/) supplies model timing; shared formatters
+  are internal code, with no third-party packages.
+- Cross-platform; transcript rendering applies to the TUI. No network, timer,
+  prompt text, or duplicate usage accounting is involved.

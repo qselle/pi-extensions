@@ -1,6 +1,6 @@
 # telegram
 
-Provides one optional Telegram service for requested direct messages, goal notifications, remote questionnaire answers, and a topic for each Pi session. Without valid enabled configuration, it makes no network requests and keeps the `notify_user` tool out of the active model tool list.
+Provides one optional Telegram service for requested direct messages, monitor alerts, goal notifications, remote questionnaire answers, and a topic for each Pi session. Without valid enabled configuration, it makes no network requests and keeps the `notify_user` tool out of the active model tool list.
 
 ## Usage
 
@@ -38,6 +38,24 @@ Direct messages support headings, bold, italic, strikethrough, inline and fenced
 Messages are validated before any request: Markdown source is limited to 16,384 UTF-16 units and the rendered text to 4,096 UTF-16 units (a conservative Telegram limit). Oversized messages must be shortened; content is never silently truncated or split into multiple notifications. An unconfirmed delivery warns you to check the chat before retrying. As with existing sends, only Telegram's explicit short rate limits trigger a bounded retry.
 
 Use `questionnaire` when Pi needs an answer or approval; direct messages do not wait for a reply. Do not include credentials or secrets.
+
+### Monitoring and attention
+
+While Telegram is enabled, an actionable [`monitor`](../monitor/) observation automatically sends one concise update to the session's destination. The card identifies the monitor, check count, wake condition and exit status. It never includes the shell command, captured output or raw provider errors. A failure to start or finish the alert turn sends a separate attention card explaining that monitoring paused.
+
+Silent baselines, unchanged results, cancelled checks, manual pauses/stops and user-interrupted turns produce no extra notification. `--on always` explicitly requests an update after every check. Each alert is deduplicated during the extension's lifetime; delivery is best effort and a failed or unconfirmed send is not automatically replayed. `/telegram off` disables these alerts along with the other Telegram features.
+
+The monitor asks Pi to avoid repeating the automatic status with `notify_user`; it can still send an additional actionable conclusion. Requests for your opinion or approval use the existing delayed questionnaire cards and reply buttons. The default delay remains five minutes, controlled by `questionDelayMinutes`.
+
+Telegram also sends a brief attention card when:
+
+- a goal becomes blocked, stalls, reaches its token budget, or runs out of provider capacity;
+- a scheduled task cannot start or finish, its queue cannot be read/saved, or its completion cannot be recorded safely;
+- a monitor reaches its run or lifetime limit without another actionable result.
+
+These cards contain status metadata only. Goal objectives, blocker text, scheduled prompts, local paths and raw errors stay in Pi. Goal warnings fire on state changes and coalesce simultaneous budget/capacity changes. Restoring an existing goal warning does not resend it. Completed scheduled turns, successful user pauses/stops and cancelled turns remain quiet; failure to persist a cancellation is still a queue warning because the saved task may otherwise run again. Existing goal-completion notifications remain available.
+
+Every automatic attention event is bound to its source session. Late events from a previous session are dropped, and startup events wait until this session's destination is bound. Delivery uses the existing topic policy and enabled setting.
 
 ### Read-only diagnostics
 
@@ -84,13 +102,15 @@ Environment overrides: `PI_TELEGRAM_BOT_TOKEN`, `PI_TELEGRAM_CHAT_ID`, `PI_TELEG
 
 - [`questions`](../questions/) sends non-secret questions after the configured delay and accepts replies only from the exact chat, topic and question message.
 - [`goal`](../goal/) sends one best-effort completion notification.
+- [`monitor`](../monitor/) sends actionable result and failure-attention notifications through the `monitor:alert` event.
+- [`goal`](../goal/) and [`schedule`](../schedule/) publish metadata-only warnings through `goal:attention` and `schedule:attention`.
 - One shared `getUpdates` cursor serves pending questions across local Pi processes. Use one bot per machine, including a separate bot for a Linux VM running alongside macOS. Webhooks and unrelated update consumers still conflict.
 - Secret questions send only a redacted notice.
 - The owner-only `$PI_CODING_AGENT_DIR/telegram-inbox` buffer stores up to 256 compact replies/callbacks per bot, with a ten-minute delivery window. Expired records are removed on the next poll; files may remain while Pi is stopped. Bot tokens, attachments and unrelated non-reply messages are not stored there. A suspended consumer can miss replies outside that bounded window.
 
 The token is stored in plaintext. Do not commit or share the file. Unix config files must be owned by the current user with mode `0600`; symlinks, non-regular files, broad permissions, and oversized files are rejected. Windows relies on ACLs.
 
-Requested notification text, goal text, non-secret questions, and Telegram-entered answers leave the local machine. Delivery is best effort and can be lost on network failure or forced shutdown.
+Requested notification text, monitor status metadata, goal text, non-secret questions, and Telegram-entered answers leave the local machine. Delivery is best effort and can be lost on network failure or forced shutdown.
 
 - Uses Pi's public extension API, built-in `fetch`, filesystem APIs, and the Telegram Bot API.
 - Runtime dependencies: `proper-lockfile` for shared poll ownership and stale-lease recovery; `marked` for direct-message Markdown parsing.

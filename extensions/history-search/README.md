@@ -15,6 +15,9 @@ Fuzzy reverse search for prompts and shell commands on the active session branch
 
 Use `/history-search [query]` to open it from a command. Selection and navigation follow Pi's configured `tui.select.*` bindings.
 
+Opening search from a short, single-line draft seeds the query with the cursor at
+the end, ready to keep typing. Cancel restores the untouched draft.
+
 Matching is case-insensitive and supports non-contiguous subsequences. Exact, prefix, contiguous, and boundary matches rank ahead of wider gaps; recency breaks ties.
 
 The search covers user prompts and shell commands on the active branch, including entries before compaction, plus prompts observed by the current process. It does not scan other session files. `Ctrl+R` is intercepted only in the main editor, so Pi's rename shortcut still works in `/resume`.

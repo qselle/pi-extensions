@@ -65,6 +65,7 @@ function summary(details: SearchResult): string {
   return [
     `${count} source${count === 1 ? "" : "s"}`, providerNames[details.provider],
     details.access === "keyless" ? "public" : details.access === "api-key" ? "API" : undefined,
+    details.attempts?.length ? `${details.attempts.length} attempts` : undefined,
     details.quality && details.quality !== "balanced" ? details.quality : undefined, elapsed,
   ].filter(Boolean).join(" · ");
 }
@@ -105,6 +106,7 @@ export function searchPreview(details: SearchResult, theme: Theme, expanded = fa
       const stats = details.diagnostics;
       const excluded = stats ? stats.received - count : 0;
       if (expanded) {
+        if (details.attempts?.length) lines.push(...wrapped(theme.fg("dim", `Route: ${details.attempts.map((attempt) => `${attempt.provider} ${attempt.outcome}${attempt.reason ? ` (${cleanText(attempt.reason, 80)})` : ""}`).join(" → ")}`), width));
         const diagnostics = stats ? [
           stats.invalid ? `${stats.invalid} invalid` : "", stats.duplicate ? `${stats.duplicate} duplicate` : "",
           stats.outsideDomains ? `${stats.outsideDomains} outside requested domains` : "",

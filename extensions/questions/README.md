@@ -26,6 +26,9 @@ Terminal controls:
 - Escape leaves freeform input or cancels the question.
 
 Questions run in order and replace the editor while active. The answer is stored in the tool result.
+The terminal picker renders Markdown in prompts and choices, uses a subtle theme background, and shades every line of the selected choice when it wraps. Long choice lists keep five choices visible around the selection. Choice answers preserve their original text.
+
+The saved recap renders Markdown too, with a quiet shaded answer beneath each question. Collapsed prompts and answers use at most two lines each; Pi's tool expansion shortcut reveals the complete text and original choices. Telegram answers retain their source label. Secret answers stay masked in both views.
 
 Session changes and shutdown cancel pending questions and discard late replies.
 

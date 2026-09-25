@@ -107,6 +107,10 @@ class CatSprite {
     this.cancelTimer();
   }
 
+  restoreShellCursor(): void {
+    this.tui.terminal.showCursor();
+  }
+
   private schedulePolicy(startSmartImmediately = false): void {
     if (this.disposed || !this.visible || !this.eligible) return;
 
@@ -283,13 +287,17 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    host?.dispose();
+  pi.on("session_shutdown", (event, ctx) => {
+    const sprite = host;
+    sprite?.dispose();
     host = undefined;
     if (ctx.mode === "tui" && ctx.ui.getEditorComponent() === installedFactory) {
       ctx.ui.setEditorComponent(previousFactory);
     }
     previousFactory = undefined;
     installedFactory = undefined;
+    // Pi stops the TUI before quit teardown. Leave the shell cursor visible
+    // even if another editor or overlay cleanup changed it afterward.
+    if (event.reason === "quit") sprite?.restoreShellCursor();
   });
 }

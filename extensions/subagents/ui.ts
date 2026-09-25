@@ -12,6 +12,7 @@ import {
 import { getMarkdownTheme, keyText } from "@earendil-works/pi-coding-agent";
 import { boundedText, isActive, type AgentSnapshot } from "./coordinator.ts";
 import { collapsedResult, headlineSuffix, hiddenLinesMarker } from "./preview.ts";
+import { renderParentReport } from "./report.ts";
 
 const MAX_OVERLAY_AGENTS = 3;
 const AGENT_ROWS = 3;
@@ -67,7 +68,7 @@ export function renderSubagentResult(
   }
 
   const hidden = new Set(details.alreadyReportedIds ?? []);
-  const visible = details.agents.filter((agent) => !hidden.has(agent.id));
+  const visible = details.agents.filter((agent) => !hidden.has(agent.id) || agent.reports?.length);
   if (details.action === "wait" && visible.length === 0) return new Container();
   const container = new Container();
   container.addChild(new Text(theme.fg("toolTitle", theme.bold(`${details.action}${headlineSuffix(details)}`)), 0, 0));
@@ -75,7 +76,9 @@ export function renderSubagentResult(
     container.addChild(new Text(agentHeader(agent, theme), 0, 0));
     container.addChild(new Text(`${theme.fg("muted", "  task  ")}${theme.fg("dim", compact(agent.task, 180))}`, 0, 0));
     if (agent.error) container.addChild(new Text(`${theme.fg("error", "  error ")}${theme.fg("error", compact(agent.error, 220))}`, 0, 0));
-    if (agent.output && !isActive(agent)) {
+    for (const report of agent.reports ?? []) container.addChild(renderParentReport(agent.name, report, options.expanded === true, theme));
+    if (agent.omittedReports) container.addChild(new Text(theme.fg("dim", `  ${agent.omittedReports} earlier report previews omitted · /subagents ${agent.name}`), 0, 0));
+    if (agent.output && !isActive(agent) && !hidden.has(agent.id)) {
       if (options.expanded) {
         container.addChild(new Markdown(agent.output, 2, 0, getMarkdownTheme()));
       } else {

@@ -29,10 +29,19 @@ Expand to see every source, full URLs, publication dates, and excerpts.
 ### Search
 
 Exa is the default. Access is selected automatically: a nonempty `EXA_API_KEY`
-uses the direct API; no key uses Exa's public hosted service. Other providers
-require explicit selection and credentials.
-Failures preserve the selected provider and access mode, so a rejected key is
-visible rather than silently ignored.
+uses the direct API; no key uses Exa's public hosted service. With `provider`
+omitted, a failed request can try configured Firecrawl then Mistral, within one
+30-second deadline. Each route keeps the original domain, exclusion, date,
+quality and freshness constraints; incompatible providers are skipped.
+Empty results do not trigger another request. Cancellation stops the whole route.
+
+Set `provider` explicitly to pin a provider and account, including `provider: "exa"`.
+Pinned requests preserve their original diagnostics and never fall back. Deep
+search and pinned Mistral requests retain their 60-second deadline. Alternative
+providers require their existing API keys; no keys or services are installed.
+When a fallback succeeds, the compact result reports its provider and attempt
+count; expansion and model output show the route and failure causes. A failed
+account/key request remains visible in that history.
 
 | Parameter | Values |
 |---|---|

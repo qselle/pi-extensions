@@ -93,7 +93,7 @@ function mockContext(pi: MockPi) {
     hasUI: true,
     isIdle: () => true,
     hasPendingMessages: () => false,
-    sessionManager: { getBranch: () => pi.entries },
+    sessionManager: { getBranch: () => pi.entries, getSessionId: () => "session" },
     ui: {
       notify: (message: string) => notifications.push(message),
       setWidget: (...args: unknown[]) => widgets.push(args),
@@ -356,6 +356,7 @@ test("requires the same blocker in three separate runs", async () => {
   const update = pi.tools.get("update_goal");
   const args = {
     status: "blocked",
+    condition_id: "signing-service.unavailable",
     blocker: "Signing service is unavailable",
     evidence: "Health endpoint returns 503",
     next_input: "Restore the signing service",
@@ -363,7 +364,7 @@ test("requires the same blocker in three separate runs", async () => {
 
   for (let run = 1; run <= 3; run++) {
     await pi.emit("agent_start", {}, ctx);
-    const result = await update.execute(`blocked-${run}`, args, undefined, undefined, ctx);
+    const result = await update.execute(`blocked-${run}`, { ...args, blocker: `${args.blocker}; attempt ${run}` }, undefined, undefined, ctx);
     await pi.emit("tool_execution_end", {}, ctx);
     await pi.emit("agent_settled", {}, ctx);
     expect(result.details.blockerCount).toBe(run);
@@ -371,10 +372,11 @@ test("requires the same blocker in three separate runs", async () => {
 
   expect(pi.entries.at(-1).data.goal.status).toBe("blocked");
   expect(pi.entries.at(-1).data.goal.blockerAudit.count).toBe(3);
+  expect(pi.entries.at(-1).data.goal.blockerAudit.conditionId).toBe(args.condition_id);
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
 });
 
-test("a concrete progress report revives a stalled goal when implementation continues", async () => {
+test("a stalled goal resumes only through explicit resume and request reconciliation", async () => {
   const pi = new MockPi();
   const ctx = mockContext(pi);
   goalExtension(pi as any);
@@ -397,13 +399,26 @@ test("a concrete progress report revives a stalled goal when implementation cont
   expect(stalledStart.message.customType).toBe("goal-context");
   const [stalledContext] = await pi.emit("context", { messages: [stalledStart.message] }, ctx);
   expect(stalledContext.messages[0].content).toContain("State: stalled");
-  expect(stalledContext.messages[0].content).toContain("safely reactivates the goal");
+  expect(stalledContext.messages[0].content).toContain("A progress report never resumes a goal");
 
   await pi.emit("agent_start", {}, ctx);
   await expect(pi.tools.get("report_goal_progress").execute("invalid-progress", {
     checks: [{ content: "Implementation might continue", status: "pending" }],
-  }, undefined, undefined, ctx)).rejects.toThrow("exactly one in-progress check");
+  }, undefined, undefined, ctx)).rejects.toThrow("only while the goal is active");
   expect(pi.entries.at(-1).data.goal.status).toBe("stalled");
+
+  await pi.emit("input", { source: "interactive", text: "Resume implementation" }, ctx);
+  const beforeResume = pi.entries.at(-1).data.goal;
+  const resumed = await pi.tools.get("resume_goal").execute("resume", {
+    goal_id: beforeResume.id, request_id: beforeResume.reconciliation.requestId,
+  }, undefined, undefined, ctx);
+  const current = resumed.details.goal;
+  await pi.tools.get("reconcile_goal").execute("keep", {
+    goal_id: current.id, request_id: current.reconciliation.requestId, action: "keep",
+  }, undefined, undefined, ctx);
+  await expect(pi.tools.get("report_goal_progress").execute("invalid-progress", {
+    checks: [{ content: "Implementation might continue", status: "pending" }],
+  }, undefined, undefined, ctx)).rejects.toThrow("exactly one in-progress check");
 
   const result = await pi.tools.get("report_goal_progress").execute("progress", {
     checks: [
@@ -412,7 +427,7 @@ test("a concrete progress report revives a stalled goal when implementation cont
     ],
     summary: "Recovered after a transient provider failure",
   }, undefined, undefined, ctx);
-  expect(result.details.message).toContain("Goal resumed");
+  expect(result.details.message).toContain("Goal progress");
   expect(pi.entries.at(-1).data.goal.status).toBe("active");
   expect(pi.entries.at(-1).data.goal.stallReason).toBeUndefined();
 
@@ -444,7 +459,9 @@ test("does not auto-revive provider-capacity stops", async () => {
   expect(pi.entries.at(-1).data.goal.status).toBe("usage_limited");
 
   const [startContext] = await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx);
-  expect(startContext).toBeUndefined();
+  const [inactiveContext] = await pi.emit("context", { messages: [startContext.message] }, ctx);
+  expect(inactiveContext.messages[0].content).toContain("State: usage_limited");
+  expect(inactiveContext.messages[0].content).toContain("Resume only when the user explicitly asks");
   await expect(pi.tools.get("report_goal_progress").execute("progress", {
     checks: [{ content: "Wait for provider capacity", status: "in_progress" }],
   }, undefined, undefined, ctx)).rejects.toThrow("only while the goal is active");
@@ -579,4 +596,208 @@ test("a pending clear dialog cannot schedule continuation after shutdown", async
   await Bun.sleep(40);
   expect(pi.entries).toHaveLength(count);
   expect(pi.sent).toHaveLength(0);
+});
+
+function goalIdentifiers(goal: any) {
+  return { goal_id: goal.id, request_id: goal.reconciliation.requestId };
+}
+
+test("user input gates continuation and progress until unchanged scope is reconciled", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("Ship and verify the complete feature", ctx);
+  await pi.emit("input", { source: "rpc", text: "How far along are we?" }, ctx);
+  const pending = pi.entries.at(-1).data.goal;
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await pi.emit("agent_start", {}, ctx);
+  for (const [name, parameters] of [
+    ["report_goal_progress", { checks: [] }],
+    ["update_goal", { status: "complete" }],
+    ["update_goal", { status: "blocked", blocker: "Unavailable" }],
+  ] as const) {
+    await expect(pi.tools.get(name).execute(name, parameters, undefined, undefined, ctx)).rejects.toThrow("reconcile_goal");
+  }
+  await pi.tools.get("reconcile_goal").execute("keep", { ...goalIdentifiers(pending), action: "keep" }, undefined, undefined, ctx);
+  await pi.emit("message_end", { message: assistantMessage(30, "Here is the current progress.") }, ctx);
+  await pi.emit("agent_settled", {}, ctx);
+  await Bun.sleep(40);
+  const after = pi.entries.at(-1).data.goal;
+  expect(after.status).toBe("active");
+  expect(after.objective).toBe(pending.objective);
+  expect(after.id).toBe(pending.id);
+  expect(after.tokensUsed).toBe(30);
+  expect(after.reconciliation).toBeUndefined();
+  expect(pi.sent).toHaveLength(1);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("unresolved or invalid revisions persist as an actionable stalled state across reload", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  const attention: unknown[] = [];
+  pi.events.on("goal:attention", (event) => attention.push(event));
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("Implement all requested behavior", ctx);
+  await pi.emit("input", { source: "interactive", text: "Include migrations in the feature" }, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  const pending = pi.entries.at(-1).data.goal;
+  await expect(pi.tools.get("reconcile_goal").execute("invalid", {
+    ...goalIdentifiers(pending), action: "revise", objective: "Implement including migrations",
+  }, undefined, undefined, ctx)).rejects.toThrow("complete checks list");
+  await pi.emit("message_end", { message: assistantMessage(12) }, ctx);
+  await pi.emit("agent_settled", {}, ctx);
+  const paused = pi.entries.at(-1).data.goal;
+  expect(paused.status).toBe("stalled");
+  expect(paused.reconciliation).toEqual(pending.reconciliation);
+  expect(paused.objective).toBe(pending.objective);
+  expect(paused.tokensUsed).toBe(12);
+  expect(paused.stallReason).toContain("latest user request");
+  expect(ctx.notifications.filter((message) => message.includes("latest request was not reconciled"))).toHaveLength(1);
+  expect(attention).toHaveLength(1);
+  await pi.emit("session_tree", {}, ctx);
+  const restored = pi.entries.at(-1).data.goal;
+  expect(restored.status).toBe("stalled");
+  expect(restored.reconciliation.requestId).not.toBe(paused.reconciliation.requestId);
+  expect(restored.reconciliation.requestedAt).toBe(paused.reconciliation.requestedAt);
+  expect(attention).toHaveLength(1);
+  expect(restored.tokensUsed).toBe(12);
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await expect(pi.tools.get("resume_goal").execute("stale", goalIdentifiers(paused), undefined, undefined, ctx)).rejects.toThrow("request changed");
+  await pi.commands.get("goal").handler("resume", ctx);
+  expect(pi.entries.at(-1).data.goal.reconciliation).toBeUndefined();
+  expect(pi.entries.at(-1).data.goal.status).toBe("active");
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(1);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("new requests, goal replacement, aborted tools and shutdown reject stale goal controls", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("First objective", ctx);
+  await pi.emit("input", { source: "interactive", text: "Add a requirement" }, ctx);
+  const first = pi.entries.at(-1).data.goal;
+  await pi.emit("input", { source: "interactive", text: "Actually preserve the old scope" }, ctx);
+  const latest = pi.entries.at(-1).data.goal;
+  await pi.emit("input", { source: "extension", text: "Background metadata" }, ctx);
+  expect(pi.entries.at(-1).data.goal.reconciliation).toEqual(latest.reconciliation);
+  await expect(pi.tools.get("reconcile_goal").execute("stale", { ...goalIdentifiers(first), action: "pause" }, undefined, undefined, ctx)).rejects.toThrow("request changed");
+  await expect(pi.tools.get("reconcile_goal").execute("aborted", { ...goalIdentifiers(latest), action: "keep" }, AbortSignal.abort(), undefined, ctx)).rejects.toThrow();
+  expect(pi.entries.at(-1).data.goal.reconciliation).toEqual(latest.reconciliation);
+  await pi.commands.get("goal").handler("Second objective", ctx);
+  await expect(pi.tools.get("clear_goal").execute("stale", goalIdentifiers(latest), undefined, undefined, ctx)).rejects.toThrow("goal changed");
+  await pi.emit("input", { source: "interactive", text: "Pause this goal" }, ctx);
+  const final = pi.entries.at(-1).data.goal;
+  await pi.emit("session_shutdown", {}, ctx);
+  await expect(pi.tools.get("reconcile_goal").execute("shutdown", { ...goalIdentifiers(final), action: "pause" }, undefined, undefined, ctx)).rejects.toThrow("session changed");
+});
+
+test("a cancelled goal can be explicitly paused then cleared without deleting history", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("Objective to cancel", ctx);
+  await pi.emit("input", { source: "interactive", text: "Cancel and clear this goal" }, ctx);
+  const pending = pi.entries.at(-1).data.goal;
+  const identifiers = goalIdentifiers(pending);
+  await expect(pi.tools.get("clear_goal").execute("active", identifiers, undefined, undefined, ctx)).rejects.toThrow("inactive unfinished");
+  await pi.tools.get("reconcile_goal").execute("pause", { ...identifiers, action: "pause" }, undefined, undefined, ctx);
+  await pi.tools.get("clear_goal").execute("clear", identifiers, undefined, undefined, ctx);
+  expect(pi.entries.at(-1).data.goal).toBeNull();
+  expect(pi.entries.some((entry) => entry.data.goal?.objective === "Objective to cancel")).toBe(true);
+  await pi.emit("agent_settled", {}, ctx);
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await pi.emit("session_tree", {}, ctx);
+  const result = await pi.tools.get("get_goal").execute("get", {}, undefined, undefined, ctx);
+  expect(JSON.parse(result.content[0].text)).toEqual({ goal: null });
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("inactive status questions keep the goal inactive while resume and full revision preserve accounting", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  const original = { ...createGoal("The complete feature", { now: 10, tokenBudget: 50_000 }), status: "paused", turns: 4, continuations: 2, tokensUsed: 1200, timeUsedMs: 35_000 };
+  pi.appendEntry("goal-state", { version: 2, goal: original });
+  await pi.emit("session_start", {}, ctx);
+  await pi.emit("input", { source: "interactive", text: "What is the status?" }, ctx);
+  await pi.tools.get("reconcile_goal").execute("keep", { ...goalIdentifiers(pi.entries.at(-1).data.goal), action: "keep" }, undefined, undefined, ctx);
+  await pi.emit("agent_settled", {}, ctx);
+  expect(pi.entries.at(-1).data.goal.status).toBe("paused");
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await pi.emit("input", { source: "interactive", text: "Resume and add migrations" }, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  const identifiers = goalIdentifiers(pi.entries.at(-1).data.goal);
+  await pi.tools.get("resume_goal").execute("resume", identifiers, undefined, undefined, ctx);
+  await pi.tools.get("reconcile_goal").execute("revise", {
+    ...identifiers, action: "revise", objective: "The complete feature, with migrations",
+    checks: [{ content: "Implement feature and migration", status: "in_progress" }, { content: "Verify every behavior", status: "pending" }],
+  }, undefined, undefined, ctx);
+  const revised = pi.entries.at(-1).data.goal;
+  expect(revised.id).toBe(original.id);
+  expect(revised.createdAt).toBe(original.createdAt);
+  expect(revised.tokensUsed).toBe(original.tokensUsed);
+  expect(revised.timeUsedMs).toBe(original.timeUsedMs);
+  expect(revised.continuations).toBe(original.continuations);
+  expect(revised.turns).toBe(original.turns + 1);
+  expect(revised.tokenBudget).toBe(original.tokenBudget);
+  expect(revised.objective).toContain("with migrations");
+  expect(revised.checks).toHaveLength(2);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("provider failures preserve unresolved user scope and prevent silent automatic continuation", async () => {
+  for (const errorMessage of ["WebSocket error", "Usage limit exceeded"]) {
+    const pi = new MockPi();
+    const ctx = mockContext(pi);
+    goalExtension(pi as any);
+    await pi.emit("session_start", {}, ctx);
+    await pi.commands.get("goal").handler("Implement all requested changes", ctx);
+    await pi.emit("input", { source: "interactive", text: "Also cover migration behavior" }, ctx);
+    const pending = pi.entries.at(-1).data.goal.reconciliation;
+    await pi.emit("agent_start", {}, ctx);
+    await pi.emit("message_end", { message: { ...assistantMessage(9), stopReason: "error", errorMessage } }, ctx);
+    await pi.emit("agent_settled", {}, ctx);
+    expect(pi.entries.at(-1).data.goal.reconciliation).toEqual(pending);
+    expect(pi.entries.at(-1).data.goal.status).toBe(errorMessage.includes("Usage") ? "usage_limited" : "stalled");
+    expect(ctx.notifications.some((message) => message.includes("reconciliation is still pending"))).toBe(true);
+    await Bun.sleep(40);
+    expect(pi.sent).toHaveLength(0);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
+});
+
+test("budget wrap-up may verify completed work but a later run cannot silently reactivate it", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("create_goal").execute("create", { objective: "Verify the already completed change", token_budget: 10 }, undefined, undefined, ctx);
+  await pi.emit("message_end", { message: assistantMessage(10) }, ctx);
+  expect(pi.entries.at(-1).data.goal.status).toBe("budget_limited");
+  await pi.tools.get("update_goal").execute("complete", { status: "complete" }, undefined, undefined, ctx);
+  expect(pi.entries.at(-1).data.goal.status).toBe("complete");
+  await pi.emit("agent_settled", {}, ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+
+  const stopped = new MockPi();
+  const stoppedContext = mockContext(stopped);
+  goalExtension(stopped as any);
+  stopped.appendEntry("goal-state", { version: 2, goal: { ...createGoal("Unfinished scope", { tokenBudget: 10 }), status: "budget_limited", tokensUsed: 10 } });
+  await stopped.emit("session_start", {}, stoppedContext);
+  await expect(stopped.tools.get("update_goal").execute("complete", { status: "complete" }, undefined, undefined, stoppedContext)).rejects.toThrow("current budget-limited wrap-up");
+  await stopped.commands.get("goal").handler("resume", stoppedContext);
+  expect(stopped.entries.at(-1).data.goal.status).toBe("budget_limited");
+  await stopped.emit("session_shutdown", {}, stoppedContext);
 });

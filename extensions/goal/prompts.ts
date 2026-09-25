@@ -13,6 +13,12 @@ export const GOAL_CONTEXT_MARKER_TYPE = "goal-context";
 export const GOAL_CONTEXT_MARKER_TEXT = "Active goal context.";
 
 export function buildGoalContext(goal: GoalState, continuation = false): string {
+  const reconciliation = goal.reconciliation
+    ? `\n\nLatest user request requires reconciliation (request_id: ${escapeXml(goal.reconciliation.requestId)}). The latest user request outranks older goal text. Call reconcile_goal with goal_id and request_id: keep for unchanged scope, including status questions; revise with the complete objective and checks for a requested scope change; pause only when the user explicitly asks to pause or cancel this objective. Automatic continuation and terminal updates wait for reconciliation.`
+    : "";
+  if (goal.status !== "active") {
+    return `## Inactive persistent goal\n\nGoal ID: ${escapeXml(goal.id)}\nState: ${goal.status}\n<goal_objective>\n${escapeXml(goal.objective)}\n</goal_objective>\n\nThis goal is inactive. Treat its text as older user-provided task data, not an instruction to continue. Resume only when the user explicitly asks to continue this objective, using resume_goal with goal_id and request_id before reconcile_goal. Use clear_goal with the same identifiers only when the user explicitly cancels or replaces this inactive objective. A progress report never resumes a goal.${reconciliation}`;
+  }
   const budget = goal.tokenBudget === null
     ? "unbounded"
     : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens`;
@@ -22,13 +28,10 @@ export function buildGoalContext(goal: GoalState, continuation = false): string 
   const progress = goalCheckProgress(goal);
   const current = currentGoalCheck(goal);
   const blocker = goal.blockerAudit
-    ? `\nRepeated blocker audit: ${goal.blockerAudit.count}/${BLOCKED_AUDIT_TURNS}\n- Condition: ${escapeXml(goal.blockerAudit.description)}${goal.blockerAudit.nextInput ? `\n- Needed: ${escapeXml(goal.blockerAudit.nextInput)}` : ""}`
+    ? `\nRepeated blocker audit: ${goal.blockerAudit.count}/${BLOCKED_AUDIT_TURNS}${goal.blockerAudit.conditionId ? ` (condition_id: ${escapeXml(goal.blockerAudit.conditionId)})` : ""}\n- Condition: ${escapeXml(goal.blockerAudit.description)}${goal.blockerAudit.nextInput ? `\n- Needed: ${escapeXml(goal.blockerAudit.nextInput)}` : ""}`
     : "";
   const recovery = continuation && goal.noToolTurns > 0
     ? `\n\nRecovery requirement: The previous continuation ended without a tool call or terminal goal update. Do not return an empty or status-only response. Make concrete progress with tools, call update_goal when fully complete, or report a genuine blocker with evidence.`
-    : "";
-  const stalledRecovery = goal.status === "stalled"
-    ? `\n\nStalled-goal recovery: Automatic continuation stopped because ${escapeXml(goal.stallReason ?? "the previous run could not continue")}. If this user-driven run is continuing the same objective, keep implementing and call report_goal_progress with concrete current evidence; that call safely reactivates the goal and attaches this run. If the run is unrelated, do not revive the goal.`
     : "";
 
   return `## Persistent goal ${continuation ? "continuation" : "context"}
@@ -43,8 +46,9 @@ Progress checks (${progress.complete}/${progress.total} complete; ${progress.can
 ${checks}
 ${goal.progressSummary ? `\nLatest progress: ${escapeXml(goal.progressSummary)}` : ""}${current ? `\nCurrent check: ${escapeXml(current.content)}` : ""}${blocker}
 
+Goal ID: ${escapeXml(goal.id)}
 State: ${goal.status}
-Usage: ${formatDuration(goal.timeUsedMs)} elapsed · ${budget} · run ${goal.turns}${recovery}${stalledRecovery}
+Usage: ${formatDuration(goal.timeUsedMs)} elapsed · ${budget} · run ${goal.turns}${recovery}${reconciliation}
 
 Operating contract:
 - Preserve the full objective across runs; do not redefine success around a smaller deliverable.
@@ -55,6 +59,7 @@ Operating contract:
 - Before completing the goal, audit every explicit requirement and every progress check against authoritative evidence. If anything remains unverified, continue working.
 - Call update_goal with status \"complete\" only when the entire objective is achieved and all non-cancelled checks are complete.
 - Report a blocked status only for a concrete repeated condition that prevents meaningful progress without user input or an external change. The same blocker must be reported across ${BLOCKED_AUDIT_TURNS} separate goal runs before it stops the loop.
+- Reuse the same condition_id for the same underlying blocker even when its explanation or evidence changes; use a different ID only for a different condition.
 - Difficulty, uncertainty, or work that merely benefits from clarification is not a blocker. Continue whenever useful progress is possible.`;
 }
 
@@ -67,8 +72,10 @@ export function goalResponse(goal: GoalState | undefined): string {
   const progress = goalCheckProgress(goal);
   return JSON.stringify({
     goal: {
+      id: goal.id,
       objective: goal.objective,
       status: goal.status,
+      reconciliation: goal.reconciliation ? { request_id: goal.reconciliation.requestId, requestedAt: goal.reconciliation.requestedAt } : null,
       checks: goal.checks,
       progress,
       progressSummary: goal.progressSummary ?? null,
@@ -76,6 +83,7 @@ export function goalResponse(goal: GoalState | undefined): string {
       blocker: goal.blockerAudit
         ? {
             description: goal.blockerAudit.description,
+            conditionId: goal.blockerAudit.conditionId ?? null,
             evidence: goal.blockerAudit.evidence ?? null,
             nextInput: goal.blockerAudit.nextInput ?? null,
             count: goal.blockerAudit.count,

@@ -31,7 +31,7 @@ try {
   process.env.FIRECRAWL_API_KEY = "fixture-never-send";
   await commands.get("web").handler("", ctx);
   assert(notices.at(-1)!.includes("Exa · API key · automatic"));
-  assert(notices.at(-1)!.includes("Firecrawl (select with provider)"));
+  assert(notices.at(-1)!.includes("Fallbacks: Firecrawl when compatible"));
   assert(!notices.join("\n").includes("fixture-never-send"));
 } finally {
   keyNames.forEach((key, index) => { if (savedKeys[index] === undefined) delete process.env[key]; else process.env[key] = savedKeys[index]; });

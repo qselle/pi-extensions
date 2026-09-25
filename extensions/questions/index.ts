@@ -18,6 +18,7 @@ import { firstReplyWins } from "./race.ts";
 import { findSecretHandles, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
 import { createTelegramQuestionReply, safeTelegramQuestionError } from "./telegram.ts";
 import { createTerminalReplySource } from "./ui.ts";
+import { hasAnswer, QuestionRecap } from "./recap.ts";
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
 
@@ -56,10 +57,6 @@ export interface QuestionsExtensionOptions {
   isSubagentChild?: boolean;
 }
 
-function hasAnswer(answer: QuestionAnswer | undefined): boolean {
-  return Boolean(answer && (answer.answer !== undefined || answer.provided));
-}
-
 function setAttentionTitle(pi: ExtensionAPI, ctx: ExtensionContext, index: number, total: number): void {
   if (ctx.mode !== "tui") return;
   const title = `❓ Input needed · Question ${index + 1}/${total}`;
@@ -71,22 +68,6 @@ function clearAttentionTitle(pi: ExtensionAPI, ctx: ExtensionContext): void {
   if (ctx.mode !== "tui") return;
   ctx.ui.setTitle("pi");
   pi.events.emit(TERMINAL_TITLE_EVENT, { source: "questions", title: undefined });
-}
-
-function recap(details: QuestionnaireDetails, theme: any): string {
-  const answered = details.answers.filter(hasAnswer).length;
-  const lines = [
-    `${theme.fg("accent", "◆")} ${theme.bold("Questions")} ${answered}/${details.questions.length} answered${details.interrupted ? theme.fg("warning", " · interrupted") : ""}`,
-  ];
-  for (const question of details.questions) {
-    const answer = details.answers.find((candidate) => candidate.id === question.id);
-    const source = answer?.source === "telegram" ? theme.fg("muted", " · Telegram") : "";
-    lines.push(`  ${hasAnswer(answer) ? theme.fg("success", "✓") : theme.fg("warning", "○")} ${question.question}${source}`);
-    if (hasAnswer(answer)) {
-      lines.push(`    ${theme.fg("dim", "answer:")} ${theme.fg("accent", question.secret ? "••••••" : answer?.answer ?? "")}${answer?.handle ? ` ${theme.fg("dim", answer.handle)}` : ""}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 export default function questionsExtension(
@@ -249,10 +230,10 @@ export default function questionsExtension(
       };
     },
     renderCall: () => new Text("", 0, 0),
-    renderResult: (result: any, _renderOptions: any, theme: any) => new Text(
-      recap(result.details ?? { questions: [], answers: [], interrupted: false }, theme),
-      0,
-      0,
+    renderResult: (result: any, renderOptions: any, theme: any) => new QuestionRecap(
+      result.details ?? { questions: [], answers: [], interrupted: false },
+      Boolean(renderOptions.expanded),
+      theme,
     ),
     renderShell: "self",
   });

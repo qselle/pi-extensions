@@ -1,4 +1,4 @@
-import { formatDuration } from "../turn-separator/stats.ts";
+import { formatDuration } from "../../lib/telemetry-format.ts";
 import { formatCost, formatTokens } from "../footer/format.ts";
 import { emptyTiming, timingText, validTiming, type ResponseTiming } from "./timing.ts";
 export const FIELDS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;

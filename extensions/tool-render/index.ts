@@ -17,13 +17,14 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from 
 import { expansionHint } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { disposeSyntax, highlightSyntax, initializeSyntax } from "../../lib/syntax.ts";
-import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE } from "../../lib/tool-purpose.ts";
+import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
 import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
 import { closeDanglingLink } from "../../lib/links.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	boundTail,
+	compactPath,
 	fileLink,
 	firstLine,
 	labelText,
@@ -41,11 +42,13 @@ import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
 	closeGroup,
+	groupOf,
 	groupState,
-	isLeader,
 	noteEnd,
 	noteStart,
 	resetExploration,
+	previewRows,
+	restoreExploration,
 	type DisplayRow,
 } from "./exploration.ts";
 
@@ -125,7 +128,7 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 	const { lines, omitted } = boundTail(output, opts?.expanded ? 200 : 8);
 	const failed = isError || ["failed", "timed-out", "interrupted"].includes(result?.details?.status);
 	const body: string[] = header.map((line) => theme.fg(failed ? "error" : "muted", line));
-	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines · ${expansionHint()}`));
+	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines · ${opts?.expanded ? "preview limit" : expansionHint()}`));
 	const highlighted = !isError && language ? highlightPreview(lines.join("\n"), language, theme) : undefined;
 	for (const [index, l] of lines.entries()) {
 		const colored = highlighted?.[index] ?? theme.fg(isError ? "error" : "toolOutput", l);
@@ -163,7 +166,7 @@ function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, ex
 		const bg = row.kind === "add" ? addBg : delBg;
 		return `  ${washLine(bg, content, visibleWidth(content), inner)}`;
 	});
-	if (omitted > 0) lines.push(`  ${fit(theme.fg("dim", `… +${omitted} lines`), inner)}`);
+	if (omitted > 0) lines.push(`  ${fit(theme.fg("dim", `… +${omitted} lines · ${expanded ? "preview limit" : expansionHint()}`), inner)}`);
 	return lines;
 }
 
@@ -171,6 +174,12 @@ function countLabel(theme: Theme, added: number, removed: number): string {
 	const parts = [theme.fg("toolDiffAdded", `+${added}`)];
 	if (removed > 0) parts.push(theme.fg("toolDiffRemoved", `-${removed}`));
 	return `${theme.fg("dim", "(")}${parts.join(" ")}${theme.fg("dim", ")")}`;
+}
+
+/** Secondary intent never crowds out a useful target or result count. */
+function purposeSuffix(purpose: string | undefined, width: number, theme: Theme): string {
+	if (!purpose || width < 3 + Math.min(12, visibleWidth(purpose))) return "";
+	return theme.fg("dim", " · ") + theme.fg("text", fit(purpose, width - 3));
 }
 
 /** Render edit/write headlines with the result so patch counts are available. */
@@ -187,13 +196,15 @@ function diffHeadline(
 	const overhead = 3 + verbText.length + (label ? 1 + visibleWidth(label) : 0);
 	const a = ctx?.args;
 	const target = labelText(targetFor(name, a));
+	const purpose = toolPurpose(a?.purpose, [a?.path]);
+	const caption = purposeSuffix(purpose, Math.floor(Math.max(0, width - overhead) * 0.55), theme);
 	const parts = [bullet(theme, ctx), verb];
 	if (target) {
-		const colored = theme.fg("muted", fit(target, Math.max(3, width - overhead)));
+		const colored = theme.fg("muted", compactPath(target, Math.max(3, width - overhead - visibleWidth(caption))));
 		parts.push(fileLink(colored, toAbs(String(a?.path ?? "."), ctx?.cwd ?? process.cwd())));
 	}
 	if (label) parts.push(label);
-	return parts.join(" ");
+	return parts.join(" ") + caption;
 }
 
 /** Reserve result counts before clipping the subject, so long paths remain useful. */
@@ -203,20 +214,30 @@ function explorationRow(row: DisplayRow, theme: Theme, width: number, cwd: strin
 	const available = Math.max(0, width - visibleWidth(verbText) - 1);
 	const suffixWidth = Math.max(0, Math.min(visibleWidth(row.suffix ?? "") + 3, Math.floor(available * 0.65)));
 	const suffix = row.suffix && suffixWidth >= 5 ? theme.fg(row.status === "error" ? "error" : "dim", fit(` · ${row.suffix}`, suffixWidth)) : "";
-	const detail = fit(row.detail, Math.max(0, available - visibleWidth(suffix)));
+	const detailWidth = Math.max(0, available - visibleWidth(suffix));
+	const caption = purposeSuffix(row.purpose, Math.floor(detailWidth * 0.55), theme);
+	const targetWidth = Math.max(0, detailWidth - visibleWidth(caption));
+	const detail = row.filePath ? compactPath(row.detail, targetWidth) : fit(row.detail, targetWidth);
 	const subject = theme.fg("text", row.filePath ? fileLink(detail, toAbs(row.filePath, cwd)) : detail);
-	return `${verb} ${subject}${suffix}`;
+	return `${verb} ${subject}${caption}${suffix}`;
 }
 
 function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, width: number, cwd: string): string[] {
 	const dot = theme.fg(rows.some((row) => row.status === "error") ? "error" : active ? "accent" : "muted", BULLET);
 	const title = theme.bold(theme.fg("text", active ? "Exploring" : "Explored"));
 	const inner = Math.max(1, width - 4);
-	const lines = [fit(`${dot} ${title}`, width)];
-	rows.forEach((row, i) => {
-		const connector = theme.fg("dim", `  ${i === rows.length - 1 ? "└" : "├"} `);
-		lines.push(connector + explorationRow(row, theme, inner, cwd));
+	const sharedPurpose = rows[0]?.purpose && rows.every((row) => row.purpose === rows[0]!.purpose) ? rows[0].purpose : undefined;
+	const lines = [fit(`${dot} ${title}${purposeSuffix(sharedPurpose, Math.max(0, width - visibleWidth(title) - 2), theme)}`, width)];
+	const preview = previewRows(rows);
+	preview.rows.forEach((row, i) => {
+		const connector = theme.fg("dim", `  ${!preview.omitted && i === preview.rows.length - 1 ? "└" : "├"} `);
+		lines.push(connector + explorationRow(sharedPurpose ? { ...row, purpose: undefined } : row, theme, inner, cwd));
 	});
+	if (preview.omitted) {
+		const counts = [preview.failed ? `${preview.failed} failed` : "", preview.pending ? `${preview.pending} running` : ""].filter(Boolean);
+		const omitted = `… ${preview.omitted} more ${preview.omitted === 1 ? "step" : "steps"}${counts.length ? ` (${counts.join(", ")})` : ""} · ${expansionHint()}`;
+		lines.push(theme.fg("dim", "  └ ") + theme.fg(preview.failed ? "error" : "dim", fit(omitted, inner)));
+	}
 	return lines;
 }
 
@@ -226,7 +247,8 @@ function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: a
 	const row: DisplayRow = { verb: ctx?.isError ? actionVerb(name, ctx) : verbFor(name), detail: target,
 		status: ctx?.isError ? "error" : ctx?.executionStarted && ctx?.isPartial ? "pending" : "done",
 		filePath: PATH_TOOLS.has(name) ? String(args?.path ?? args?.dir ?? ".") : undefined,
-		suffix: ctx?.isError || ctx?.isPartial ? undefined : summarize(name, result, args) };
+		suffix: ctx?.isError || ctx?.isPartial ? undefined : summarize(name, result, args),
+		purpose: toolPurpose(args?.purpose, [args?.path, args?.pattern, args?.query, args?.name]) };
 	const head = `${bullet(theme, ctx)} ${explorationRow(row, theme, Math.max(1, width - 2), ctx?.cwd ?? process.cwd())}`;
 	if (ctx?.isError) {
 		const msg = new PlainOutput().push(resultText(result).text).trim().slice(0, 1200) || "failed";
@@ -260,9 +282,10 @@ function makeRenderCall(name: ToolName) {
 		// running exploration; completion moves the block to the result slot.
 		if (EXPLORATION_TOOLS.has(name)) return new Lines((width) => {
 			if (!ctx?.executionStarted || !ctx?.isPartial) return [];
-			const state = groupState(ctx?.toolCallId);
-			if (!state) return standaloneExploration(name, undefined, theme, ctx, width);
-			if (!isLeader(ctx?.toolCallId)) return [];
+			const group = groupOf(ctx?.toolCallId);
+			if (!group) return standaloneExploration(name, undefined, theme, ctx, width);
+			if (group.leaderId !== ctx?.toolCallId) return [];
+			const state = groupState(ctx?.toolCallId)!;
 			bindExploration(ctx);
 			return explorationBlock(state.rows, state.active, theme, width, ctx?.cwd ?? process.cwd());
 		}, "");
@@ -308,13 +331,18 @@ function makeRenderResult(name: ToolName) {
 					const language = name === "read" ? getLanguageFromPath(String(ctx?.args?.path ?? "")) : undefined;
 					return [...(ctx?.isError ? heading.slice(0, 1) : heading), ...bashBody(result, opts, theme, width, !!ctx?.isError, language)];
 				}
-				const st = groupState(ctx?.toolCallId);
+				const group = groupOf(ctx?.toolCallId);
 				if (ctx?.isError) {
 					const failure = standaloneExploration(name, result, theme, ctx, width);
-					return st && isLeader(ctx?.toolCallId) ? [...explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd()), ...failure] : failure;
+					if (!group || group.leaderId !== ctx?.toolCallId) return failure;
+					const st = groupState(ctx?.toolCallId)!;
+					return [...explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd()), ...failure];
 				}
-				if (!st) return standaloneExploration(name, result, theme, ctx, width);
-				if (!isLeader(ctx?.toolCallId)) return []; // follower — renders nothing
+				if (!group) return standaloneExploration(name, result, theme, ctx, width);
+				// Hidden followers must not rebuild/coalesce the whole group on each
+				// repaint: doing so makes large saved groups quadratic to render.
+				if (group.leaderId !== ctx?.toolCallId) return [];
+				const st = groupState(ctx?.toolCallId)!;
 				bindExploration(ctx);
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
 			}, summarize(name, result, ctx?.args) || "done");
@@ -370,7 +398,7 @@ function writeEnabled(on: boolean): void {
 export default function toolRenderExtension(pi: ExtensionAPI): void {
 	if (readEnabled()) {
 		const bashStyle = { renderShell: "self" as const, renderCall: makeRenderCall("bash"), renderResult: makeRenderResult("bash") };
-		pi.events?.on(BASH_STYLE, (data) => {
+		const unsubscribeStyle = pi.events?.on(BASH_STYLE, (data) => {
 			const request = data as BashStyleRequest;
 			if (typeof request?.provide === "function") request.provide(bashStyle, () => {});
 		});
@@ -398,14 +426,14 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 					const definition: ToolDefinition<any> = factories[name](cwd);
 					// Purpose is model-written display metadata. Keep it optional for
 					// historical calls, and never pass it to the native executor.
-					const purposeMetadata: Partial<ToolDefinition<any>> = name === "bash" ? {
-						parameters: { ...definition.parameters, properties: { purpose: commandPurposeParameter, ...definition.parameters.properties } },
-						promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE],
+					const purposeMetadata: Partial<ToolDefinition<any>> = {
+						parameters: { ...definition.parameters, properties: { purpose: name === "bash" ? commandPurposeParameter : toolPurposeParameter, ...definition.parameters.properties } },
+						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
 						execute: (id, args, signal, update, context) => {
-							const { purpose: _purpose, ...commandArgs } = args as Record<string, unknown>;
-							return definition.execute(id, commandArgs, signal, update, context);
+							const { purpose: _purpose, ...toolArgs } = args as Record<string, unknown>;
+							return definition.execute(id, toolArgs, signal, update, context);
 						},
-					} : {};
+					};
 					pi.registerTool({
 						...definition,
 						...purposeMetadata,
@@ -427,9 +455,18 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		// Exploration grouping: track runs of read/grep/find/ls, broken by any
 		// other tool or a new assistant message.
 		resetExploration();
+		const restoreGroups = (ctx: any): void => {
+			try {
+				// Match Pi's rendered history so a compacted-away leader cannot hide
+				// a surviving follower. Missing host data leaves ordinary tool cards.
+				const entries = ctx?.sessionManager?.buildContextEntries?.();
+				if (Array.isArray(entries)) restoreExploration(entries);
+				else resetExploration();
+			} catch { resetExploration(); }
+		};
 		pi.on("session_start", async (_event: any, ctx: any) => {
 			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd, true);
-			resetExploration();
+			restoreGroups(ctx);
 			// Pi awaits public lifecycle handlers. Registration stays synchronous;
 			// repeated starts reuse this extension's cached highlighter.
 			if (ctx?.mode === "tui") await initializeSyntax();
@@ -450,8 +487,10 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 			if (event?.message?.role === "assistant") closeGroup();
 		});
 		pi.on("agent_end", () => closeGroup());
-		pi.on("session_tree", () => resetExploration());
+		pi.on("session_tree", (_event, ctx) => restoreGroups(ctx));
+		pi.on("session_compact", (_event, ctx) => restoreGroups(ctx));
 		pi.on("session_shutdown", () => {
+			unsubscribeStyle?.();
 			resetExploration();
 			disposeSyntax();
 		});

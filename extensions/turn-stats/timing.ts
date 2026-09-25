@@ -1,3 +1,5 @@
+import type { ResponseTimingSample } from "../../lib/telemetry.ts";
+
 export interface ResponseTiming {
   latencyMs: number; latencySamples: number;
   streamMs: number; outputTokens: number; streamSamples: number;
@@ -11,15 +13,18 @@ export function isFirstOutputEvent(event: { type: string; delta?: string; conten
   return event.type === "toolcall_end";
 }
 
-export function addTiming(total: ResponseTiming, sent: number | undefined, first: number | undefined, ended: number, output: unknown): void {
+export function addTiming(total: ResponseTiming, sent: number | undefined, first: number | undefined, ended: number, output: unknown): ResponseTimingSample | undefined {
   if (sent === undefined || first === undefined || ![sent, first, ended].every(Number.isFinite) || first < sent || ended < first) return;
   total.latencyMs += first - sent;
   total.latencySamples++;
+  const sample: ResponseTimingSample = { ttftMs: first - sent };
   const duration = ended - first;
-  if (duration < 250 || typeof output !== "number" || !Number.isFinite(output) || output < 0) return;
+  if (duration < 250 || typeof output !== "number" || !Number.isFinite(output) || output < 0) return sample;
   total.streamMs += duration;
   total.outputTokens += output;
   total.streamSamples++;
+  sample.tps = output / (duration / 1000);
+  return sample;
 }
 
 export function validTiming(value: ResponseTiming, responses: number): boolean {

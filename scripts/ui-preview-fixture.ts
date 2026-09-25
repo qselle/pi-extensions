@@ -10,6 +10,7 @@ import { getModels } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { createLoop, encodeLoopSnapshot, pauseLoop } from "../extensions/loop/loop.ts";
+import { SUBAGENT_STATE } from "../extensions/subagents/persistence.ts";
 
 const root = process.env.PI_UI_PREVIEW_ROOT;
 if (!root) throw new Error("Run this fixture through the UI preview controller.");
@@ -17,10 +18,12 @@ const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const agentDir = join(root, "agent");
 await mkdir(agentDir, { recursive: true });
 process.env.PI_CODING_AGENT_DIR = agentDir;
+process.env.PI_RELOAD_ALL_DIR = join(root, "reload-all");
 process.env.PI_OFFLINE = "1";
 process.env.ANTHROPIC_API_KEY = "synthetic-preview-key";
 for (const key of ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY"]) delete process.env[key];
 for (const key of Object.keys(process.env)) if (/^(TELEGRAM_|PI_TELEGRAM_)/.test(key)) delete process.env[key];
+for (const key of Object.keys(process.env)) if (key.startsWith("HERDR_")) delete process.env[key];
 await writeFile(join(agentDir, "notify.json"), '{"enabled":false}');
 await writeFile(join(agentDir, "session-title.json"), '{"enabled":false}');
 let networkAttempts = 0;
@@ -30,6 +33,13 @@ const paths = (await readdir(join(repo, "extensions"), { withFileTypes: true }))
 const model = getModels("anthropic").find((model) => model.id === "claude-sonnet-4-6") ?? getModels("anthropic")[0]!;
 const manager = SessionManager.create(root, join(root, "sessions"));
 manager.appendSessionInfo("Research toolkit");
+const question = { id: "scope", question: "Choose a **scope** for `src/research.ts`", options: ["**Focused** improvement", "Complete redesign"] };
+manager.appendMessage({ role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: "toolUse",
+  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  content: [{ type: "toolCall", id: "preview-question", name: "questionnaire", arguments: { questions: [question] } }] });
+manager.appendMessage({ role: "toolResult", toolCallId: "preview-question", toolName: "questionnaire", timestamp: Date.now(), isError: false,
+  content: [{ type: "text", text: "scope: **Focused** improvement" }],
+  details: { questions: [question], answers: [{ id: "scope", question: question.question, answer: question.options[0], source: "telegram" }], interrupted: false } });
 manager.appendMessage({ role: "user", content: [{ type: "text", text: "Find the TypeScript references for this project." }], timestamp: Date.now() });
 // Seed a recorded web result to exercise the real renderer without an HTTP request.
 const usage = { input: 100, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 140, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -48,6 +58,14 @@ await writeFile(join(root, "src/types.ts"), 'export interface Source { title: st
 manager.appendCustomEntry("loop-state", encodeLoopSnapshot([
   pauseLoop(createLoop("Review the research interface at narrow widths.\nKeep full prompts searchable and preserve the next useful action. ".repeat(8), 300_000, Date.now(), "preview-loop"), "Paused for inspection"),
 ]));
+manager.appendCustomEntry(SUBAGENT_STATE, { version: 1, agents: ["research", "verification"].map((name, index) => ({
+  agent: { id: `preview-child-${name}`, name, task: index === 0 ? "Review the research flow" : "Verify the implementation",
+    status: "completed", startedAt: index + 1, endedAt: index + 3, cwd: root, contextMode: "fresh", activity: [],
+    model: "Preview model", thinking: "high", output: index === 0
+      ? "## Research findings\n\nKeep **source metadata** visible and preserve filter constraints.\n\n```typescript\nconst sources = await search(query);\n```"
+      : "## Verification\n\n- Narrow layout passes.\n- Source links remain intact.",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } }, inbox: [], delivery: "none",
+})) });
 const runtime = await createAgentSessionRuntime(async ({ cwd, agentDir, sessionManager }) => {
   const services = await createAgentSessionServices({ cwd, agentDir,
     settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "0.87.0", enableInstallTelemetry: false, enableAnalytics: false,
@@ -80,11 +98,11 @@ runtime.session.agent.streamFunction = async (_model, _context, options) => {
     stopReason: tool ? "toolUse" as const : "stop" as const,
     content: tool ? [{ type: "toolCall" as const, id: "preview-plan", name: "update_plan", arguments: { plan: [
       { step: "Review the interface", status: "completed" },
-      { step: "Improve research tools", status: "in_progress" },
+      { step: "Improve research tools", status: "in_progress", description: "Keep sources readable and preserve search filters across provider fallback." },
       { step: "Verify behavior and document usage", status: "pending" },
     ] } },
-    { type: "toolCall" as const, id: "preview-read-a", name: "read", arguments: { path: "src/research.ts" } },
-    { type: "toolCall" as const, id: "preview-read-b", name: "read", arguments: { path: "src/types.ts" } },
+    { type: "toolCall" as const, id: "preview-read-a", name: "read", arguments: { path: "src/research.ts", purpose: "Inspect the current research flow" } },
+    { type: "toolCall" as const, id: "preview-read-b", name: "read", arguments: { path: "src/types.ts", purpose: "Check the source metadata shape" } },
     { type: "toolCall" as const, id: "preview-shell", name: "bash", arguments: { purpose: "Verify the command output display", command: "printf '2 checks passed\\n'" } },
     { type: "toolCall" as const, id: "preview-shell-multiline", name: "bash", arguments: { purpose: "Check both research source files exist", command: "if test -f src/research.ts && test -f src/types.ts; then\n  printf '%s\\n' '2 source files ready'\nelse\n  printf '%s\\n' 'Missing source files'\nfi" } },
     ] : [{ type: "thinking" as const, thinking: "I will keep source metadata explicit and preserve the existing search contract." }, { type: "text" as const, text: "## Research workflow\n\nSearch results keep their source and date. A stable phrase across wraps remains searchable when the terminal narrows.\n\n```typescript src/research.ts\nconst sources = await search(query);\nreturn sources.map(({ title, url }) => ({ title, url }));\n```\n\n- Search and page extraction have separate controls.\n- Long commands stay visible in the transcript viewer." }],

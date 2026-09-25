@@ -41,7 +41,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`handoff`](extensions/handoff/) | Carry a task checkpoint into a fresh session |
 | [`history-search`](extensions/history-search/) | Fuzzy search of the active prompt history |
 | [`hyperlinks`](extensions/hyperlinks/) | Clickable terminal paths |
-| [`image-history`](extensions/image-history/) | Opt-in older-image deferral with on-demand retrieval |
+| [`image-history`](extensions/image-history/) | Opt-in image deferral, compact previews, original viewing, portable export and storage cleanup |
 | [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
 | [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
@@ -49,17 +49,19 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
 | [`plan`](extensions/plan/) | Current multi-step execution plan |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep your Mac awake while Pi works; no-op on Linux |
+| [`reload-all`](extensions/reload-all/) | Reload participating Pi terminals when idle, with confirmed per-session status |
 | [`rewind`](extensions/rewind/) | Search earlier prompts, fork before one, and edit it again |
 | [`questions`](extensions/questions/) | Structured terminal and Telegram questions |
 | [`schedule`](extensions/schedule/) | Project reminders and cron prompts |
 | [`session-search`](extensions/session-search/) | Full-text search across saved sessions |
 | [`session-title`](extensions/session-title/) | Automatic session titles and Herdr tab synchronization |
 | [`side-chat`](extensions/side-chat/) | Background side conversations |
-| [`subagents`](extensions/subagents/) | Isolated child agents |
+| [`subagents`](extensions/subagents/) | Durable child conversations, interim reports and keyboard transcript navigation |
 | [`telegram`](extensions/telegram/) | Session topics, Markdown notifications, diagnostics, and question replies |
+| [`terminal-processes`](extensions/terminal-processes/) | Explicit controls for visible Herdr process panes that survive Pi exit |
 | [`tool-render`](extensions/tool-render/) | Compact tools, soft command panels and brief command-purpose captions |
 | [`transcript`](extensions/transcript/) | Searchable full-session history with live updates and Markdown |
-| [`turn-separator`](extensions/turn-separator/) | Timing and usage between tool-work blocks |
+| [`turn-separator`](extensions/turn-separator/) | Optional quiet timing separators between tool-work blocks; off by default |
 | [`turn-stats`](extensions/turn-stats/) | Per-run timing, response counts, and usage |
 | [`usage-export`](extensions/usage-export/) | Export recorded usage as JSON or CSV |
 | [`verify`](extensions/verify/) | Run focused checks after file edits |
@@ -68,6 +70,8 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 
 Each extension's README lists its commands, configuration, dependencies, and limitations.
 Job and workflow controls activate when used; context and image-history tools are opt-in.
+`terminal_process` is available only in a Herdr TUI and leaves its panes running
+after Pi exits; managed background jobs remain tied to the Pi process.
 
 For automation, use `loop` to repeat a model prompt, `monitor` to run shell checks
 and wake the model on matching results, or `schedule` for reminders and cron prompts.
@@ -83,17 +87,20 @@ Telegram configuration continue to apply.
 | Find an extension, prompt or skill command | `Ctrl+Shift+P` or `/palette` |
 | Recover a draft replaced by a palette selection | `/palette restore` |
 | Check dependencies and plugin configuration | `/doctor` |
+| Reload participating terminals or inspect progress | `/reload-all` / `/reload-all status` |
 | Check Telegram authentication, chat, webhook and topics without sending | `/telegram doctor` |
 | Send a Markdown message to this session's configured Telegram destination | `/telegram send **Done** — checks passed` |
 | Search the full conversation | `/transcript <search>` |
+| Inspect child conversations | `/subagents [name]` or Right from an empty editor; Left/Right switch children |
 | Hide/show workflow cards | `/overlay hide` / `/overlay show` |
 
 The footer adds readable local Git counts when relevant: staged, changed, new,
 conflicts, and commits ahead/behind the locally known upstream. Its single line
 packs context, input/output, cache reads/writes, hit rate
 and cost into compact groups. Cache shares one `cache R … W … hit …` label;
-wide terminals add more identity details. Work separators and final turn receipts both show compact statistics on
-one line. The final `Turn` row covers the whole run; `finished` labels its local
+wide terminals add more identity details. Intermediate separators are off by default;
+`/turn-separator` enables quiet timing-only rules. One final `Turn` row covers the
+whole run on a single line; `finished` labels its local
 completion time. `/turn-stats` opens the full accounting; `/turn-stats full` keeps those
 details expanded. The working row names the active file or executable and counts
 concurrent tools, using a quiet pulse by default.

@@ -118,6 +118,21 @@ test("a different blocker or a productive run resets the blocker audit", () => {
   expect(clearGoalBlockerAudit(changed).blockerAudit).toBeUndefined();
 });
 
+test("stable blocker IDs retain the audit as wording and evidence evolve, and survive reload", () => {
+  const first = recordGoalBlocker(goal(), { conditionId: "service.capacity", description: "No runner is available", nextInput: "Wait for a runner" }, 1).goal;
+  const second = recordGoalBlocker(first, { conditionId: "service.capacity", description: "All eligible runners remain occupied", evidence: "Queue depth 21", nextInput: "Free a runner or wait" }, 2).goal;
+  const restored = decodeGoalEntry(JSON.parse(JSON.stringify({ version: 2, goal: second })))!.goal!;
+  expect(restored.blockerAudit?.conditionId).toBe("service.capacity");
+  expect(restored.blockerAudit?.count).toBe(2);
+  const third = recordGoalBlocker(restored, { conditionId: "service.capacity", description: "Capacity still exhausted", evidence: "Queue depth 24" }, 3);
+  expect(third.blocked).toBe(true);
+  expect(third.goal.blockerAudit?.count).toBe(3);
+  const different = recordGoalBlocker(second, { conditionId: "service.credentials", description: "All eligible runners remain occupied" }, 3);
+  expect(different.goal.blockerAudit?.count).toBe(1);
+  expect(() => recordGoalBlocker(goal(), { conditionId: "", description: "Unavailable" }, 1)).toThrow("stable identifier");
+  expect(() => recordGoalBlocker(goal(), { conditionId: "not an identifier", description: "Unavailable" }, 1)).toThrow("stable identifier");
+});
+
 test("stalls without fabricating a blocker and clears the reason on resume", () => {
   const stalled = stallGoal(goal(), "Automatic runs returned no work", 200);
   expect(stalled.status).toBe("stalled");

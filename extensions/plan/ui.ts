@@ -119,8 +119,12 @@ export class PlanPanel implements Component {
     if (this.plan.explanation && maxRows >= 12) body.push(...wrapTextWithAnsi(this.theme.fg("dim", this.plan.explanation), innerWidth).slice(0, 2));
     body.push("");
     const rows = this.rows();
-    const budget = Math.max(1, maxRows - body.length - 4);
     const selected = Math.max(0, rows.findIndex((row) => row.path === this.selected));
+    const description = rows[selected]?.item.description;
+    const detailLines = description && maxRows >= 12 ? wrapTextWithAnsi(this.theme.fg("muted", description), innerWidth) : [];
+    const details = detailLines.slice(0, 3);
+    if (detailLines.length > 3) details[2] = this.theme.fg("dim", truncateToWidth("More details: /plan status", innerWidth, "…"));
+    const budget = Math.max(1, maxRows - body.length - 4 - (details.length ? details.length + 1 : 0));
     const start = Math.min(Math.max(0, selected - Math.floor(budget / 2)), Math.max(0, rows.length - budget));
     for (const row of rows.slice(start, start + budget)) {
       const prefix = `${row.path === this.selected ? "›" : " "} ${"  ".repeat(row.depth)}${row.item.children ? this.collapsed.has(row.path) ? "▸ " : "▾ " : "  "}`;
@@ -128,6 +132,7 @@ export class PlanPanel implements Component {
     }
     if (!rows.length) body.push(this.theme.fg("dim", "No plan yet. Use update_plan."));
     if (rows.length > budget) body.push(this.theme.fg("dim", `${start + 1}–${Math.min(rows.length, start + budget)} / ${rows.length} visible steps`));
+    if (details.length) body.push("", ...details);
     body.push(this.theme.fg("dim", panelHint(this.plan, innerWidth)));
     return frame(" Execution plan ", body, width, this.theme, "border").slice(0, maxRows);
   }
@@ -154,7 +159,13 @@ export class PlanToolResult implements Component {
       return lines.map(line => truncateToWidth(line, width, "…"));
     }
     if (this.plan.explanation) lines.push(this.theme.fg("dim", truncateToWidth(this.plan.explanation, width, "…")));
-    for (const { item, depth } of planRows(this.plan.items)) lines.push(itemLine({ ...item, step: "  ".repeat(depth) + item.step }, this.theme, width));
+    for (const { item, depth } of planRows(this.plan.items)) {
+      lines.push(itemLine({ ...item, step: "  ".repeat(depth) + item.step }, this.theme, width));
+      if (item.description) {
+        const indent = " ".repeat(Math.min((depth + 1) * 2, Math.max(0, width - 1)));
+        lines.push(...wrapTextWithAnsi(this.theme.fg("dim", item.description), width - indent.length).map((line) => indent + line));
+      }
+    }
     return lines.map((line) => truncateToWidth(line, width, ""));
   }
 
@@ -167,7 +178,10 @@ export function renderPlanText(plan: PlanState): string {
   const lines = [`Plan ${progressLabel(plan)}`];
   if (plan.explanation) lines.push(plan.explanation);
   if (current && stats.unfinished > 0) lines.push(`Current: ${current.step}`);
-  for (const { item, depth } of planRows(plan.items)) lines.push(`${"  ".repeat(depth)}${plainIcon(item.status)} ${item.step}${groupProgress(item)}`);
+  for (const { item, depth } of planRows(plan.items)) {
+    lines.push(`${"  ".repeat(depth)}${plainIcon(item.status)} ${item.step}${groupProgress(item)}`);
+    if (item.description) lines.push(`${"  ".repeat(depth + 1)}${item.description}`);
+  }
   return lines.join("\n");
 }
 

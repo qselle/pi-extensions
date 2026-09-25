@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import { createMonitor, observationSignature } from "./monitor.ts";
 import monitorExtension from "./index.ts";
+import { MONITOR_ALERT_EVENT } from "./events.ts";
 
 type Handler = (event: any, ctx: any) => any;
 
 class MockPi {
-  events = { emit() {} };
+  alerts: Array<{ name: string; value: any }> = [];
+  events = { emit: (name: string, value: unknown) => { if (name === MONITOR_ALERT_EVENT) this.alerts.push({ name, value }); } };
   handlers = new Map<string, Handler[]>();
   commands = new Map<string, any>();
   tools = new Map<string, any>();
@@ -37,7 +39,7 @@ function context(pi: MockPi) {
   const notifications: string[] = [];
   return {
     cwd: "/tmp/project", mode: "tui", isIdle: () => true, hasPendingMessages: () => false,
-    sessionManager: { getBranch: () => pi.entries },
+    sessionManager: { getBranch: () => pi.entries, getSessionId: () => "session" },
     ui: { notify: (message: string) => notifications.push(message), setStatus: () => undefined },
     notifications,
   };
@@ -62,6 +64,7 @@ test("monitor view exposes full commands in RPC without running a check", async 
   expect(ctx.notifications.at(-1)).toContain("Checks: 0/20");
   expect(pi.executions).toHaveLength(0);
   expect(pi.sent).toHaveLength(0);
+  expect(pi.alerts).toHaveLength(0);
   expect(pi.commands.get("monitor").getArgumentCompletions("v")).toEqual([{ value: "view", label: "view" }]);
   await pi.emit("session_shutdown", {}, ctx);
 });
@@ -78,6 +81,7 @@ test("runs explicit shell commands but keeps a change baseline silent", async ()
   expect(pi.executions[0].args.at(-1)).toBe("printf ready");
   expect(pi.executions[0].options).toMatchObject({ cwd: "/tmp/project", timeout: 300_000 });
   expect(pi.sent).toHaveLength(0);
+  expect(pi.alerts).toHaveLength(0);
   expect(pi.entries.at(-1).data.jobs[0].lastSignature).toHaveLength(64);
   await pi.commands.get("monitor").handler("stop all", ctx);
   await pi.emit("session_shutdown", {}, ctx);
@@ -99,6 +103,10 @@ test("wakes once with bounded untrusted output when an observation changes", asy
 
   expect(pi.sent).toHaveLength(1);
   expect(pi.sent[0].options).toEqual({ triggerTurn: true });
+  expect(pi.alerts).toHaveLength(1);
+  expect(pi.alerts[0]).toMatchObject({ name: MONITOR_ALERT_EVENT, value: { kind: "result", monitorId: "ci", runs: 1, maxRuns: 5, exitCode: 1 } });
+  expect(JSON.stringify(pi.alerts)).not.toContain("check-ci");
+  expect(JSON.stringify(pi.alerts)).not.toContain("CI failed");
   await pi.emit("agent_start", {}, ctx);
   const [transformed] = await pi.emit("context", { messages: [{ role: "custom", ...pi.sent[0].message }] }, ctx);
   expect(transformed.messages[0].content).toContain("output or exit status changed");
@@ -121,6 +129,7 @@ test("shutdown aborts an in-flight command without emitting a stale wakeup", asy
   await Bun.sleep(10);
   expect(pi.aborted).toBe(true);
   expect(pi.sent).toHaveLength(0);
+  expect(pi.alerts).toHaveLength(0);
   await pi.emit("agent_settled", {}, ctx);
   await Bun.sleep(10);
   expect(pi.executions).toHaveLength(1);
@@ -141,12 +150,14 @@ test("an interrupted final alert can resume and expires only after settlement", 
   await pi.emit("message_end", { message: { role: "assistant", stopReason: "aborted" } }, ctx);
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "paused", runs: 0 });
+  expect(pi.alerts).toHaveLength(1); // User interruption does not send another alert.
 
   await pi.commands.get("monitor").handler(`resume ${id}`, ctx);
   await Bun.sleep(25);
   await pi.emit("agent_start", {}, ctx);
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "expired", runs: 1 });
+  expect(pi.alerts.map((alert) => alert.value.kind)).toEqual(["result", "result"]);
   await pi.emit("session_shutdown", {}, ctx);
 });
 
@@ -174,6 +185,7 @@ for (const completion of ["result", "error"] as const) {
       await Bun.sleep(15);
       expect(checks).toHaveLength(2);
       expect(pi.sent).toHaveLength(0);
+      expect(pi.alerts).toHaveLength(0);
       expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "active", runs: 0 });
       expect(pi.entries.at(-1).data.jobs[0].lastSignature).toBeUndefined();
       checks[1]!.resolve({ code: 0, killed: false, stdout: "fresh", stderr: "" });
@@ -205,5 +217,72 @@ test("model stop aborts an explicitly selected in-flight monitor", async () => {
     expect(pi.aborted).toBe(true);
     expect(pi.sent).toHaveLength(0);
     expect(pi.entries.at(-1).data.jobs[0]).toMatchObject({ status: "stopped", runs: 0 });
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("wakeup failures emit one attention alert without leaking error or command text", async () => {
+  const pi = new MockPi();
+  pi.sendMessage = () => { throw new Error("private provider detail"); };
+  const ctx = context(pi);
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  try {
+    await pi.commands.get("monitor").handler("10s --on success -- private-command", ctx);
+    await Bun.sleep(25);
+    expect(pi.alerts).toHaveLength(1);
+    expect(pi.alerts[0]).toMatchObject({ name: MONITOR_ALERT_EVENT, value: { kind: "wakeup_failed", runs: 1, exitCode: 0 } });
+    expect(pi.entries.at(-1).data.jobs[0].status).toBe("paused");
+    expect(JSON.stringify(pi.alerts)).not.toContain("private");
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("a failed review emits one pause alert, while repeated errors and manual stop stay quiet", async () => {
+  const pi = new MockPi();
+  const ctx = context(pi);
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  try {
+    await pi.commands.get("monitor").handler("10s --on success -- check", ctx);
+    await Bun.sleep(25);
+    await pi.emit("agent_start", {}, ctx);
+    const error = { message: { role: "assistant", stopReason: "error", errorMessage: "private provider response" } };
+    await pi.emit("message_end", error, ctx);
+    await pi.emit("message_end", error, ctx);
+    await pi.commands.get("monitor").handler("stop all", ctx);
+    expect(pi.alerts).toHaveLength(2);
+    expect(pi.alerts[1].value.kind).toBe("agent_failed");
+    expect(pi.alerts[1].value.alertId).not.toBe(pi.alerts[0].value.alertId);
+    expect(JSON.stringify(pi.alerts)).not.toContain("private provider response");
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("a quiet final check sends one exhaustion alert and does not repeat after reload", async () => {
+  const pi = new MockPi(); const ctx = context(pi);
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  try {
+    await pi.commands.get("monitor").handler("10s --max-runs 1 -- private-command", ctx);
+    await Bun.sleep(25);
+    expect(pi.sent).toHaveLength(0);
+    expect(pi.alerts).toHaveLength(1);
+    expect(pi.alerts[0].value).toMatchObject({ sessionId: "session", kind: "expired", reason: "run_limit", runs: 1 });
+    expect(JSON.stringify(pi.alerts)).not.toContain("private-command");
+    await pi.emit("session_start", { reason: "reload" }, ctx);
+    expect(pi.alerts).toHaveLength(1);
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("restoring overdue monitoring reports its lifetime ending without running a command", async () => {
+  const pi = new MockPi(); const ctx = context(pi);
+  const job = createMonitor({ command: "private", intervalMs: 10_000, condition: "change", maxRuns: 10 }, Date.now() - 13 * 60 * 60 * 1000, "expired-monitor");
+  pi.entries.push({ type: "custom", customType: "monitor-state", data: { version: 1, jobs: [job] } });
+  install(pi);
+  await pi.emit("session_start", {}, ctx);
+  try {
+    expect(pi.executions).toHaveLength(0);
+    expect(pi.alerts).toHaveLength(1);
+    expect(pi.alerts[0].value).toMatchObject({ kind: "expired", reason: "time_limit", runs: 0 });
+    await pi.emit("session_start", { reason: "reload" }, ctx);
+    expect(pi.alerts).toHaveLength(1);
   } finally { await pi.emit("session_shutdown", {}, ctx); }
 });

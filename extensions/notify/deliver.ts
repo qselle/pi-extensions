@@ -81,9 +81,42 @@ export function parseFocusReports(
 	return { data: rest, focused: next, changed };
 }
 
-export function shouldEmit(focusAware: boolean, focused: boolean): boolean {
-	return !focusAware || !focused;
+export function shouldEmit(focusAware: boolean, focused: boolean | undefined): boolean {
+	return !focusAware || focused !== true;
 }
+
+/** Keep an unresolved operation visible until that same operation succeeds. */
+export class ToolFailures {
+	private readonly calls = new Map<string, string>();
+	private readonly failures = new Map<string, string>();
+
+	start(id: string, name: string, args: unknown): void {
+		// These tools treat purpose as display metadata, so a reworded caption
+		// must not prevent a successful retry from resolving the original failure.
+		// Preserve unknown tools and nested fields: their purpose may be real input.
+		const execution = PURPOSE_METADATA_TOOLS.has(name) && args && typeof args === "object" && !Array.isArray(args)
+			? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "purpose")) : args;
+		this.calls.set(id, `${name}:${JSON.stringify(execution, (_key, value) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+			return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]));
+		})}`);
+	}
+
+	end(id: string, error: string | undefined): void {
+		const key = this.calls.get(id) ?? `unobserved:${id}`;
+		this.calls.delete(id);
+		this.failures.delete(key);
+		if (error) this.failures.set(key, error);
+	}
+
+	latest(): string | undefined { return [...this.failures.values()].at(-1); }
+	clear(): void { this.calls.clear(); this.failures.clear(); }
+}
+
+const PURPOSE_METADATA_TOOLS = new Set([
+	"bash", "read", "edit", "write", "grep", "find", "ls",
+	"job_start", "job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop", "terminal_process",
+]);
 
 export interface DedupeState {
 	signature?: string;

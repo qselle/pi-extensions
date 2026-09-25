@@ -8,7 +8,8 @@ class MockInput {
   getValue() { return this.value; }
   setValue(value: string) { this.value = value; }
   handleInput(data: string) {
-    if (data === "backspace") this.value = this.value.slice(0, -1);
+    if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) this.value += data.slice(6, -6);
+    else if (data === "backspace") this.value = this.value.slice(0, -1);
     else if (data === "ctrl+u") this.value = "";
     else if (data.length === 1 && data >= " ") this.value += data;
   }

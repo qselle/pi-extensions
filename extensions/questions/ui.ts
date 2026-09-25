@@ -1,6 +1,7 @@
-import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Input,
+  Markdown,
   type Component,
   type Focusable,
   type TUI,
@@ -37,6 +38,8 @@ class MaskedInput extends Input {
 export class QuestionPrompt implements Component, Focusable {
   private readonly options: DisplayOption[];
   private readonly input: Input;
+  private readonly prompt: Markdown;
+  private readonly choiceText: Markdown[];
   private selected = 0;
   private inputMode = false;
   private _focused = false;
@@ -55,6 +58,13 @@ export class QuestionPrompt implements Component, Focusable {
     if (question.allowOther || this.options.length === 0) {
       this.options.push({ label: "Other", custom: true });
     }
+    this.prompt = new Markdown(question.question, 0, 0, getMarkdownTheme());
+    this.choiceText = this.options.map((option) => new Markdown(
+      option.custom ? `${option.label} · _type your answer_` : option.label,
+      0,
+      0,
+      getMarkdownTheme(),
+    ));
     this.input = question.secret ? new MaskedInput() : new Input();
     this.input.onSubmit = (value) => {
       const answer = cleanAnswer(value);
@@ -122,55 +132,65 @@ export class QuestionPrompt implements Component, Focusable {
   render(width: number): string[] {
     const renderWidth = Math.max(1, width);
     const lines: string[] = [];
-    const add = (text: string, prefix = "") => {
-      const prefixWidth = visibleWidth(prefix);
-      const available = Math.max(1, renderWidth - prefixWidth);
-      const wrapped = wrapTextWithAnsi(text, available);
-      for (let line = 0; line < wrapped.length; line++) {
-        lines.push(truncateToWidth(
-          `${line === 0 ? prefix : " ".repeat(prefixWidth)}${wrapped[line]}`,
-          renderWidth,
-          "",
-        ));
-      }
+    const inset = renderWidth > 4 ? 2 : 0;
+    const inner = Math.max(1, renderWidth - inset * 2);
+    const panel = (text: string, selected = false) => {
+      const content = truncateToWidth(text, inner, "");
+      const padded = content + " ".repeat(Math.max(0, inner - visibleWidth(content)));
+      return this.theme.bg("customMessageBg", " ".repeat(inset))
+        + this.theme.bg(selected ? "selectedBg" : "customMessageBg", padded)
+        + this.theme.bg("customMessageBg", " ".repeat(inset));
+    };
+    const add = (text: string) => {
+      for (const row of wrapTextWithAnsi(text, inner)) lines.push(panel(row));
     };
 
-    lines.push(this.theme.fg("borderAccent", "─".repeat(renderWidth)));
-    add(this.theme.fg("accent", this.theme.bold(`Question ${this.index + 1} of ${this.total}`)), " ");
-    add(this.theme.fg("text", this.question.question), " ");
-    lines.push("");
+    lines.push(panel(""));
+    add(this.theme.fg("accent", this.theme.bold(`Question ${this.index + 1}/${this.total}`)));
+    for (const row of this.prompt.render(inner)) lines.push(panel(row));
+    lines.push(panel(""));
 
-    for (const [optionIndex, option] of this.options.entries()) {
+    const firstChoice = Math.max(0, Math.min(this.selected - 2, this.options.length - 5));
+    const lastChoice = Math.min(this.options.length, firstChoice + 5);
+    if (firstChoice > 0) lines.push(panel(this.theme.fg("dim", `↑ ${firstChoice} more`)));
+    for (let optionIndex = firstChoice; optionIndex < lastChoice; optionIndex++) {
+      const option = this.options[optionIndex];
       const active = optionIndex === this.selected;
-      const pointer = active ? this.theme.fg("accent", "❯ ") : "  ";
-      const marker = active ? this.theme.fg("accent", "●") : this.theme.fg("muted", "○");
-      const suffix = option.custom ? this.theme.fg("muted", "  Type your own answer") : "";
-      const label = `${marker} ${optionIndex + 1}. ${this.theme.fg(active ? "accent" : "text", option.label)}${suffix}`;
-      add(label, pointer);
+      const prefix = `${active ? this.theme.fg("accent", "▌") : " "} ${this.theme.fg("muted", `${optionIndex + 1}.`)} `;
+      const prefixWidth = visibleWidth(prefix);
+      const rendered = this.choiceText[optionIndex].render(Math.max(1, inner - prefixWidth));
+      for (const [lineIndex, row] of rendered.entries()) {
+        lines.push(panel(`${lineIndex === 0 ? prefix : " ".repeat(prefixWidth)}${row}`, active));
+      }
+    }
+    if (lastChoice < this.options.length) {
+      lines.push(panel(this.theme.fg("dim", `↓ ${this.options.length - lastChoice} more`)));
     }
 
     if (this.inputMode) {
-      lines.push("");
-      add(this.theme.fg("muted", this.question.secret ? "Secret answer (masked locally):" : "Your answer:"), " ");
-      for (const line of this.input.render(Math.max(1, renderWidth - 2))) lines.push(` ${line}`);
+      lines.push(panel(""));
+      add(this.theme.fg("muted", this.question.secret ? "Secret answer (masked locally):" : "Your answer:"));
+      for (const line of this.input.render(inner)) lines.push(panel(line));
     }
 
-    lines.push("");
+    lines.push(panel(""));
     if (this.telegramEnabled) {
-      add(this.theme.fg("dim", "Waiting here and on Telegram — the first reply wins."), " ");
+      add(this.theme.fg("dim", "Waiting here and on Telegram · first reply wins"));
     }
     add(this.theme.fg(
       "dim",
       this.inputMode
         ? "Enter submit · Esc return"
         : "↑↓ navigate · Enter select · 1-9 quick select · Esc cancel",
-    ), " ");
-    lines.push(this.theme.fg("borderAccent", "─".repeat(renderWidth)));
+    ));
+    lines.push(panel(""));
     return lines;
   }
 
   invalidate(): void {
     this.input.invalidate();
+    this.prompt.invalidate();
+    for (const choice of this.choiceText) choice.invalidate();
   }
 
   private choose(): void {

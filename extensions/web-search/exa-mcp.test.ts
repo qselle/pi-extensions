@@ -52,6 +52,20 @@ test("default keyless Exa negotiates MCP and preserves filtering, bounds and sou
   expect(JSON.stringify(fixture.calls)).not.toContain("unused-secret");
 });
 
+test("keyless quota fallback releases the MCP session before using a configured provider", async () => {
+  const fixture = server({ call: () => new Response(null, { status: 429, headers: { "retry-after": "10" } }) });
+  let alternateCalls = 0;
+  const result = await searchWeb({ query: "q" }, undefined, { FIRECRAWL_API_KEY: "fixture-key" }, async (url, init) => {
+    if (!url.includes("firecrawl")) return fixture.request(url, init);
+    alternateCalls++;
+    expect(fixture.calls.at(-1)?.init.method).toBe("DELETE");
+    return Response.json({ data: { web: [{ url: "https://example.com/docs", title: "Documentation" }] } });
+  });
+  expect(alternateCalls).toBe(1);
+  expect(result.provider).toBe("firecrawl");
+  expect(result.attempts?.[0]).toEqual({ provider: "exa", outcome: "failed", reason: "HTTP 429" });
+});
+
 test("balanced and fast work without a session ID; structured and JSON-text results are accepted", async () => {
   for (const quality of ["balanced", "fast"] as const) {
     const fixture = server({ session: false, call: () => rpc(quality === "fast" ? { structuredContent: { results: [] }, content: [] } : payload()) });
@@ -111,7 +125,7 @@ test("SSE tolerates fragmented UTF-8, CRLF, multiline data and notifications, th
 test("keyless HTTP failures expose actionable status without remote text and with one bounded rate-limit retry", async () => {
   for (const status of [401, 429, 500]) {
     const fixture = server({ call: () => new Response("private-remote-error", { status }) });
-    const pending = searchWeb({ query: "q" }, undefined, { FIRECRAWL_API_KEY: "do-not-use" }, fixture.request);
+    const pending = searchWeb({ query: "q", provider: "exa" }, undefined, { FIRECRAWL_API_KEY: "do-not-use" }, fixture.request);
     await expect(pending).rejects.toThrow(`HTTP ${status}`);
     await expect(pending).rejects.not.toThrow("private-remote-error");
     if (status === 429) await expect(pending).rejects.toThrow("Free access is rate limited");

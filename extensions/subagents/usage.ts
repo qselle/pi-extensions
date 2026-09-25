@@ -1,11 +1,13 @@
 export const SUBAGENT_USAGE_ENTRY_TYPE = "subagent-usage";
+/** Invalidates readers of the current branch; carries no cross-session totals. */
+export const SUBAGENT_USAGE_EVENT = "subagent:usage-recorded";
 
-export interface SubagentUsageTotals {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
+export interface RecordedSubagentUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
 }
 
 export interface SubagentUsageRecord {
@@ -14,17 +16,13 @@ export interface SubagentUsageRecord {
   agentName: string;
   provider?: string;
   model?: string;
-  usage: SubagentUsageTotals;
-}
-
-export function emptySubagentUsage(): SubagentUsageTotals {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  usage: RecordedSubagentUsage;
 }
 
 export function usageRecord(message: unknown, agent: { id: string; name: string }): SubagentUsageRecord | undefined {
   if (!message || typeof message !== "object") return undefined;
   const record = message as Record<string, unknown>;
-  if (!record.usage) return undefined;
+  if (record.role !== "assistant") return undefined;
   return {
     version: 1,
     agentId: agent.id,
@@ -35,44 +33,7 @@ export function usageRecord(message: unknown, agent: { id: string; name: string 
   };
 }
 
-export function addSubagentUsage(
-  left: SubagentUsageTotals,
-  right: SubagentUsageTotals,
-): SubagentUsageTotals {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    cost: left.cost + right.cost,
-  };
-}
-
-export function restoreSubagentUsage(entries: readonly unknown[]): SubagentUsageTotals {
-  let total = emptySubagentUsage();
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const candidate = entry as { type?: unknown; customType?: unknown; data?: unknown };
-    if (candidate.type !== "custom" || candidate.customType !== SUBAGENT_USAGE_ENTRY_TYPE) continue;
-    const record = decodeUsageRecord(candidate.data);
-    if (record) total = addSubagentUsage(total, record.usage);
-  }
-  return total;
-}
-
-export function formatSubagentUsage(total: SubagentUsageTotals): string | undefined {
-  if (!total.input && !total.output && !total.cacheRead && !total.cacheWrite && !total.cost) return undefined;
-  const parts = [
-    total.input ? `↑${formatTokens(total.input)}` : "",
-    total.output ? `↓${formatTokens(total.output)}` : "",
-    total.cacheRead ? `R${formatTokens(total.cacheRead)}` : "",
-    total.cacheWrite ? `W${formatTokens(total.cacheWrite)}` : "",
-    total.cost ? `$${total.cost.toFixed(4)}` : "",
-  ].filter(Boolean);
-  return `agents ${parts.join(" ")}`;
-}
-
-function decodeUsageRecord(value: unknown): SubagentUsageRecord | undefined {
+export function decodeUsageRecord(value: unknown): SubagentUsageRecord | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Partial<SubagentUsageRecord>;
   if (candidate.version !== 1 || typeof candidate.agentId !== "string" || typeof candidate.agentName !== "string") return undefined;
@@ -86,7 +47,7 @@ function decodeUsageRecord(value: unknown): SubagentUsageRecord | undefined {
   };
 }
 
-function normalizeUsage(value: any): SubagentUsageTotals {
+function normalizeUsage(value: any): RecordedSubagentUsage {
   return {
     input: nonNegative(value?.input),
     output: nonNegative(value?.output),
@@ -96,13 +57,6 @@ function normalizeUsage(value: any): SubagentUsageTotals {
   };
 }
 
-function nonNegative(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-function formatTokens(value: number): string {
-  if (value < 1_000) return String(value);
-  if (value < 10_000) return `${(value / 1_000).toFixed(1)}k`;
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
-  return `${(value / 1_000_000).toFixed(1)}M`;
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

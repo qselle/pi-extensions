@@ -11,7 +11,7 @@ import { redactText } from "../../lib/redact.ts";
 import { BASH_OWNER, BASH_STYLE, type BashOwnerRequest, type BashStyleRequest, type BashStyle } from "./bash-style.ts";
 import { JOB_HISTORY_ENTRY, JobHistory } from "./history.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
-import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE } from "../../lib/tool-purpose.ts";
+import { commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
 const JOB_CONTROLS = ["job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"];
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
@@ -20,9 +20,18 @@ const icons: Record<JobSnapshot["status"], string> = { starting: "◌", running:
 const exitSummary = (job: JobSnapshot) => job.signal ? ` · ${job.signal}` : job.code != null ? ` · exit ${job.code}` : "";
 const brief = (job: JobSnapshot) => `${icons[job.status]} ${job.name} · ${job.status} · ${job.status === "interrupted" ? "completion unknown" : elapsed((job.endedAt ?? Date.now()) - job.startedAt)}${exitSummary(job)}`;
 const safeLabel = (text: unknown) => redactText(new PlainOutput().push(typeof text === "string" ? text : "").replace(/\s+/g, " "), knownSecretValues());
+// Redact before the display cap so a secret crossing that cap stays hidden.
+const safePurpose = (value: unknown, targets: readonly unknown[] = []) => toolPurpose(
+  safeLabel(typeof value === "string" ? value.replace(/\p{Bidi_Control}/gu, "") : ""), targets.map(safeLabel),
+);
 
 function lines(text: string) {
   return { invalidate() {}, render: (width: number) => width > 0 ? text.split("\n").map((line) => truncateToWidth(line, width, "…")) : [] };
+}
+
+function jobHeading(title: string, args: Record<string, unknown>, theme: Theme) {
+  const purpose = safePurpose(args.purpose, [args.id, args.name, args.command]);
+  return lines(theme.fg("muted", title) + (purpose ? theme.fg("dim", " · ") + theme.fg("text", purpose) : ""));
 }
 
 export default function backgroundJobsExtension(pi: ExtensionAPI): void {
@@ -173,9 +182,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderShell: bashStyle?.renderShell,
     renderCall: (args: any, theme, context) => {
-      // Redact before the display cap so a secret crossing that cap stays hidden.
-      const rawPurpose = typeof args.purpose === "string" ? args.purpose.replace(/\p{Bidi_Control}/gu, "") : "";
-      const purpose = commandPurpose(safeLabel(rawPurpose));
+      const purpose = safePurpose(args.purpose, [args.command]);
       const shown = { ...args, purpose, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) };
       return bashStyle?.renderCall?.(shown, theme, context)
         ?? lines([...(purpose ? [theme.fg("muted", purpose)] : []), theme.fg("accent", `$ ${safeLabel(args.command)}`)].join("\n"));
@@ -184,7 +191,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       bashStyle?.renderResult ? (resolved, opts, selectedTheme, selectedContext) => bashStyle!.renderResult!(resolved, opts, selectedTheme, selectedContext!) : renderResult),
   });
   const registerBash = () => { const definition = bashDefinition(); pi.registerTool(definition); return definition; };
-  pi.events.on(BASH_OWNER, (data) => {
+  const unsubscribeOwner = pi.events.on(BASH_OWNER, (data) => {
     const request = data as BashOwnerRequest;
     if (typeof request?.claim !== "function") return;
     if (request.style) bashStyle = request.style;
@@ -197,13 +204,14 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_start", label: "Start background job",
     description: "Start a managed shell command. It may finish during yield_ms or keep running with a job ID. Use job_wait/job_output cursors, job_write for stdin, and job_stop for cleanup. Run the command in the foreground; do not use nohup/disown/setsid. Set pty=true for interactive terminal programs (Node.js required); otherwise uses pipes. PTY output is a sanitized text log, not a screen emulator.",
     promptSnippet: "Run long-lived commands as managed background jobs with bounded logs and explicit cleanup.",
-    parameters: Type.Object({ pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), command: Type.String({ minLength: 1, maxLength: 16000 }), name: Type.String({ minLength: 1, maxLength: 80 }), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
+    parameters: Type.Object({ purpose: toolPurposeParameter, pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), command: Type.String({ minLength: 1, maxLength: 16000 }), name: Type.String({ minLength: 1, maxLength: 80 }), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
     async execute(_id, params, signal, update, ctx) {
-      return startManaged(params, signal, ctx, update);
+      const { purpose: _purpose, ...execution } = params;
+      return startManaged(execution, signal, ctx, update);
     },
-    renderCall: (args, theme) => lines(theme.fg("accent", `Start job · ${safeLabel(args.name) || "command"}`)), renderResult: renderStartResult,
+    renderCall: (args, theme) => jobHeading(`Start job · ${safeLabel(args.name) || "command"}`, args, theme), renderResult: renderStartResult,
   });
-  const readParameters = Type.Object({ id: Type.String(), cursor: Type.Optional(Type.Integer({ minimum: 0 })), wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })) });
+  const readParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), cursor: Type.Optional(Type.Integer({ minimum: 0 })), wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })) });
   for (const name of ["job_output", "job_wait"] as const) pi.registerTool({
     name, label: name === "job_wait" ? "Wait for job" : "Read job output",
     description: "Read managed job output. Pass the last returned cursor to avoid repeating output. job_wait waits up to wait_ms (default 1000); cancelling a wait leaves the job running.",
@@ -214,35 +222,35 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       else signal?.throwIfAborted();
       return result(params.id, params.cursor, jobs);
     },
-    renderCall: (args, theme) => lines(theme.fg("accent", `${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`)), renderResult,
+    renderCall: (args, theme) => jobHeading(`${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`, args, theme), renderResult,
   });
   pi.registerTool({
     name: "job_list", label: "List background jobs", description: "List this session's managed jobs and their IDs, including recent finished jobs. Use job_output for logs.",
-    parameters: Type.Object({}),
+    parameters: Type.Object({ purpose: toolPurposeParameter }),
     async execute() {
       const jobs = allJobs();
       return { content: [{ type: "text", text: jobs.map((job) => `${job.id} · ${brief(job)}\n${job.command.slice(0, 180)}`).join("\n\n") || "No managed jobs in this session." }],
         details: { jobs: jobs.map(({ id, name, status }) => ({ id, name, status })) } };
     },
-    renderCall: (_args, theme) => lines(theme.fg("accent", "List background jobs")), renderResult,
+    renderCall: (args, theme) => jobHeading("List background jobs", args, theme), renderResult,
   });
   pi.registerTool({
     name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
-    parameters: Type.Object({ id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()), cursor: Type.Optional(Type.Integer({ minimum: 0 })) }),
+    parameters: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()), cursor: Type.Optional(Type.Integer({ minimum: 0 })) }),
     async execute(_id, params, signal) { const jobs = service; await jobs.write(params.id, params.text, params.eof, signal); return result(params.id, params.cursor, jobs); },
-    renderCall: (args, theme) => lines(theme.fg("accent", `Write job input · ${safeLabel(args.id)}`)), renderResult,
+    renderCall: (args, theme) => jobHeading(`Write job input · ${safeLabel(args.id)}`, args, theme), renderResult,
   });
   pi.registerTool({
     name: "job_resize", label: "Resize job terminal", description: "Resize a running PTY job. Terminal applications receive the new dimensions; pipe jobs cannot be resized.",
-    parameters: Type.Object({ id: Type.String(), columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) }),
+    parameters: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) }),
     async execute(_id, params) { const job = service.resize(params.id, params.columns, params.rows); return result(job.id, job.outputEnd); },
-    renderCall: (args, theme) => lines(theme.fg("accent", `Resize terminal · ${safeLabel(args.id)} · ${args.columns}×${args.rows}`)), renderResult,
+    renderCall: (args, theme) => jobHeading(`Resize terminal · ${safeLabel(args.id)} · ${args.columns}×${args.rows}`, args, theme), renderResult,
   });
   pi.registerTool({
     name: "job_stop", label: "Stop background job", description: "Stop a managed job and its process group. Sends TERM, then KILL after three seconds if necessary. Safe to repeat for a finished job.",
-    parameters: Type.Object({ id: Type.String() }),
+    parameters: Type.Object({ purpose: toolPurposeParameter, id: Type.String() }),
     async execute(_id, params) { const job = findJob(params.id); if (service.list().some((job) => job.id === params.id)) service.stop(params.id); return result(params.id, job.outputEnd); },
-    renderCall: (args, theme) => lines(theme.fg("accent", `Stop job · ${safeLabel(args.id)}`)), renderResult,
+    renderCall: (args, theme) => jobHeading(`Stop job · ${safeLabel(args.id)}`, args, theme), renderResult,
   });
 
   const show = async (args: string, ctx: ExtensionContext) => {
@@ -302,6 +310,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     });
   });
   pi.on("session_shutdown", async () => {
+    unsubscribeOwner();
     generation++; clearRefresh(); viewer?.close(); viewer = undefined; viewerOpen = false;
     closing = true;
     completionViews.clear();

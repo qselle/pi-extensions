@@ -1,8 +1,53 @@
-import type { GoalCompletedEvent } from "../goal/events.ts";
+import type { GoalAttentionEvent, GoalCompletedEvent } from "../goal/events.ts";
+import type { ScheduleAttentionEvent } from "../schedule/events.ts";
 import type { GoalCheck } from "../goal/goal.ts";
 import type { TelegramGoalDetails } from "./config.ts";
+import type { MonitorAlertEvent } from "../monitor/events.ts";
 
 export const TELEGRAM_MESSAGE_LIMIT = 3_500;
+
+export function formatMonitorAlertMessage(event: MonitorAlertEvent): string {
+  if (event.kind === "expired") {
+    const limit = event.reason === "run_limit" ? `its ${event.maxRuns}-check limit` : "its 12-hour lifetime";
+    return `⚠️ Pi monitoring ended\n\nMonitor ${event.monitorId} · ${event.runs}/${event.maxRuns} checks\nMonitoring reached ${limit} without another actionable result.\n\nNo further checks are scheduled. Open Pi to start a new monitor if needed.`;
+  }
+  const title = event.kind === "result" ? "🔎 Pi monitor update" : "⚠️ Pi monitor needs attention";
+  const result = event.killed ? "Check timed out or was killed" : `Exit ${event.exitCode}`;
+  const condition = { change: "Result changed", failure: "Failure detected", success: "Success detected", always: "Scheduled check" }[event.condition];
+  const next = event.kind === "wakeup_failed"
+    ? "Monitoring paused: Pi could not start the alert turn. Open the session to resume."
+    : event.kind === "agent_failed"
+      ? "Monitoring paused: Pi could not finish reviewing the result. Open the session to resume."
+      : "Pi has been asked to review the result. Questions can also reach this chat.";
+  return `${title}\n\nMonitor ${event.monitorId} · check ${event.runs}/${event.maxRuns}\n${condition} · ${result}\n\n${next}`;
+}
+
+export function formatGoalAttentionMessage(event: GoalAttentionEvent): string {
+  const status = {
+    blocked: "Goal blocked",
+    stalled: "Goal stalled",
+    budget_limited: "Goal budget reached",
+    usage_limited: "Goal waiting for provider capacity",
+  }[event.status];
+  const next = {
+    blocked: "Progress needs your input or an external change. Open Pi to review the blocker; any pending questionnaire can also reach this chat.",
+    stalled: "Automatic progress has stopped. Open Pi to inspect the issue and resume when ready.",
+    budget_limited: "The goal's token budget is exhausted. Open Pi to review progress before starting further work.",
+    usage_limited: "The provider cannot continue right now. Resume the goal in Pi when capacity is available.",
+  }[event.status];
+  return `⚠️ Pi needs attention\n\n${status} · ${event.turns} turn${event.turns === 1 ? "" : "s"}\nTokens: ${formatTokens(event.tokensUsed)}${event.tokenBudget === null ? "" : ` / ${formatTokens(event.tokenBudget)}`}\n\n${next}`;
+}
+
+export function formatScheduleAttentionMessage(event: ScheduleAttentionEvent): string {
+  const reason = {
+    queue_failed: "Scheduled work cannot continue because its durable queue could not be read or saved.",
+    wakeup_failed: "The scheduled task paused because Pi could not start its turn.",
+    agent_failed: "The scheduled task paused because its agent turn failed. Its pending delivery is preserved.",
+    delivery_unconfirmed: "The turn finished, but its completion could not be saved. Check its outcome before retrying to avoid repeating work.",
+  }[event.kind];
+  const task = event.taskId ? `${event.taskKind === "cron" ? "Cron" : "Reminder"} ${event.taskId}` : "Schedule queue";
+  return `⚠️ Pi schedule needs attention\n\n${task}\n${reason}\n\nOpen Pi to review the schedule. No automatic retry is running.`;
+}
 
 export function formatGoalCompletionMessage(
   event: GoalCompletedEvent,

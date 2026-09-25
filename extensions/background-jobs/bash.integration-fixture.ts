@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { JobService, type StartJob } from "./service.ts";
 import { registerSecretVault, SecretVault } from "../questions/secrets.ts";
@@ -51,6 +52,42 @@ try {
       assert.equal(bash.parameters.properties.purpose.maxLength, undefined, "display metadata must not reject a long explanation");
       assert(bash.promptGuidelines.includes(COMMAND_PURPOSE_GUIDELINE));
       assert.equal(bash.renderShell, "self", "renderer must be preserved");
+      const controls: Record<string, any> = {
+        job_start: { name: "Alias", command: "printf alias", yield_ms: 3000 }, job_output: { id: "example" },
+        job_wait: { id: "example" }, job_list: {}, job_write: { id: "example", text: "literal input" },
+        job_resize: { id: "example", columns: 80, rows: 24 }, job_stop: { id: "example" },
+      };
+      for (const [name, args] of Object.entries(controls)) {
+        const definition = tool(name);
+        assert.equal(definition.parameters.properties.purpose.type, "string", `${name} offers a purpose`);
+        assert(!definition.parameters.required?.includes("purpose"), `${name} keeps old calls valid`);
+        for (const purpose of [undefined, null, "Check the task progress"]) {
+          const validated = validateToolArguments(definition, { type: "toolCall", id: `schema-${name}`, name, arguments: { ...args, ...(purpose === undefined ? {} : { purpose }) } });
+          assert.deepEqual(validated, purpose ? { ...args, purpose } : args);
+        }
+        const caption = "Check the task progress";
+        const decorated = { ...args, purpose: caption };
+        const native = new ToolExecutionComponent(name, `native-${name}`, decorated, undefined, definition, { requestRender() {} } as never, root);
+        native.setArgsComplete(); native.markExecutionStarted();
+        native.updateResult({ content: [{ type: "text", text: "Task result" }], isError: false });
+        assert.equal(native.render(180).map(stripVTControlCharacters).join("\n").split(caption).length - 1, 1, "purpose appears in one native heading");
+        // Pi's default Box always reserves one content cell and left padding.
+        // Test its supported widths natively, and our own heading down to zero.
+        for (const width of [2, 4, 12, 40, 80, 180]) assert(native.render(width).every(row => visibleWidth(row) <= width), `${name} overflow at ${width}`);
+        const heading = definition.renderCall(decorated, { fg: (_: string, text: string) => text }, { args: decorated });
+        for (const width of [0, 1, 12, 40, 80, 180]) assert(heading.render(width).every((row: string) => visibleWidth(row) <= width), `${name} heading overflow at ${width}`);
+        const replay = new ToolExecutionComponent(name, `replay-${name}`, JSON.parse(JSON.stringify(decorated)), undefined, definition, { requestRender() {} } as never, root);
+        replay.updateResult({ content: [{ type: "text", text: "Saved task result" }], isError: false });
+        assert(replay.render(180).map(stripVTControlCharacters).join("\n").includes(caption));
+        const unsafe = { ...args, purpose: `Check ${secret.slice(0, 10)}\u202e${secret.slice(10)} configuration` };
+        const shown = definition.renderCall(unsafe, { fg: (_: string, text: string) => text }, { args: unsafe }).render(180).join("\n");
+        assert(shown.includes("Check [redacted] configuration") && !shown.includes(secret), `${name} redacts before clipping`);
+      }
+      const aliasArgs = { ...controls.job_start, purpose: "Check alias execution" };
+      const alias = await tool("job_start").execute("alias", aliasArgs, undefined, undefined, ctx);
+      assert(alias.content[0].text.includes("alias"));
+      assert(!Object.hasOwn(launches.at(-1)!, "purpose"));
+      assert.equal(launches.at(-1)!.command, "printf alias");
       const argumentsWithPurpose = { command: "cat cwd-marker", yield_ms: 3000, purpose: "Inspect the active session directory", name: "Directory check", timeout: 2 };
       const before = launches.length;
       const result = await bash.execute("cwd", argumentsWithPurpose, undefined, undefined, ctx);
@@ -90,8 +127,12 @@ try {
       const context = { state: {}, args: { command: "cat" }, invalidate: () => invalidations++, cwd: root };
       const options = { expanded: false, isPartial: false };
       bash.renderResult(running, options, theme, context).render(80);
-      await tool("job_write").execute("write", { id: running.details.id, text: Array.from({ length: 30 }, (_, i) => `line-${i}`).join("\n"), eof: true });
-      await tool("job_wait").execute("wait", { id: running.details.id, wait_ms: 3000 });
+      await tool("job_write").execute("write", { id: running.details.id, text: Array.from({ length: 30 }, (_, i) => `line-${i}`).join("\n"), eof: true, purpose: "Provide the test fixture input" });
+      const waited = await tool("job_wait").execute("wait", { id: running.details.id, wait_ms: 3000, purpose: "Confirm the command has finished" });
+      assert(!waited.content[0].text.includes("Confirm the command"), "purpose must not enter process output");
+      assert((await tool("job_list").execute("list", { purpose: "Inspect retained command states" })).details.jobs.some((job: any) => job.id === running.details.id));
+      assert.equal((await tool("job_output").execute("output", { id: running.details.id, cursor: 0, purpose: "Inspect the completed test output" })).details.status, "completed");
+      assert.equal((await tool("job_stop").execute("stop", { id: running.details.id, purpose: "Clean up the completed command" })).details.status, "completed");
       assert.equal(invalidations, 1);
       for (const width of [1, 20, 80]) {
         const rendered = bash.renderResult(running, options, theme, context).render(width);

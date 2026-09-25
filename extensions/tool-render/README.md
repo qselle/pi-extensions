@@ -20,13 +20,14 @@ Replaces Pi's built-in tool cards with compact headlines, bounded output, groupe
 /tool-render on|off   Save the setting; run /reload to apply it
 ```
 
-This extension changes rendering. Execution and result details come from Pi's built-in definitions; Bash also accepts optional `purpose` display metadata. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. Cleanly completed foreground commands show their output and nonzero elapsed time; active or failed jobs and incomplete logs retain their IDs and status. Expand to see job cursors and all metadata. The tools use the active session directory after session changes.
+This extension changes rendering. Execution and result details come from Pi's built-in definitions; tools also accept optional `purpose` display metadata. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. Cleanly completed foreground commands show their output and nonzero elapsed time; active or failed jobs and incomplete logs retain their IDs and status. Expand to see job cursors and all metadata. The tools use the active session directory after session changes.
 
-### Command purpose
+### Action purpose
 
-The model is asked to include a brief, factual purpose with each useful Bash
-call, such as "Check the renderer tests" or "Find the session configuration".
-This appears after the command status on the existing header, in normal text
+Tools accept an optional brief, factual purpose, such as "Check the renderer
+tests" or "Find the session configuration". Bash, reads, edits, writes, directory
+listings, and searches expose this field in their ordinary tool schemas.
+This appears after the action on the existing header, in normal text
 color. It describes the intended action; the output below reports what actually
 happened. The command panel stays separate and retains the exact shell source.
 
@@ -36,8 +37,16 @@ their visibility or native toggle. Calls without a purpose keep their usual
 header; existing sessions are not retroactively annotated. Saved purposes render
 again when a session is resumed. Captions remain one line, with an ellipsis when
 space is tight; terminal controls, extra whitespace and excessive length are
-removed from the display. Purpose metadata is stripped before command execution.
-The model may omit it, and captions are limited to Bash commands.
+removed from the display. Purpose metadata is stripped before native execution,
+preserving exact commands, paths, queries, and write content. Native file-tool
+guidelines are unchanged; the optional schema description supplies the guidance.
+
+Exploration rows show intent beside their target when space permits. A common
+purpose for a whole group appears once in its heading. Repeated reads with
+different purposes remain distinct; matching purposes keep range coalescing.
+Narrow layouts prioritize targets and result counts. Captions that only repeat a
+target are omitted. Managed job controls expose the same field through
+[`background-jobs`](../background-jobs/).
 
 Shell commands, edit/write diffs and expanded file reads use shared Shiki
 highlighting with the `gruvbox-dark` theme. Its Gruvbox grammar colors distinguish
@@ -49,7 +58,18 @@ not the whole command surface. Output aligns directly below without an extra
 blank row or heavy box. Highlighting applies while running and after completion. Command text,
 execution and source results are unchanged. Reload Pi once to apply an extension update.
 
-Consecutive `read`, `grep`, `find`, and `ls` calls are grouped into one exploration block. Repeated reads of one file merge their ranges. Grouping is live-only and is not rebuilt after reload.
+Consecutive `read`, `grep`, `find`, and `ls` calls are grouped into one exploration
+block. Repeated reads of one file merge their ranges. Collapsed groups show up to
+five rows, keeping failures and running steps ahead of recent successful work.
+A quiet omission row reports the remaining steps and the configured expansion
+key; any omitted failures or running steps are counted explicitly. Failed calls
+also retain their individual diagnostic below the group.
+
+Grouping is restored after reload, resume, tree navigation, and compaction from
+the same saved entries Pi displays. This also works for older sessions, without
+adding metadata or changing stored results. Calls with missing, duplicate, or
+mismatched results and aborted assistant messages stay standalone. Compacted-away
+calls do not own groups for the surviving transcript.
 
 Running reads, searches, and writes appear immediately, with an accent-colored
 action; completed rows become quiet and failures retain their error color.
@@ -58,6 +78,8 @@ counts when a long subject needs clipping. Counts exclude grep context and
 continuation notices, empty results report zero, and bounded results are marked
 `limited`. Read and directory targets stay clickable within groups. Read counts
 include blank lines; requested read ranges remain visible for chunked reads.
+Long file targets shorten their middle while preserving the filename and full
+clickable destination, so similar directory prefixes remain distinguishable.
 
 Expanded exploration calls show their individual output, including calls hidden behind a grouped leader when collapsed. Output keeps the last 200 lines with an omitted-line count. Collapsed groups retain a failure diagnostic instead of replacing it with a successful read range. Command and edit/write errors show up to eight lines when collapsed and 200 when expanded.
 
@@ -70,6 +92,18 @@ argument and saved source remain unchanged. Very narrow widths shed indentation
 and the gutter. Other long output lines are clipped to terminal width. These cards
 are a bounded preview; use the transcript or the tool's source/output artifact
 when you need the complete content for copying.
+Omission rows offer expansion only while it can reveal more content; after the
+expanded limit, they say `preview limit`. Diffs follow the same convention.
+
+### Saved-history benchmark
+
+Run `bun extensions/tool-render/history.benchmark.ts` from the repository. It
+reopens 1,000 saved exploration calls through Pi's native session manager and
+renders native tool components in both 20 groups and one unusually large group.
+It reports restore, repaint, resize, expansion, row counts and memory deltas.
+Timings are informational, exclude terminal I/O, and use plain-text results.
+Collapsed followers use a constant-time membership check; only group leaders
+build grouped rows, while failed followers keep their individual diagnostics.
 
 ## Configuration
 
@@ -93,4 +127,8 @@ Long or multiline shell commands wrap into a bounded block; expand it for more l
 - Uses shared link helpers in [`lib/links.ts`](../../lib/links.ts).
 - Interactive TUI only; cross-platform.
 - Pi reports a one-time startup warning for each intentionally overridden built-in tool.
-- Compact `read` output omits inline image previews.
+- Pi owns inline image previews, including compact and restored `read` cards.
+  Previews follow its image visibility preference and terminal capabilities;
+  this renderer does not add a duplicate image. Pi 0.87 does not expose a
+  per-result switch for lazy previews on expansion. Embedded image content,
+  session exports, and image-history retrieval remain unchanged.

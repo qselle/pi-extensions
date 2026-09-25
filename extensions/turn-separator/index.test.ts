@@ -1,254 +1,135 @@
-import { describe, expect, test } from "bun:test";
-import turnSeparator from "./index.ts";
+import { expect, test } from "bun:test";
+import turnSeparator, { SEPARATOR_STATE_ENTRY } from "./index.ts";
+import { RESPONSE_TIMING_EVENT, TELEMETRY_CHANGED } from "../../lib/telemetry.ts";
 
-/** Fake ExtensionAPI that captures handlers, appended entries, and the renderer. */
-function harness(now?: () => number) {
-	const handlers: Record<string, (event: any, ctx: any) => void> = {};
-	const appended: Array<{ type: string; data: any }> = [];
-	let renderer: ((entry: any, options: any, theme: any) => any) | undefined;
-	const pi: any = {
-		on: (evt: string, h: (event: any, ctx: any) => void) => {
-			handlers[evt] = h;
-		},
-		appendEntry: (type: string, data: any) => {
-			appended.push({ type, data });
-		},
-		registerEntryRenderer: (_type: string, r: any) => {
-			renderer = r;
-		},
-	};
-	turnSeparator(pi, now);
-	const ctx = { mode: "tui" };
-	const fire = (evt: string, event: any = {}) => handlers[evt]?.(event, ctx);
-	return {
-		fire,
-		appended,
-		get renderer() {
-			return renderer;
-		},
-	};
+function harness(enabled = false, now: () => number = () => 0) {
+  const handlers = new Map<string, (event: any, ctx: any) => void>();
+  const events = new Map<string, (event: any) => void>();
+  const appended: Array<{ type: string; data: any }> = [];
+  const branch: any[] = [];
+  const notices: string[] = [];
+  let command: any;
+  let renderer: any;
+  const pi: any = {
+    on: (name: string, handler: any) => handlers.set(name, handler),
+    events: { on: (name: string, handler: any) => { events.set(name, handler); return () => { events.delete(name); }; } },
+    appendEntry(type: string, data: any) { appended.push({ type, data }); branch.push({ type: "custom", customType: type, data }); },
+    registerEntryRenderer: (_name: string, fn: any) => { renderer = fn; },
+    registerCommand: (_name: string, value: any) => { command = value; },
+  };
+  const ctx = { mode: "tui", sessionManager: { getBranch: () => branch, getSessionId: () => "a" }, ui: { notify: (text: string) => notices.push(text) } };
+  turnSeparator(pi, now, enabled);
+  const fire = (name: string, value: any = {}) => handlers.get(name)?.(value, ctx);
+  fire("session_start");
+  return {
+    fire, branch, appended, notices, events,
+    event: (name: string, value: any) => events.get(name)?.(value),
+    command: (value: string) => command.handler(value, ctx),
+    render: (data: any, width = 100) => renderer({ data }, { expanded: true }, { fg: (_: string, text: string) => text }).render(width),
+    work: () => appended.filter((entry) => entry.type === "worked-for-separator"),
+  };
 }
-
 const assistant = { message: { role: "assistant" } };
 
-describe("turn-separator wiring", () => {
-	test("appends a separator before an assistant message that followed tool work", () => {
-		const h = harness();
-		h.fire("turn_start", { turnIndex: 0 });
-		h.fire("message_start", assistant); // first response, no prior work
-		expect(h.appended.length).toBe(0);
-
-		h.fire("tool_execution_start", { toolName: "bash" });
-		h.fire("message_start", assistant); // response after tools → separator
-		expect(h.appended.length).toBe(1);
-		expect(h.appended[0]!.type).toBe("worked-for-separator");
-		expect(typeof h.appended[0]!.data.seconds).toBe("number");
-	});
-
-	test("ignores non-assistant messages; resets after each separator", () => {
-		const h = harness();
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", { message: { role: "user" } });
-		expect(h.appended.length).toBe(0); // user message is not a separator point
-
-		h.fire("message_start", assistant);
-		expect(h.appended.length).toBe(1);
-
-		h.fire("message_start", assistant); // no new work since → no separator
-		expect(h.appended.length).toBe(1);
-	});
-
-	test("a mid-turn turn_start does not swallow the separator (regression)", () => {
-		const h = harness();
-		h.fire("tool_execution_start", {});
-		h.fire("turn_start", {}); // re-fires per model round-trip; must not reset pending work
-		h.fire("message_start", assistant);
-		expect(h.appended.length).toBe(1);
-	});
-
-	test("renderer draws a labeled rule", () => {
-		const h = harness();
-		const theme = { fg: (_c: string, s: string) => s };
-		const lines = h.renderer!({ data: { seconds: 74 } }, { expanded: false }, theme).render(40);
-		expect(lines[0]).toContain("Worked for 1m 14s");
-	});
+test("default is quiet, including old saved work-block receipts", () => {
+  const h = harness();
+  h.fire("message_start", assistant);
+  h.fire("tool_execution_start");
+  h.fire("message_start", assistant);
+  expect(h.work()).toHaveLength(0);
+  expect(h.render({ seconds: 74, stats: { input: 100, output: 20, cost: 0.5 } })).toEqual([]);
 });
 
-const usage = (over: any = {}) => ({
-	message: {
-		role: "assistant",
-		usage: { input: 100, output: 50, cacheRead: 900, cacheWrite: 0, cost: { total: 0.01 }, ...over },
-	},
+test("enabled rules use the whole step duration and one shared response timing sample", () => {
+  let time = 0;
+  const h = harness(true, () => time);
+  h.fire("message_start", assistant);
+  time = 3000;
+  h.event(RESPONSE_TIMING_EVENT, { sessionId: "a", ttftMs: 480, tps: 42 });
+  h.fire("tool_execution_start");
+  h.fire("tool_execution_start");
+  time = 74000;
+  h.fire("turn_start");
+  h.fire("message_start", assistant);
+  expect(h.work()).toHaveLength(1);
+  expect(h.work()[0].data).toEqual({ seconds: 74, timing: { ttftMs: 480, tps: 42 } });
+  expect(h.render(h.work()[0].data).join("\n")).toContain("Worked for 1m 14s");
+  h.fire("message_start", assistant);
+  expect(h.work()).toHaveLength(1);
 });
 
-describe("turn-separator stats", () => {
-	test("accumulates usage from every response in the work block", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("message_end", usage());
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant); // emits, carrying the block's usage
-
-		const stats = h.appended[0]!.data.stats;
-		expect(stats).toMatchObject({ input: 100, output: 50, cacheRead: 900, cost: 0.01 });
-	});
-
-	test("sums several responses before the separator", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("message_end", usage());
-		h.fire("message_end", usage({ output: 25, cost: { total: 0.02 } }));
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended[0]!.data.stats).toMatchObject({ output: 75, cost: 0.03 });
-	});
-
-	test("records ttft from the request-send anchor, not message_start", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("before_provider_request", { payload: {} });
-		h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
-		h.fire("message_end", usage());
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(typeof h.appended[0]!.data.stats.ttftMs).toBe("number");
-	});
-
-	test("omits ttft when there was no send anchor, instead of reporting 0ms", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
-		h.fire("message_end", usage());
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		// A 0ms ttft is a measurement artifact, never a real provider latency.
-		expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
-	});
-
-	test("measures tool-call output as first output", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("before_provider_request", { payload: {} });
-		h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "x" } });
-		h.fire("message_end", { message: { role: "assistant", usage: { output: 0 } } });
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended[0]!.data.stats?.ttftMs).toBeGreaterThanOrEqual(0);
-	});
-
-	test("omits stats entirely when nothing was recorded", () => {
-		const h = harness();
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended[0]!.data.stats).toBeUndefined();
-	});
-
-	test("starts a fresh block after each separator", () => {
-		const h = harness();
-		h.fire("message_start", assistant);
-		h.fire("message_end", usage());
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		h.fire("message_end", usage({ output: 7, cost: { total: 0.05 } }));
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended).toHaveLength(2);
-		expect(h.appended[1]!.data.stats).toMatchObject({ output: 7, cost: 0.05 });
-	});
-
-	test("ignores usage from non-assistant messages", () => {
-		const h = harness();
-		h.fire("message_end", { message: { role: "toolResult", usage: { output: 999 } } });
-		h.fire("tool_execution_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended[0]!.data.stats).toBeUndefined();
-	});
-
-	test("session_start clears a pending block", () => {
-		const h = harness();
-		h.fire("message_end", usage());
-		h.fire("tool_execution_start", {});
-		h.fire("session_start", {});
-		h.fire("message_start", assistant);
-		expect(h.appended).toHaveLength(0);
-	});
-
-	test("compact and expanded work rules both include stats", () => {
-		const h = harness();
-		const theme = { fg: (_c: string, s: string) => s };
-		const entry = { data: { seconds: 74, stats: { input: 100, output: 318, cacheRead: 4_100, cacheWrite: 0, cost: 0.21 } } };
-		const compact = h.renderer!(entry, { expanded: false }, theme).render(100)[0];
-		expect(compact).toContain("$0.21");
-		expect(compact).toContain("in 100 · out 318");
-		const line = h.renderer!(entry, { expanded: true }, theme).render(100)[0];
-		expect(line).toContain("Worked for 1m 14s");
-		expect(line).toContain("out 318");
-		expect(line).toContain("$0.21");
-	});
-
-	test("renderer still handles legacy entries with only seconds", () => {
-		const h = harness();
-		const theme = { fg: (_c: string, s: string) => s };
-		const line = h.renderer!({ data: { seconds: 5 } }, { expanded: false }, theme).render(60)[0];
-		expect(line).toContain("Worked for 5s");
-		expect(line).not.toContain("$");
-	});
+test("optional historical rules show timing without duplicating cost or usage", () => {
+  const h = harness(true);
+  const row = h.render({ seconds: 1, stats: { input: 100, output: 20, cost: 0.5, ttftMs: 480, tps: 42 } }).join("\n");
+  expect(row).toContain("first token 480ms · 42 tokens/s");
+  expect(row).not.toContain("Worked for");
+  expect(row).not.toContain("in 100");
+  expect(row).not.toContain("$");
 });
 
+test("only the current session's latest sample is used, including missing measurements", () => {
+  const h = harness(true);
+  h.fire("message_start", assistant);
+  h.event(RESPONSE_TIMING_EVENT, { sessionId: "a", ttftMs: 20, tps: 100 });
+  h.event(RESPONSE_TIMING_EVENT, { sessionId: "other", ttftMs: 1, tps: 999 });
+  h.fire("tool_execution_start");
+  h.fire("message_start", assistant);
+  expect(h.work()[0].data.timing).toEqual({ ttftMs: 20, tps: 100 });
+  h.event(RESPONSE_TIMING_EVENT, { sessionId: "a", ttftMs: 20, tps: 100 });
+  h.event(RESPONSE_TIMING_EVENT, { sessionId: "a" });
+  h.fire("tool_execution_start");
+  h.fire("message_start", assistant);
+  expect(h.work()[1].data.timing).toEqual({ ttftMs: undefined, tps: undefined });
+});
 
-for (const boundary of ["agent_start", "agent_settled", "session_shutdown", "session_tree"]) {
-  test(`${boundary} prevents prior work and usage leaking into the next block`, () => {
-    const h = harness();
-    h.fire("message_end", { message: { role: "assistant", usage: { input: 900, output: 999, cost: { total: 9 } } } });
+test("on/off settings survive reload and follow the selected branch", async () => {
+  const h = harness();
+  await h.command("on");
+  expect(h.appended.at(-1)).toEqual({ type: SEPARATOR_STATE_ENTRY, data: { version: 1, enabled: true } });
+  h.fire("session_start");
+  expect(h.render({ seconds: 74 })).toHaveLength(1);
+  h.branch.splice(0);
+  h.fire("session_tree");
+  expect(h.render({ seconds: 74 })).toEqual([]);
+  await h.command("toggle");
+  expect(h.render({ seconds: 74 })).toHaveLength(1);
+  await h.command("off");
+  h.fire("session_start");
+  expect(h.render({ seconds: 74 })).toEqual([]);
+  const entries = h.appended.length;
+  await h.command("status");
+  await h.command("bad");
+  expect(h.appended).toHaveLength(entries);
+  expect(h.notices.at(-2)).toContain("Step timing: off");
+});
+
+for (const boundary of ["agent_settled", "session_start", "session_shutdown", "session_tree"]) {
+  test(`${boundary} clears pending work and measurements`, () => {
+    const h = harness(true);
+    h.fire("message_start", assistant);
+    h.event(RESPONSE_TIMING_EVENT, { sessionId: "a", ttftMs: 20, tps: 100 });
     h.fire("tool_execution_start");
     h.fire(boundary);
     h.fire("message_start", assistant);
-    expect(h.appended).toHaveLength(0);
-    h.fire("message_end", { message: { role: "assistant", usage: { input: 10, output: 2, cost: { total: 0.01 } } } });
+    expect(h.work()).toHaveLength(0);
     h.fire("tool_execution_start");
+    h.fire("message_start", { message: { role: "toolResult" } });
     h.fire("message_start", assistant);
-    expect(h.appended[0]!.data.stats).toMatchObject({ input: 10, output: 2, cost: 0.01 });
+    expect(h.work()[0].data.timing).toBeUndefined();
   });
 }
 
-test("a response without stream timing does not inherit the prior response's rate or latency", () => {
-  let time = 1000;
-  const h = harness(() => time);
-  h.fire("before_provider_request");
-  time = 1200;
-  h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
-  time = 2200;
-  h.fire("message_end", { message: { role: "assistant", usage: { output: 100 } } });
-  h.fire("before_provider_request");
-  time = 2500;
-  h.fire("message_end", { message: { role: "assistant", usage: { output: 50 } } });
-  h.fire("tool_execution_start");
-  h.fire("message_start", assistant);
-  expect(h.appended[0]!.data.stats.output).toBe(150);
-  expect(h.appended[0]!.data.stats.ttftMs).toBeUndefined();
-  expect(h.appended[0]!.data.stats.tps).toBeUndefined();
+test("hiding transcript telemetry also hides opted-in step rules", () => {
+  const h = harness(true);
+  h.event(TELEMETRY_CHANGED, { sessionId: "a", style: "hide" });
+  expect(h.render({ seconds: 74 })).toEqual([]);
+  h.event(TELEMETRY_CHANGED, { sessionId: "a", style: "compact" });
+  expect(h.render({ seconds: 74 })).toHaveLength(1);
 });
 
-test("tool-call timing survives the work boundary without counting empty chunks or duplicate responses", () => {
-  let time = 0;
-  const h = harness(() => time);
-  h.fire("before_provider_request");
-  time = 100; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_start" } });
-  time = 200; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "" } });
-  time = 500; h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "{}" } });
-  time = 1500;
-  const first = usage({ output: 0 });
-  h.fire("message_end", first);
-  h.fire("message_end", first);
-  time = 1600; h.fire("tool_execution_start");
-  time = 2500; h.fire("before_provider_request");
-  time = 2600; h.fire("message_start", assistant);
-  expect(h.appended[0]!.data).toMatchObject({ seconds: 1, stats: { responses: 1, output: 0, ttftMs: 500, tps: 0 } });
-  // A delayed duplicate must neither enter the new block nor erase its request anchor.
-  h.fire("message_end", first);
-  time = 2800; h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
-  time = 3800; h.fire("message_end", usage({ output: 50 }));
-  h.fire("tool_execution_start");
-  time = 4000; h.fire("message_start", assistant);
-  expect(h.appended[1]!.data).toMatchObject({ seconds: 0, stats: { responses: 1, output: 50, ttftMs: 300, tps: 50 } });
+test("shutdown releases timing and style subscriptions on Pi's shared event bus", () => {
+  const h = harness(true);
+  expect(h.events.size).toBe(2);
+  h.fire("session_shutdown", { reason: "reload" });
+  expect(h.events.size).toBe(0);
 });

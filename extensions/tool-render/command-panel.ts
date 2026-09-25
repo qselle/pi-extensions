@@ -23,7 +23,7 @@ export function commandPanel(highlighted: string, width: number, theme: Theme, e
   if (wrapped.length > limit) {
     const indent = " ".repeat(Math.min(margin + gutterWidth, Math.max(0, width - 1)));
     const omitted = wrapped.length - limit;
-    const notice = theme.fg("muted", `… ${omitted} more command ${omitted === 1 ? "line" : "lines"} · ${expansionHint()}`);
+    const notice = theme.fg("muted", `… ${omitted} more command ${omitted === 1 ? "line" : "lines"} · ${expanded ? "preview limit" : expansionHint()}`);
     rows.push(indent + truncateToWidth(notice, width - indent.length, ""));
   }
   return rows;

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { fitCells, formatCost, formatTokens } from "../footer/format.ts";
-import { formatDuration, formatLatency, formatRate } from "../turn-separator/stats.ts";
+import { formatDuration, formatLatency, formatRate } from "../../lib/telemetry-format.ts";
 import { FIELDS, summaryText, type Summary, type Totals } from "./stats.ts";
 
 /** Old entries can use Pi's persisted entry timestamp without changing their accounting. */

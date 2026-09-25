@@ -1,206 +1,97 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  matchesKey,
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-  type Component,
-  type TUI,
-} from "@earendil-works/pi-tui";
-import type { AgentTranscript } from "./coordinator.ts";
-import { keyLabel } from "../../lib/keys.ts";
+import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import { plainText, transcriptBlocks, type TranscriptBlock } from "../../lib/transcript/model.ts";
+import { TranscriptView, type TranscriptNavigation } from "../../lib/transcript/view.ts";
+import type { AgentSnapshot, AgentTranscript } from "./coordinator.ts";
 
-// pi-tui's `Key` value export isn't reliably importable across runtimes; its
-// values are plain key-id strings that matchesKey accepts.
-const Key = { home: "home", end: "end" } as const;
+/** Share Markdown, search, follow, and thinking controls with the parent viewer. */
+export class LiveTranscriptViewer extends TranscriptView {
+  constructor(load: () => AgentTranscript, theme: Theme, keybindings: KeybindingsManager, tui: TUI, done: () => void, navigation?: TranscriptNavigation) {
+    let latest: AgentTranscript;
+    super(() => {
+      latest = load();
+      return childTranscriptBlocks(latest);
+    }, () => `Subagent · ${plainText(latest.agent.name)} · ${latest.agent.status}${navigation?.position ? ` · ${navigation.position()}` : ""}`,
+    theme, keybindings, tui, done, "", "live", navigation);
+  }
+}
 
-export class LiveTranscriptViewer implements Component {
-  private scroll = 0;
-  private maxScroll = 0;
-  private followTail = true;
-  private cachedWidth = 0;
-  private cachedLines: string[] = [];
+/** Stable creation order prevents tabs jumping when a child finishes. */
+export function navigableAgents(agents: readonly AgentSnapshot[]): AgentSnapshot[] {
+  return agents.filter((agent) => agent.status !== "closed")
+    .sort((a, b) => (a.createdAt ?? a.startedAt) - (b.createdAt ?? b.startedAt) || a.name.localeCompare(b.name));
+}
 
-  constructor(
-    private readonly load: () => AgentTranscript,
-    private readonly theme: Theme,
-    private readonly keybindings: KeybindingsManager,
-    private readonly tui: TUI,
-    private readonly done: () => void,
-  ) {}
+/** Keep each recently visited child's search/scroll state while switching. */
+export class ChildTranscriptBrowser implements Component, Focusable {
+  private readonly views = new Map<string, LiveTranscriptViewer>();
+  private selected: string;
+  private current!: LiveTranscriptViewer;
+  private focusedValue = false;
+  private closed = false;
 
-  refresh(): void {
-    this.cachedWidth = 0;
+  constructor(initial: string, private readonly agents: () => AgentSnapshot[], private readonly load: (name: string) => AgentTranscript,
+    private readonly theme: Theme, private readonly keys: KeybindingsManager, private readonly tui: TUI,
+    private readonly done: () => void, private readonly onSelect: (name: string) => void = () => {}) {
+    this.selected = initial;
+    this.select(initial, false);
   }
 
-  handleInput(data: string): void {
-    const page = Math.max(5, this.viewportHeight() - 4);
-    if (this.keybindings.matches(data, "tui.select.cancel") || matchesKey(data, "q")) {
-      this.done();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.select.up")) {
-      this.followTail = false;
-      this.scroll = Math.max(0, this.scroll - 1);
-    } else if (this.keybindings.matches(data, "tui.select.down")) {
-      this.scroll = Math.min(this.maxScroll, this.scroll + 1);
-      this.followTail = this.scroll >= this.maxScroll;
-    } else if (this.keybindings.matches(data, "tui.select.pageUp")) {
-      this.followTail = false;
-      this.scroll = Math.max(0, this.scroll - page);
-    } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
-      this.scroll = Math.min(this.maxScroll, this.scroll + page);
-      this.followTail = this.scroll >= this.maxScroll;
-    } else if (matchesKey(data, Key.home)) {
-      this.followTail = false;
-      this.scroll = 0;
-    } else if (matchesKey(data, Key.end)) {
-      this.followTail = true;
-      this.scroll = this.maxScroll;
-    } else {
-      return;
-    }
+  get focused(): boolean { return this.focusedValue; }
+  set focused(value: boolean) { this.focusedValue = value; this.current.focused = value; }
+  render(width: number): string[] { return this.closed ? [] : this.current.render(width); }
+  handleInput(data: string): void { if (!this.closed) this.current.handleInput(data); }
+  invalidate(): void { for (const view of this.views.values()) view.invalidate(); }
+  refresh(): void { if (!this.closed) this.current.refresh(); }
+  close(): void { if (!this.closed) { this.closed = true; this.views.clear(); this.done(); } }
+
+  private position(): { index: number; agents: AgentSnapshot[] } {
+    const agents = navigableAgents(this.agents());
+    return { agents, index: agents.findIndex((agent) => agent.name === this.selected) };
+  }
+
+  private navigate(direction: -1 | 1): void {
+    const { agents, index } = this.position();
+    if (direction < 0 && index <= 0) { this.close(); return; }
+    const next = agents[index + direction];
+    if (next) this.select(next.name);
+  }
+
+  private select(name: string, notify = true): void {
+    if (this.current) this.current.focused = false;
+    this.selected = name;
+    let view = this.views.get(name);
+    if (view) { this.views.delete(name); view.refresh(); }
+    else view = new LiveTranscriptViewer(() => this.load(name), this.theme, this.keys, this.tui, () => this.close(), {
+      previous: () => this.navigate(-1), next: () => this.navigate(1),
+      hint: () => this.position().index <= 0 ? "← parent · → agents" : "←/→ agents",
+      position: () => { const { index, agents } = this.position(); return index < 0 ? "closed" : `${index + 1}/${agents.length}`; },
+    });
+    this.views.set(name, view);
+    while (this.views.size > 8) this.views.delete(this.views.keys().next().value!);
+    this.current = view;
+    view.focused = this.focusedValue;
+    if (notify) this.onSelect(name);
     this.tui.requestRender();
   }
-
-  render(width: number): string[] {
-    const safeWidth = Math.max(1, width);
-    const height = this.viewportHeight();
-    const bodyHeight = Math.max(1, height - 2);
-    const transcript = this.load();
-    const body = this.lines(safeWidth, transcript);
-    this.maxScroll = Math.max(0, body.length - bodyHeight);
-    this.scroll = this.followTail ? this.maxScroll : Math.min(this.scroll, this.maxScroll);
-    const percent = this.maxScroll === 0 ? 100 : Math.round((this.scroll / this.maxScroll) * 100);
-    const runtime = `${transcript.agent.model ?? "inherited model"}${transcript.agent.thinking ? `:${transcript.agent.thinking}` : ""}`;
-    const header = truncateToWidth(
-      `${this.theme.fg("accent", this.theme.bold(`Subagent · ${transcript.agent.name}`))} ${this.theme.fg("dim", `· ${transcript.agent.status} · ${runtime}`)}`,
-      safeWidth,
-      "…",
-    );
-    const visible = body.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, safeWidth, ""));
-    while (visible.length < bodyHeight) visible.push("");
-    const scroll = `${keyLabel(this.keybindings, "tui.select.up", "↑")}${keyLabel(this.keybindings, "tui.select.down", "↓")}`
-      + `/${keyLabel(this.keybindings, "tui.select.pageUp", "PgUp")}/${keyLabel(this.keybindings, "tui.select.pageDown", "PgDn")}`;
-    const close = `q/${keyLabel(this.keybindings, "tui.select.cancel", "Esc")}`;
-    const footer = truncateToWidth(
-      this.theme.fg("dim", `${scroll} scroll · Home/End follow · ${close} close · ${percent}%`),
-      safeWidth,
-      "",
-    );
-    return [header, ...visible, footer];
-  }
-
-  invalidate(): void {
-    this.refresh();
-  }
-
-  private lines(width: number, transcript: AgentTranscript): string[] {
-    if (this.cachedWidth === width) return this.cachedLines;
-    const lines: string[] = [];
-    appendSection(lines, section("›", "Task", "accent", transcript.agent.task, "text", width, this.theme));
-    for (const entry of transcript.entries) {
-      const rendered = renderEntry(entry as any, width, this.theme);
-      if (rendered.length > 0) appendSection(lines, rendered);
-    }
-    if (transcript.agent.error) {
-      appendSection(lines, section("×", "Error", "error", transcript.agent.error, "error", width, this.theme));
-    }
-    this.cachedWidth = width;
-    this.cachedLines = lines;
-    return lines;
-  }
-
-  private viewportHeight(): number {
-    const rows = (this.tui as TUI & { terminal?: { rows?: number } }).terminal?.rows ?? process.stdout.rows ?? 24;
-    return Math.max(8, Math.floor(rows * 0.86) - 2);
-  }
 }
 
-function renderEntry(entry: any, width: number, theme: Theme): string[] {
-  if (entry?.type !== "message") return [];
-  const message = entry.message ?? {};
-  if (message.role === "assistant") {
-    const lines: string[] = [];
-    const content = Array.isArray(message.content) ? message.content : [];
-    for (const part of content) {
-      if (part?.type === "thinking" && part.thinking) {
-        appendSection(lines, section("·", "Thinking", "dim", part.thinking, "dim", width, theme));
-      } else if (part?.type === "text" && part.text) {
-        appendSection(lines, section("●", "Agent", "success", part.text, "text", width, theme));
-      } else if (part?.type === "toolCall") {
-        appendSection(lines, section("◆", `Tool · ${part.name ?? "unknown"}`, "accent", formatArguments(part.arguments), "muted", width, theme));
-      }
-    }
-    return lines;
+export function childTranscriptBlocks(transcript: AgentTranscript): TranscriptBlock[] {
+  const { agent } = transcript;
+  const runtime = `${agent.model ?? "inherited model"}${agent.thinking ? ` · ${agent.thinking}` : ""}`;
+  const entries = transcriptBlocks(transcript.entries);
+  const blocks: TranscriptBlock[] = [{
+    id: "child-task",
+    kind: "user",
+    label: `Task · ${plainText(runtime)}`,
+    body: plainText(agent.task),
+    markdown: true,
+  }, ...entries];
+  if (agent.output && !entries.some((entry) => entry.kind === "assistant" && !entry.failed)) {
+    blocks.push({ id: "child-retained-result", kind: "assistant", label: "Retained result", body: plainText(agent.output), markdown: true });
   }
-  if (message.role === "toolResult") {
-    const failed = Boolean(message.isError);
-    return section(
-      failed ? "×" : "✓",
-      `${failed ? "Tool failed" : "Tool result"} · ${message.toolName ?? "unknown"}`,
-      failed ? "error" : "success",
-      messageText(message.content),
-      failed ? "error" : "muted",
-      width,
-      theme,
-    );
+  if (agent.error && !entries.some((entry) => entry.failed && entry.body === plainText(agent.error))) {
+    blocks.push({ id: "child-error", kind: "custom", label: "Error", body: plainText(agent.error), failed: true });
   }
-  if (message.role === "bashExecution") {
-    return section("$", "Shell", "accent", `${message.command ?? ""}\n${message.output ?? ""}`, "muted", width, theme);
-  }
-  if (message.role === "user") {
-    return section("›", "Follow-up", "accent", messageText(message.content), "text", width, theme);
-  }
-  return [];
-}
-
-function section(
-  symbol: string,
-  label: string,
-  labelColor: any,
-  body: string,
-  bodyColor: any,
-  width: number,
-  theme: Theme,
-): string[] {
-  const header = truncateToWidth(`${theme.fg(labelColor, symbol)} ${theme.fg(labelColor, label)}`, width, "…");
-  const indent = "  ";
-  const available = Math.max(1, width - visibleWidth(indent));
-  const rows = wrapTextWithAnsi(clean(body) || "(empty)", available);
-  return [header, ...rows.map((row) => `${indent}${theme.fg(bodyColor, row)}`)];
-}
-
-function appendSection(lines: string[], sectionLines: string[]): void {
-  if (sectionLines.length === 0) return;
-  if (lines.length > 0) lines.push("");
-  lines.push(...sectionLines);
-}
-
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part): part is { type: "text"; text: string } => Boolean(part && typeof part === "object" && part.type === "text" && typeof part.text === "string"))
-    .map((part) => part.text)
-    .join("\n");
-}
-
-function formatArguments(value: unknown): string {
-  if (!value || typeof value !== "object") return "(no arguments)";
-  try {
-    const text = JSON.stringify(value, null, 2);
-    return text.length > 1_200 ? `${text.slice(0, 1_200)}\n… arguments truncated` : text;
-  } catch {
-    return String(value);
-  }
-}
-
-function clean(text: string): string {
-  return String(text)
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return blocks;
 }

@@ -105,6 +105,8 @@ try {
   assert.equal(wrappedToken.join("").replace(/ /g, ""), token.replace(/ /g, ""), "long tokens wrap without truncating characters");
   const huge = Array.from({ length: 150 }, (_, index) => `printf '${index}'`).join("\n");
   assert.equal(render(huge, 80, true).length, 130, "expanded commands stay bounded to128rows plus header and hint");
+  assert(plain(render(huge, 80, true).join("\n")).includes("preview limit"));
+  assert(!plain(render(huge, 80, true).join("\n")).includes("to expand"), "the maximum preview must not offer another expansion");
 
   const dark = render(short).join("\n");
   initTheme("light", false);

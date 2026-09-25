@@ -9,6 +9,15 @@ Managed `bash` is the default entry point. Job controls activate after a command
 yields or you inspect retained jobs through `/jobs`. The `job_start` alias is
 registered but inactive by default.
 
+Every managed job tool accepts optional `purpose` display text, including start,
+output, wait, list, stdin, resize, and stop. Use a short factual explanation of
+what the action checks or changes, without repeating its command or job ID.
+Captions appear once in the existing call heading and survive session replay.
+They do not enter command execution, stdin, or result output. Known secret values
+are redacted before captions are shortened; terminal controls are removed. The
+field is optional, so existing calls continue to work. No extra model request or
+system-prompt file change is needed.
+
 ```text
 /jobs                    Live overview with IDs, states, and recent output
 /ps                      Alias for /jobs

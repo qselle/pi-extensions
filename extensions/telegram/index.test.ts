@@ -7,6 +7,10 @@ import { createGoal, setGoalStatus } from "../goal/goal.ts";
 import { loadTelegramConfig } from "./config.ts";
 import telegramExtension from "./index.ts";
 import { getTelegramService } from "./service.ts";
+import { MONITOR_ALERT_EVENT } from "../monitor/events.ts";
+import { GOAL_ATTENTION_EVENT } from "../goal/events.ts";
+import { SCHEDULE_ATTENTION_EVENT } from "../schedule/events.ts";
+import monitorExtension from "../monitor/index.ts";
 
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
 const validEnv = {
@@ -195,6 +199,90 @@ test("registers the shared service, delivers goal events, and exposes explicit t
   expect(ctx.notifications.at(-1)).toEqual({ message: "Telegram integration test sent.", level: "info" });
   await pi.emit("session_shutdown", {}, ctx);
   expect(getTelegramService()).toBeUndefined();
+});
+
+test("monitor events use the enabled Telegram runtime and stop delivering after shutdown", async () => {
+  const messages: string[] = [];
+  const pi = new MockPi();
+  const runtime = telegramExtension(pi as any, { service: {
+    send: async (message) => { messages.push(message); return { messageId: 1 }; },
+    openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
+  } })!;
+  const ctx = { ...context(), sessionManager: { getSessionId: () => "session" } };
+  const alert = { version: 1, alertId: "m:1", sessionId: "session", monitorId: "m", kind: "result", condition: "failure", runs: 1, maxRuns: 20, exitCode: 1, killed: false };
+  await pi.emit("session_start", {}, ctx);
+  pi.events.emit(MONITOR_ALERT_EVENT, alert);
+  pi.events.emit(MONITOR_ALERT_EVENT, alert);
+  await runtime.notifier.drain();
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toContain("Failure detected");
+  await pi.emit("session_shutdown", {}, ctx);
+  pi.events.emit(MONITOR_ALERT_EVENT, { ...alert, alertId: "m:2" });
+  expect(messages).toHaveLength(1);
+
+  const disabled = new MockPi();
+  let requests = 0;
+  telegramExtension(disabled as any, { configFile: false, env: {}, fetch: (async () => { requests++; return success(); }) });
+  await disabled.emit("session_start", {}, ctx);
+  disabled.events.emit(MONITOR_ALERT_EVENT, alert);
+  await disabled.emit("session_shutdown", {}, ctx);
+  expect(requests).toBe(0);
+});
+
+test("a monitor delivers through Telegram once and an unchanged poll stays silent", async () => {
+  const entries: any[] = [];
+  const messages: string[] = [];
+  const pi = Object.assign(new MockPi(), {
+    appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
+  });
+  const base = context();
+  const ctx = { ...base, cwd: "/tmp/project", mode: "tui", isIdle: () => true, hasPendingMessages: () => false,
+    sessionManager: { getBranch: () => entries, getSessionId: () => "session" }, ui: { ...base.ui, setStatus: () => {} } };
+  const runtime = telegramExtension(pi as any, { service: {
+    send: async (message) => { messages.push(message); return { messageId: messages.length }; },
+    openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
+  } })!;
+  monitorExtension(pi as any, { runCommand: async () => ({ code: 1, killed: false, stdout: "private logs", stderr: "private failure" }) });
+  await pi.emit("session_start", {}, ctx);
+  try {
+    await pi.commands.get("monitor").handler("10s --on failure -- private-command", ctx);
+    await Bun.sleep(25);
+    await runtime.notifier.drain();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("Failure detected · Exit 1");
+    expect(messages[0]).not.toContain("private");
+    await pi.emit("agent_start", {}, ctx);
+    await pi.emit("agent_settled", {}, ctx);
+    entries.at(-1).data.jobs[0].nextRunAt = Date.now();
+    await pi.emit("session_tree", {}, ctx);
+    await Bun.sleep(25);
+    await runtime.notifier.drain();
+    expect(entries.at(-1).data.jobs[0].runs).toBe(2);
+    expect(messages).toHaveLength(1);
+    await pi.commands.get("monitor").handler("stop all", ctx);
+    expect(messages).toHaveLength(1);
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("startup attention waits for its destination and late events cannot cross sessions", async () => {
+  const messages: string[] = [];
+  const pi = new MockPi();
+  const runtime = telegramExtension(pi as any, { service: {
+    send: async (text) => { messages.push(text); return { messageId: messages.length }; },
+    openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
+  } })!;
+  const alert = { version: 1, attentionId: "queue-failure", sessionId: "session", kind: "queue_failed" };
+  const ctx = { ...context(), sessionManager: { getSessionId: () => "session" } };
+  pi.events.emit(SCHEDULE_ATTENTION_EVENT, alert);
+  expect(messages).toEqual([]);
+  await pi.emit("session_start", {}, ctx);
+  await runtime.notifier.drain();
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toContain("Schedule queue");
+  pi.events.emit(SCHEDULE_ATTENTION_EVENT, alert);
+  pi.events.emit(GOAL_ATTENTION_EVENT, { version: 1, attentionId: "wrong-session", sessionId: "old-session", goalId: "goal", status: "blocked", turns: 3, tokensUsed: 100, tokenBudget: null });
+  expect(messages).toHaveLength(1);
+  await pi.emit("session_shutdown", {}, ctx);
 });
 
 test("loads dedicated config once per extension lifecycle", async () => {

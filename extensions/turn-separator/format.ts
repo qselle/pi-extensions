@@ -1,27 +1,25 @@
-import { statsLabel, type StatStyle, type TurnStats } from "./stats.ts";
+import { formatDuration, formatLatency, formatRate } from "../../lib/telemetry-format.ts";
+export { formatDuration } from "../../lib/telemetry-format.ts";
 
-export { formatDuration } from "./stats.ts";
+export interface StepTiming { ttftMs?: number; tps?: number }
 
-/**
- * A horizontal rule, optionally labeled `── Worked for <duration> · in 4.2K · out 318 ───…`.
- * Leaves a 1-column right margin to avoid terminal wrap artifacts. Falls back to
- * a bare rule when the duration is unknown or no label fits.
- */
+/** Quiet, wrap-safe step rule. Usage totals appear only in the final receipt. */
 export function separatorText(
-	seconds: number | undefined,
-	width: number,
-	stats?: TurnStats,
-	style: StatStyle = (_color, text) => text,
-	widthOf: (value: string) => number = (value) => [...value].length,
+  seconds: number | undefined,
+  width: number,
+  timing?: StepTiming,
+  dim: (text: string) => string = (text) => text,
+  widthOf: (value: string) => number = (value) => [...value].length,
 ): string {
-	if (!Number.isFinite(width) || width < 1) return "";
-	const columns = Math.floor(width);
-	const usable = columns === 1 ? 1 : columns - 1;
-	const lead = 2;
-	// Reserve the lead, both label spaces, and at least one trailing dash.
-	const budget = usable - lead - 3;
-	const label = budget > 0 ? statsLabel(seconds, stats, budget, widthOf, style) : "";
-	if (!label) return style("dim", "─".repeat(usable));
-	const padded = ` ${label} `;
-	return style("dim", "─".repeat(lead)) + padded + style("dim", "─".repeat(Math.max(1, usable - lead - widthOf(padded))));
+  if (!Number.isFinite(width) || width < 1) return "";
+  const usable = Math.max(0, Math.floor(width) - 2);
+  if (!usable) return "";
+  let left = seconds !== undefined && Number.isFinite(seconds) && seconds >= 60 ? `─ Worked for ${formatDuration(seconds)} ` : "";
+  const bits: string[] = [];
+  if (timing?.ttftMs !== undefined && Number.isFinite(timing.ttftMs) && timing.ttftMs >= 0) bits.push(`first token ${formatLatency(timing.ttftMs)}`);
+  if (timing?.tps !== undefined && Number.isFinite(timing.tps) && timing.tps >= 0) bits.push(`${formatRate(timing.tps)} tokens/s`);
+  while (bits.length && widthOf(` ${bits.join(" · ")} ─`) + 1 > usable) bits.shift();
+  const right = bits.length ? ` ${bits.join(" · ")} ─` : "";
+  if (widthOf(left + right) + 1 > usable) left = "";
+  return dim(left + "─".repeat(usable - widthOf(left + right)) + right);
 }
