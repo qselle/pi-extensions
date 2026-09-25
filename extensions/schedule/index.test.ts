@@ -5,10 +5,12 @@ import { join } from "node:path";
 import scheduleExtension from "./index.ts";
 import { createReminder } from "./schedule.ts";
 import { emptyScheduleStore, loadScheduleStore, saveScheduleStore, scheduleStorePath } from "./store.ts";
+import { SCHEDULE_ATTENTION_EVENT } from "./events.ts";
 
 type Handler = (event: any, ctx: any) => any;
 class MockPi {
-  events = { emit() {} };
+  attention: any[] = [];
+  events = { emit: (name: string, value: unknown) => { if (name === SCHEDULE_ATTENTION_EVENT) this.attention.push(value); } };
   handlers = new Map<string, Handler[]>(); commands = new Map<string, any>(); tools = new Map<string, any>(); sent: any[] = [];
   on(event: string, handler: Handler) { const list = this.handlers.get(event) ?? []; list.push(handler); this.handlers.set(event, list); }
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
@@ -21,6 +23,7 @@ function context(project: string) {
   const statuses = new Map<string, string>();
   const statusUpdates: Array<{ key: string; text: string | undefined }> = [];
   return { cwd: project, mode: "tui", isIdle: () => true, hasPendingMessages: () => false,
+    sessionManager: { getSessionId: () => "session" },
     ui: {
       notify: (message: string) => notifications.push(message),
       setStatus: (key: string, text: string | undefined) => {
@@ -82,6 +85,7 @@ test("retries overdue durable work and completes only after the turn settles", a
     const completed = loadScheduleStore(path, project).tasks[0];
     expect(completed).toMatchObject({ status: "completed", runs: 1 });
     expect(completed.pendingDeliveryAt).toBeUndefined();
+    expect(pi.attention).toEqual([]);
     await pi.emit("session_shutdown", {}, ctx);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -147,6 +151,7 @@ for (const event of ["session_start", "session_tree", "session_shutdown"]) {
           await Promise.all([pending, navigation]);
           expect(ctx.notifications).toHaveLength(notifications);
           expect(ctx.statusUpdates).toHaveLength(statuses);
+          expect(pi.attention).toEqual([]);
           if (event !== "session_shutdown") {
             const state = await pi.tools.get("get_schedules").execute();
             expect(state.details.tasks).toEqual([]);

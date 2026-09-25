@@ -9,6 +9,7 @@ import {
 import { renderFooter } from "./render.ts";
 import { UsageTotalsCache } from "./usage.ts";
 import { GitStatusTracker, gitStatusLabel, parseGitStatus } from "./git.ts";
+import { SUBAGENT_USAGE_EVENT } from "../subagents/usage.ts";
 
 export const FOOTER_BADGE_EVENT = "footer:badge";
 export const TERMINAL_TITLE_OVERRIDE_EVENT = "terminal-title:override";
@@ -90,6 +91,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	const totals = new UsageTotalsCache();
 	const badges = new Map<string, StoredBadge>();
 	const titleOverrides = new Map<string, string>();
+	let eventUnsubscribers: Array<() => void> = [];
 
 	const refresh = () => tuiRef?.requestRender();
 	const git = new GitStatusTracker(async (cwd, signal) => {
@@ -132,25 +134,38 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		titleTimer.unref?.();
 	};
 
-	pi.events.on(FOOTER_BADGE_EVENT, (value) => {
-		const update = normalizeBadgeUpdate(value);
-		if (!update) return;
-		if (update.badge) badges.set(update.id, update.badge);
-		else badges.delete(update.id);
-		refresh();
-	});
-
-	// Questionnaire and future attention extensions already emit this event.
-	// A source-keyed stack prevents one owner from clearing another owner's title.
-	pi.events.on(TERMINAL_TITLE_OVERRIDE_EVENT, (value) => {
-		const update = normalizeTitleOverride(value);
-		if (!update) return;
-		titleOverrides.delete(update.source);
-		if (update.title) titleOverrides.set(update.source, update.title);
-		syncTerminalTitle();
-	});
+	const subscribeEvents = () => {
+		if (eventUnsubscribers.length) return;
+		eventUnsubscribers = [
+			pi.events.on(SUBAGENT_USAGE_EVENT, () => {
+				if (!sessionOpen || activeCtx?.mode !== "tui") return;
+				// Read only the active branch; the event cannot supply another session's totals.
+				totals.invalidate();
+				refresh();
+			}),
+			pi.events.on(FOOTER_BADGE_EVENT, (value) => {
+				const update = normalizeBadgeUpdate(value);
+				if (!update) return;
+				if (update.badge) badges.set(update.id, update.badge);
+				else badges.delete(update.id);
+				refresh();
+			}),
+			// A source-keyed stack prevents one owner clearing another owner's title.
+			pi.events.on(TERMINAL_TITLE_OVERRIDE_EVENT, (value) => {
+				const update = normalizeTitleOverride(value);
+				if (!update) return;
+				titleOverrides.delete(update.source);
+				if (update.title) titleOverrides.set(update.source, update.title);
+				syncTerminalTitle();
+			}),
+		];
+	};
+	// Listen during initial loading so earlier session_start handlers can publish
+	// badges regardless of extension order. Re-arm if the host reuses this runtime.
+	subscribeEvents();
 
 	pi.on("session_start", (_event, ctx) => {
+		subscribeEvents();
 		git.reset();
 		stopTitleTimer();
 		activeCtx = undefined;
@@ -245,6 +260,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		sessionOpen = false;
+		for (const unsubscribe of eventUnsubscribers) unsubscribe();
+		eventUnsubscribers = [];
 		git.reset();
 		stopTitleTimer();
 		agentActive = false;
@@ -256,6 +273,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		activeCtx = undefined;
 		lastTerminalTitle = undefined;
 		titleOverrides.clear();
+		badges.clear();
 		tuiRef = undefined;
 		totals.invalidate();
 	});

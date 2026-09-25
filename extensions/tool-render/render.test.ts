@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { closeDanglingLink, hasDanglingLink } from "../../lib/links.ts";
 import {
 	boundTail,
+	compactPath,
 	countNonEmptyLines,
 	diffStat,
 	fileLink,
@@ -35,6 +36,16 @@ describe("firstLine", () => {
 		expect(firstLine("a\nb\nc")).toBe("a");
 		expect(firstLine("solo")).toBe("solo");
 	});
+});
+
+test("path headlines preserve the filename instead of only a shared directory prefix", () => {
+	expect(compactPath("src/nested/components/different/file.ts", 22)).toEndWith("/file.ts");
+	expect(compactPath("src/nested/components/different/file.ts", 22)).toContain("…");
+	expect(compactPath("src/file.ts", 40)).toBe("src/file.ts");
+	expect(compactPath("C:\\work\\long\\directory\\file.ts", 18)).toEndWith("\\file.ts");
+	expect(compactPath("src/very-long-filename.extension", 12)).toEndWith("nsion");
+	expect(compactPath("\x1b[31msrc/file.ts\x1b[0m", 40)).toBe("src/file.ts");
+	expect(compactPath("src/file.ts", 0)).toBe("");
 });
 
 describe("resultText", () => {

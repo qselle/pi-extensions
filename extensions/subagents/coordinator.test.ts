@@ -5,6 +5,8 @@ import {
   type SpawnRequest,
 } from "./coordinator.ts";
 import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { restoreAgents, SUBAGENT_STATE } from "./persistence.ts";
+import { REPORT_MESSAGE_TYPE } from "./report.ts";
 
 class FakeClient implements AgentClient {
   startCalls = 0;
@@ -32,6 +34,7 @@ function harness(maxOpenAgents = 6) {
   const clients = new Map<string, FakeClient>();
   const cleanups = new Map<string, number>();
   const completions: string[] = [];
+  const reports: string[] = [];
   const coordinator = new SubagentCoordinator({
     maxOpenAgents,
     createRuntime: async (request: SpawnRequest): Promise<AgentRuntime> => {
@@ -42,10 +45,10 @@ function harness(maxOpenAgents = 6) {
         cleanup: async () => { cleanups.set(request.name, (cleanups.get(request.name) ?? 0) + 1); },
       };
     },
-    hooks: { onCompletion: (agent) => { completions.push(agent.name); } },
+    hooks: { onCompletion: (agent) => { completions.push(agent.name); }, onReport: (report, agent) => { reports.push(`${agent.name}: ${report.message}`); } },
   });
   coordinator.startSession();
-  return { coordinator, clients, cleanups, completions };
+  return { coordinator, clients, cleanups, completions, reports };
 }
 
 const request = (name: string): SpawnRequest => ({
@@ -55,6 +58,141 @@ const request = (name: string): SpawnRequest => ({
   cwd: "/tmp/project",
   model: "test/model",
   thinking: "high",
+});
+
+function reportEvent(id: string, message = "The interface changed; use the new signature"): RpcEvent {
+  return { type: "tool_execution_end", toolName: "report_to_parent", toolCallId: id, isError: false,
+    result: { content: [], details: { version: 1, report: { id, message, createdAt: 12 } } } };
+}
+
+test("only successful explicit report results deliver once; ordinary commentary remains local", async () => {
+  const { coordinator, clients, reports } = harness();
+  await coordinator.spawn(request("Reporter"));
+  const client = clients.get("Reporter")!;
+  client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Still exploring" }] } });
+  client.emit({ ...reportEvent("error"), isError: true });
+  client.emit({ ...reportEvent("wrong"), toolCallId: "unrelated-call" });
+  client.emit(reportEvent("valid"));
+  client.emit(reportEvent("valid"));
+  await flushMicrotasks();
+  expect(reports).toEqual(["Reporter: The interface changed; use the new signature"]);
+  expect(coordinator.list()[0]!.status).toBe("running");
+  expect(coordinator.list()[0]!.reports).toEqual([]);
+  expect(coordinator.read("Reporter").reports).toHaveLength(1);
+  await coordinator.shutdown();
+});
+
+test("report-aware waits wake only for selected explicit reports, while final waits retain them", async () => {
+  const { coordinator, clients, reports } = harness();
+  await coordinator.spawn(request("Selected"));
+  await coordinator.spawn(request("Other"));
+  let finished = false;
+  const waiting = coordinator.wait(["Selected"], 1000, "any", undefined, "any").then((result) => { finished = true; return result; });
+  clients.get("Other")!.emit(reportEvent("other"));
+  clients.get("Selected")!.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Routine progress" }] } });
+  await flushMicrotasks();
+  expect(finished).toBe(false);
+  clients.get("Selected")!.emit(reportEvent("selected"));
+  const first = await waiting;
+  expect(first.agents[0]!.reports?.map((report) => report.id)).toEqual(["selected"]);
+  expect(first.agents[0]!.status).toBe("running");
+  await flushMicrotasks();
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).toStartWith("Other:");
+
+  finished = false;
+  const finalWait = coordinator.wait(["Selected"], 1000, "any").then((result) => { finished = true; return result; });
+  clients.get("Selected")!.emit(reportEvent("second"));
+  await flushMicrotasks();
+  expect(finished).toBe(false);
+  clients.get("Selected")!.emit({ type: "agent_settled" });
+  const result = await finalWait;
+  expect(result.agents[0]!.reports?.map((report) => report.id)).toEqual(["second"]);
+  expect(result.agents[0]!.status).toBe("completed");
+  await coordinator.shutdown();
+});
+
+test("any returns immediately for selected finished work and repeated waits omit consumed finals", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Finished"));
+  await coordinator.spawn(request("Running"));
+  const firstWait = coordinator.wait(["Finished"], 1000, "all");
+  clients.get("Finished")!.emit({ type: "agent_settled" });
+  const first = await firstWait;
+  expect(first.alreadyReportedIds).toEqual([]);
+  const repeated = await coordinator.wait(["Finished", "Running"], 10_000, "any");
+  expect(repeated.timedOut).toBe(false);
+  expect(repeated.alreadyReportedIds).toEqual([first.agents[0]!.id]);
+  expect(repeated.agents.find((agent) => agent.name === "Running")?.status).toBe("running");
+  await coordinator.shutdown();
+});
+
+test("all waits ignore interim reports and overlapping ownership is rejected", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("One")); await coordinator.spawn(request("Two"));
+  let finished = false;
+  const waiting = coordinator.wait(["One", "Two"], 1000, "all", undefined, "any").then((result) => { finished = true; return result; });
+  await expect(coordinator.wait(["Two"], 100, "any")).rejects.toThrow("already has an active wait");
+  clients.get("One")!.emit(reportEvent("report")); clients.get("One")!.emit({ type: "agent_settled" });
+  await flushMicrotasks(); expect(finished).toBe(false);
+  clients.get("Two")!.emit({ type: "agent_settled" });
+  const result = await waiting;
+  expect(result.agents.every((agent) => agent.status === "completed")).toBe(true);
+  expect(result.agents.find((agent) => agent.name === "One")?.reports).toHaveLength(1);
+  await coordinator.shutdown();
+});
+
+test("session replacement and a newer child run cannot leak old wait results or consume new reports", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("One")); await coordinator.spawn(request("Two"));
+  const waiting = coordinator.wait(["One", "Two"], 1000, "all");
+  clients.get("One")!.emit({ type: "agent_settled" });
+  await coordinator.send("One", "A new task");
+  clients.get("One")!.emit(reportEvent("new-run"));
+  clients.get("Two")!.emit({ type: "agent_settled" });
+  const result = await waiting;
+  expect(result.interrupted).toBe(true);
+  expect(result.agents.map((agent) => agent.name)).toEqual(["Two"]);
+  expect(coordinator.list().find((agent) => agent.name === "One")?.reports?.map((report) => report.id)).toEqual(["new-run"]);
+  const nextWait = coordinator.wait(["One"], 1000, "all");
+  coordinator.restore(await coordinator.suspend());
+  const stale = await nextWait;
+  expect(stale.interrupted).toBe(true);
+  expect(stale.agents).toEqual([]);
+  await coordinator.shutdown();
+});
+
+test("report restoration trusts actual branch delivery evidence and keeps bounded previews", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Durable"));
+  const waiting = coordinator.wait(["Durable"], 1000, "all");
+  for (let index = 0; index < 10; index++) clients.get("Durable")!.emit(reportEvent(`report-${index}`, `Finding ${index}`));
+  clients.get("Durable")!.emit({ type: "agent_settled" });
+  const result = await waiting;
+  expect(result.agents[0]!.reports).toHaveLength(8);
+  expect(result.agents[0]!.omittedReports).toBe(2);
+  const saved = coordinator.checkpoint();
+  const state = { type: "custom", customType: SUBAGENT_STATE, data: { version: 1, agents: saved } };
+  const restored = restoreAgents([state]);
+  expect(restored[0]!.reports!.every((record) => record.delivery === "none")).toBe(true);
+  expect(restored[0]!.delivery).toBe("none");
+  const delivered = restoreAgents([state, { type: "custom_message", customType: REPORT_MESSAGE_TYPE,
+    details: { agentId: saved[0]!.agent.id, report: result.agents[0]!.reports![0] } }]);
+  expect(delivered[0]!.reports!.filter((record) => record.delivery === "wait")).toHaveLength(1);
+  const consumed = restoreAgents([state, { type: "message", message: { role: "toolResult", toolName: "subagents", details: { action: "wait", agents: result.agents } } }]);
+  expect(consumed[0]!.reports!.every((record) => record.delivery === "wait")).toBe(true);
+  expect(consumed[0]!.delivery).toBe("wait");
+  const otherRun = restoreAgents([state, { type: "custom_message", customType: "subagent-completion", details: { ...saved[0]!.agent, runId: "older-run" } }]);
+  expect(otherRun[0]!.delivery).toBe("none");
+  const interimOnlyWait = restoreAgents([state, { type: "message", message: { role: "toolResult", toolName: "subagents", details: {
+    action: "wait", agents: [{ ...result.agents[0], status: "running", endedAt: undefined }],
+  } } }]);
+  expect(interimOnlyWait[0]!.reports!.every((record) => record.delivery === "wait")).toBe(true);
+  expect(interimOnlyWait[0]!.delivery, "an interim wait cannot acknowledge a final that had not happened yet").toBe("none");
+  coordinator.restore(restored);
+  const unread = await coordinator.wait(undefined, 0, "any");
+  expect(unread.agents[0]!.reports).toHaveLength(8);
+  await coordinator.shutdown();
 });
 
 test("reserves names and capacity before concurrent asynchronous startup", async () => {
@@ -124,6 +262,58 @@ test("supports persistent follow-ups, interrupt, usage, and close", async () => 
   expect(closed.status).toBe("closed");
   expect(client.stopCalls).toBe(1);
   expect(cleanups.get("Reviewer")).toBe(1);
+});
+
+test("conversation creation time survives follow-ups and saved-session recovery", async () => {
+  let now = 10;
+  const clients = new Map<string, FakeClient>();
+  const coordinator = new SubagentCoordinator({
+    now: () => now,
+    createRuntime: async (request) => {
+      const client = new FakeClient(); clients.set(request.name, client);
+      return { client, cleanup: async () => {}, checkpoint: () => ({
+        directory: "pi-subagent-context-test", file: `${request.name}.jsonl`, initialEntryCount: 0, leafId: null,
+      }) };
+    },
+  });
+  coordinator.startSession();
+  const first = await coordinator.spawn(request("First"));
+  now = 20;
+  const second = await coordinator.spawn(request("Second"));
+  expect(first).toMatchObject({ createdAt: 10, startedAt: 10 });
+  expect(second).toMatchObject({ createdAt: 20, startedAt: 20 });
+  clients.get("First")!.emit({ type: "agent_settled" });
+  now = 30;
+  const followed = await coordinator.send("First", "Continue the review");
+  expect(followed).toMatchObject({ createdAt: 10, startedAt: 30 });
+  expect(followed.runId).not.toBe(first.runId);
+  const saved = await coordinator.suspend();
+  const restored = restoreAgents(JSON.parse(JSON.stringify([
+    { type: "custom", customType: SUBAGENT_STATE, data: { version: 1, agents: saved } },
+  ])));
+  coordinator.restore(restored);
+  expect(coordinator.list().find((agent) => agent.name === "First")).toMatchObject({ createdAt: 10, startedAt: 30 });
+  now = 40;
+  expect(await coordinator.send("First", "Continue after reopening")).toMatchObject({ createdAt: 10, startedAt: 40 });
+  await coordinator.shutdown();
+});
+
+test("older checkpoints acquire a fixed creation time and malformed timestamps are rejected", async () => {
+  const { coordinator } = harness();
+  await coordinator.spawn(request("Legacy"));
+  const saved = await coordinator.suspend();
+  delete (saved[0]!.agent as { createdAt?: number }).createdAt;
+  saved[0]!.agent.startedAt = 123;
+  const state = { type: "custom", customType: SUBAGENT_STATE, data: { version: 1, agents: saved } };
+  expect(restoreAgents([state])[0]!.agent.createdAt).toBe(123);
+  // Direct coordinator restoration also supports older callers/checkpoints.
+  coordinator.restore(saved);
+  expect(coordinator.checkpoint()[0]!.agent.createdAt).toBe(123);
+  for (const invalid of [null, "123", NaN, Infinity, {}, []]) {
+    const row = { ...saved[0], agent: { ...saved[0]!.agent, createdAt: invalid } };
+    expect(restoreAgents([{ ...state, data: { version: 1, agents: [row] } }])).toEqual([]);
+  }
+  await coordinator.shutdown();
 });
 
 test("wait owns matching completions while unrelated children still notify automatically", async () => {

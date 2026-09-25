@@ -1,7 +1,22 @@
 import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS, setKeybindings } from "@earendil-works/pi-tui";
 import extension from "./index.ts";
+import { HistoryPicker } from "./picker.ts";
 initTheme("dark", false);
+const keys = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.cursorLineEnd": "ctrl+x" });
+setKeybindings(keys);
+for (const initialQuery of ["deploy", "修复🌍"]) {
+  let selected: string | null | undefined;
+  const text = `${initialQuery} production`;
+  const picker = new HistoryPicker([{ text, source: "message", recency: 0 }], initialQuery,
+    { fg: (_: string, value: string) => value, bold: (value: string) => value } as any,
+    keys as any, { terminal: { rows: 24 }, requestRender() {} } as any, (value) => { selected = value; });
+  picker.handleInput(" production");
+  assert.equal(picker.getQuery(), text, "typing must append to a seeded search with native Input and rebound keys");
+  picker.handleInput("\r");
+  assert.equal(selected, text);
+}
 for (const boundary of ["session_start", "session_tree", "session_shutdown"]) {
   const handlers = new Map<string, any>(); let command: any;
   const events: any[] = []; const edits: string[] = []; const inputs: string[] = [];

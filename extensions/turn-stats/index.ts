@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { decodeSummary, emptySummary, recordResponse, summaryText, type Summary } from "./stats.ts";
 import { addTiming, isFirstOutputEvent } from "./timing.ts";
 import { renderCompletion } from "./render.ts";
-import { isTelemetryStyle, telemetryStyle, TELEMETRY_ENTRY, TELEMETRY_CHANGED } from "../../lib/telemetry.ts";
+import { isTelemetryStyle, telemetryStyle, TELEMETRY_ENTRY, TELEMETRY_CHANGED, RESPONSE_TIMING_EVENT } from "../../lib/telemetry.ts";
 const ENTRY = "turn-usage-summary";
 /** Full agent-run accounting, separate from individual response/work-block timing. */
 export default function turnStats(pi: ExtensionAPI, now: () => number = () => performance.now(), wallNow: () => number = Date.now): void {
@@ -29,12 +29,15 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
   });
   pi.on("tool_execution_start", () => { if (current) current.tools++; });
   pi.on("tool_execution_end", (event) => { if (current && event.isError) current.failedTools++; });
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     const message = event.message;
     if (!current || message.role !== "assistant" || seen.has(message)) return;
     seen.add(message);
     recordResponse(current, message);
-    addTiming(current.timing!, sent, first, now(), message.usage?.output);
+    const timing = addTiming(current.timing!, sent, first, now(), message.usage?.output);
+    // Every finalized response publishes once, including missing timing, so
+    // optional step rules cannot inherit measurements from an earlier reply.
+    pi.events?.emit(RESPONSE_TIMING_EVENT, { sessionId: ctx?.sessionManager?.getSessionId?.(), ...timing });
     sent = undefined; first = undefined;
   });
   pi.on("agent_settled", () => {

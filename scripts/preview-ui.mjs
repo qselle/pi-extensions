@@ -66,6 +66,10 @@ try {
   await phase('gallery');
   await snapshot('web-results-wide', 100, 28);
   await snapshot('web-results-narrow', 60, 28);
+  await snapshot('questions-wide', 100, 42);
+  child.write('\x0f'); await delay(100);
+  await snapshot('questions-expanded', 100, 52);
+  child.write('\x0f'); await delay(100);
   await writeFile(join(root, 'gallery-continue'), 'yes');
   await phase('tools');
   await snapshot('tools-wide', 100, 34);
@@ -101,6 +105,17 @@ try {
   await input('/transcript stable phrase across wraps', 'Transcript');
   await snapshot('search-narrow', 60, 28);
   child.write('q'); await delay(100);
+  child.write('\x1b[C'); await delay(150);
+  await snapshot('child-wide', 100, 34);
+  await snapshot('child-narrow', 60, 28);
+  child.write('\x1b[C'); await delay(100);
+  await snapshot('child-next', 100, 34);
+  child.write('\x1b[D'); child.write('\x1b[D'); await delay(100);
+  assert(!screenText().includes('Subagent · research'), 'Left from the first child returns to the main editor.');
+  await input('/reload', 'Reloaded keybindings');
+  child.write('\x1b[C'); await delay(150);
+  await snapshot('child-reloaded', 100, 34);
+  child.write('q'); await delay(100);
   await input('/palette telegram', 'Commands ·');
   await snapshot('commands-wide', 100, 34);
   await snapshot('commands-narrow', 60, 28);
@@ -116,10 +131,17 @@ try {
   const exitDeadline = Date.now() + 5000;
   while (!exited && Date.now() < exitDeadline) await delay(25);
   assert(exited, 'The preview must shut down through Pi before inspecting its final result.');
+  assert(raw.lastIndexOf('\x1b[?25h') > raw.lastIndexOf('\x1b[?25l'), 'Quitting Pi must leave the shell cursor visible.');
   const result = JSON.parse(await readFile(join(root, 'result.json'), 'utf8'));
   assert.deepEqual(result.errors, []);
   assert.equal(result.networkAttempts, 0);
   const frame = (name) => frames.find((frame) => frame.name === name).lines.join('\n');
+  assert(frame('questions-wide').includes('Choose a scope for src/research.ts'));
+  assert(frame('questions-wide').includes('Focused improvement'));
+  assert(frame('questions-wide').includes('via Telegram'));
+  assert(!frame('questions-wide').includes('**Focused**'));
+  assert(!frame('questions-wide').includes('Complete redesign'));
+  assert(frame('questions-expanded').includes('Complete redesign'));
   for (const name of ['web-results-wide', 'web-results-narrow']) {
     assert(frame(name).includes('3 sources'));
     assert(frame(name).includes('typescriptlang.org'));
@@ -159,8 +181,10 @@ try {
   assert(catCells.length > 0 && catCells.every((cell) => cell.fgRgb && cell.fg === 0xfe8019), 'The cat must remain orange.');
   const orangeBars = settled.cells.filter((row) => row.filter((cell) => cell.text === '─' && cell.fgRgb && cell.fg === 0xfe8019).length > 50);
   assert(orangeBars.length >= 2, 'Both editor bars must use the visible orange accent.');
-  const workedRow = frames.find((item) => item.name === 'settled-wide').lines.find((row) => row.includes('Worked for'));
-  assert(workedRow?.includes('in 3.5K') && workedRow.includes('out 240') && workedRow.includes('$0.01'), 'Work rules must include readable recorded statistics in compact mode.');
+  for (const name of ['tools-wide', 'tools-narrow', 'settled-wide', 'settled-narrow']) {
+    assert(!frame(name).includes('Worked for'), 'Default tool loops must stay free of intermediate usage receipts.');
+    assert(!/first token .*─|─.*in 3.5K/.test(frame(name)), 'Only the final receipt should show turn telemetry by default.');
+  }
   const telemetryColors = new Set([0xfe8019, 0xa89984, 0xebdbb2, 0x7c6f64]);
   for (const name of ['settled-wide', 'settled-narrow']) {
     const capture = frames.find((item) => item.name === name);
@@ -195,12 +219,26 @@ try {
   for (const name of ['plan-details-wide', 'plan-details-narrow']) {
     assert(frame(name).includes('Execution plan'));
     assert(frame(name).includes('Improve research tools'));
+    assert(frame(name).includes('Keep sources readable'));
     assert(frame(name).includes('q/esc close'));
     assert(!frame(name).includes('Plan 1/3 · ● Improve research tools'));
   }
   assert(frame('search-narrow').includes('╭ Transcript'));
   assert(frame('search-narrow').includes('1/1 matches'));
   assert(frame('search-narrow').includes('q/Esc close'));
+  for (const name of ['child-wide', 'child-narrow', 'child-reloaded']) {
+    assert(frame(name).includes('Subagent · research'));
+    const heading = frames.find((item) => item.name === name).lines.find((line) => line.includes('Subagent · research'));
+    assert(!heading.includes(' · fol') || heading.includes(' · following'), 'Optional header state must fit as a complete word.');
+    assert(frame(name).includes('1/2'));
+    assert(frame(name).includes('Research findings'));
+    assert(frame(name).includes('source metadata'));
+    assert(frame(name).includes('← parent'));
+    assert(!frame(name).includes('Plan 1/3 · ● Improve research tools'));
+  }
+  assert(frame('child-next').includes('Subagent · verification'));
+  assert(frame('child-next').includes('2/2'));
+  assert(frame('child-next').includes('Source links remain intact'));
   for (const name of ['commands-wide', 'commands-narrow']) {
     assert(frame(name).includes('Commands ·'));
     assert(frame(name).includes('/telegram'));

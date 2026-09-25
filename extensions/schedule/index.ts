@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { SchedulePanel } from "./panel.ts";
+import { SCHEDULE_ATTENTION_EVENT, type ScheduleAttentionEvent } from "./events.ts";
 import { formatDuration } from "../loop/interval.ts";
 import {
   MAX_ACTIVE_SCHEDULES,
@@ -59,6 +60,14 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   let management = Promise.resolve();
   let lifecycle = 0;
   let closed = true;
+  const attention = (ctx: ExtensionContext, kind: ScheduleAttentionEvent["kind"], task?: ScheduledTask) => {
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!sessionId || closed) return;
+    pi.events.emit(SCHEDULE_ATTENTION_EVENT, {
+      version: 1, attentionId: crypto.randomUUID(), sessionId, kind,
+      ...(task ? { taskId: task.id, taskKind: task.kind } : {}),
+    } satisfies ScheduleAttentionEvent);
+  };
 
   // Serialize state changes as well as disk writes: a later snapshot must not
   // contain an earlier change that is still capable of rolling back.
@@ -129,7 +138,8 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
     catch (error) {
       if (generation !== lifecycle) return;
       tasks.set(task.id, pauseTask(pending, `Could not persist pending delivery: ${errorMessage(error)}`));
-      loadError = errorMessage(error); updateStatus(ctx); ctx.ui.notify(`Schedule ${task.id} paused because durable state could not be written.`, "error"); return;
+      loadError = errorMessage(error); updateStatus(ctx); ctx.ui.notify(`Schedule ${task.id} paused because durable state could not be written.`, "error");
+      attention(ctx, "queue_failed", pending); return;
     }
     if (generation !== lifecycle || closed || !lease) return;
     const wakeKey = `${task.id}:${pending.pendingDeliveryAt}:${Date.now()}`;
@@ -140,9 +150,10 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
     } catch (error) {
       pendingWake = undefined; wakePrompts.delete(wakeKey);
       tasks.set(task.id, pauseTask(pending, `Wakeup failed: ${errorMessage(error)}`));
-      await persist().catch(() => undefined);
+      await persist().catch((saveError) => { if (generation === lifecycle && !closed) loadError = errorMessage(saveError); });
       if (generation !== lifecycle || closed) return;
-      ctx.ui.notify(`Schedule ${task.id} paused because its wakeup failed.`, "error"); scheduleTimer(ctx);
+      ctx.ui.notify(`Schedule ${task.id} paused because its wakeup failed.`, "error");
+      attention(ctx, loadError ? "queue_failed" : "wakeup_failed", pending); scheduleTimer(ctx);
     }
   });
 
@@ -164,6 +175,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       if (generation !== lifecycle || closed) return;
       loadError = errorMessage(error);
       ctx.ui.notify(loadError, "error");
+      attention(ctx, "queue_failed");
     }
     scheduleTimer(ctx);
   };
@@ -324,10 +336,12 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       await persist();
       if (generation !== lifecycle || closed) return;
       ctx.ui.notify(`Schedule ${task.id} paused; its pending delivery was preserved.`, "warning");
+      if (message.stopReason === "error") attention(ctx, "agent_failed", task);
     }
     catch (error) {
       if (generation !== lifecycle || closed) return;
       loadError = errorMessage(error); ctx.ui.notify(`Schedule ${task.id} could not persist its paused state: ${loadError}`, "error");
+      attention(ctx, "queue_failed", task);
     }
   }));
 
@@ -344,6 +358,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
         catch (error) {
           if (generation !== lifecycle || closed) return;
           loadError = errorMessage(error); ctx.ui.notify(`Schedule ${task.id} could not persist delivery completion: ${loadError}`, "error");
+          attention(ctx, "delivery_unconfirmed", task);
         }
       }
     }
@@ -371,6 +386,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
       await releaseProjectLease(acquired);
       if (generation !== lifecycle || closed) return;
       loadError = errorMessage(error); ctx.ui.notify(loadError, "error");
+      attention(ctx, "queue_failed");
     }
     updateStatus(ctx); scheduleTimer(ctx);
   };

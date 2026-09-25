@@ -8,6 +8,19 @@ export const commandPurposeParameter = Type.Optional(Type.String({
 
 export const COMMAND_PURPOSE_GUIDELINE = "For bash calls, include a brief purpose explaining what the command checks or changes (3–8 words). Keep it factual and user-facing; do not echo the command or include private reasoning. Omit it when no useful explanation is needed.";
 
+export const toolPurposeParameter = Type.Optional(Type.String({
+  description: "Optional brief user-facing purpose: 3–8 words explaining what this action checks, finds or changes. Emit purpose first. Do not repeat paths, commands, queries or job IDs. Never include secrets or private reasoning. Omit when the action is already clear.",
+}));
+
+/** Reuse the same display bounds; omit captions that merely repeat a target. */
+export function toolPurpose(value: unknown, targets: readonly unknown[] = []): string {
+  const purpose = commandPurpose(value);
+  if (!purpose) return "";
+  const comparable = purpose.toLocaleLowerCase();
+  return targets.some((target) => typeof target === "string" && target.length <= 4096
+    && commandPurpose(target).toLocaleLowerCase() === comparable) ? "" : purpose;
+}
+
 /** Plain, bounded display metadata; never use this text to construct a command. */
 export function commandPurpose(value: unknown): string {
   if (typeof value !== "string") return "";

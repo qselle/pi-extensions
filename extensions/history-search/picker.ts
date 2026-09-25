@@ -33,7 +33,11 @@ export class HistoryPicker implements Component, Focusable {
     private readonly done: (result: string | null) => void,
     private readonly labels: HistoryPickerLabels = {},
   ) {
-    this.input.setValue(initialQuery);
+    // Native setValue preserves the old cursor offset (zero on a fresh input).
+    // Seed through public paste handling so typing extends the query, including
+    // when the user's end-of-line key is rebound.
+    const seed = initialQuery.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+    this.input.handleInput(`\x1b[200~${seed}\x1b[201~`);
     this.refresh();
   }
 

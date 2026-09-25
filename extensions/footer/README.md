@@ -75,7 +75,15 @@ immediately.
 
 Usage is cached until a lifecycle event or the session branch leaf changes. Totals
 include fresh/cached/written input and output from assistant responses, nested model usage on tool results, summaries,
-compactions and cache-warming usage. Idle warming costs appear on the next
+compactions, cache-warming usage, and recorded child-agent response deltas. Child
+usage shares the main counters and cost; it does not add a separate status group.
+The context window and percentage always describe the parent conversation.
+Child responses refresh the footer even while the parent is idle. Reloads and
+branch navigation restore only usage recorded on that branch; cumulative child
+snapshots and repeated references to the same saved entry are not counted again.
+Missing child metrics retain the same unknown/lower-bound treatment as parent
+usage. Older records retain the values originally saved.
+Idle warming costs appear on the next
 footer render without waiting for another assistant response.
 
 The terminal title shows the session and project. A low-frequency Braille spinner is active only while Pi is working. Attention UI such as `questionnaire` temporarily owns the title and the footer restores the appropriate active or idle title afterward.

@@ -1,5 +1,6 @@
 import type { ContextMode, ChildCheckpoint } from "./context.ts";
 import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { decodeParentReport, MAX_RETAINED_REPORTS, MAX_SEEN_REPORT_IDS, REPORT_TOOL_NAME, type ParentReport, type SavedReport } from "./report.ts";
 
 export const DEFAULT_MAX_OPEN_AGENTS = 6;
 export const MAX_AGENT_NAME_CHARS = 64;
@@ -9,6 +10,7 @@ export const MAX_RESULT_BYTES = 24 * 1024;
 
 export type AgentStatus = "starting" | "running" | "completed" | "failed" | "stopped" | "closed";
 export type WaitMode = "any" | "all";
+export type WaitWake = "any" | "final";
 
 export interface AgentUsage {
   input: number;
@@ -21,6 +23,7 @@ export interface AgentUsage {
 
 export interface AgentSnapshot {
   id: string;
+  runId?: string;
   name: string;
   task: string;
   contextMode: ContextMode;
@@ -28,6 +31,8 @@ export interface AgentSnapshot {
   cwd: string;
   model?: string;
   thinking?: string;
+  /** Stable conversation creation time; startedAt belongs to the current run. */
+  readonly createdAt?: number;
   startedAt: number;
   endedAt?: number;
   output: string;
@@ -36,6 +41,8 @@ export interface AgentSnapshot {
   usage: AgentUsage;
   queued?: number;
   unread?: boolean;
+  reports?: ParentReport[];
+  omittedReports?: number;
 }
 
 export interface SpawnRequest {
@@ -67,6 +74,7 @@ export interface CoordinatorHooks {
   onChange?(): void;
   onCompletion?(agent: AgentSnapshot): void | Promise<void>;
   onUsage?(message: unknown, agent: AgentSnapshot): void;
+  onReport?(report: ParentReport, agent: AgentSnapshot): void | Promise<void>;
 }
 
 export interface CoordinatorOptions {
@@ -88,7 +96,7 @@ interface Deferred {
   resolve(): void;
 }
 
-export interface SavedAgent { agent: AgentSnapshot; resume?: ChildCheckpoint; delivery: "none" | "automatic" | "wait"; inbox: string[] }
+export interface SavedAgent { agent: AgentSnapshot; resume?: ChildCheckpoint; delivery: "none" | "automatic" | "wait"; inbox: string[]; reports?: SavedReport[]; seenReportIds?: string[] }
 
 interface ManagedAgent extends AgentSnapshot {
   checkpoint?: () => ChildCheckpoint;
@@ -107,6 +115,9 @@ interface ManagedAgent extends AgentSnapshot {
   delivery: "none" | "automatic" | "wait";
   suppressCompletion: boolean;
   generation: number;
+  reportRecords: SavedReport[];
+  seenReportIds: string[];
+  reportUpdate: Deferred;
   closing?: Promise<void>;
 }
 
@@ -154,8 +165,10 @@ export class SubagentCoordinator {
       do {
         id = `${slug(normalized.name)}-${Math.random().toString(36).slice(2, 8)}`;
       } while (this.agents.has(id));
+      const createdAt = this.now();
       agent = {
         id,
+        runId: crypto.randomUUID(),
         name: normalized.name,
         task: normalized.task,
         contextMode: normalized.contextMode,
@@ -163,7 +176,8 @@ export class SubagentCoordinator {
         cwd: normalized.cwd,
         model: normalized.model,
         thinking: normalized.thinking,
-        startedAt: this.now(),
+        createdAt,
+        startedAt: createdAt,
         output: "",
         activity: [],
         usage: emptyUsage(),
@@ -180,6 +194,7 @@ export class SubagentCoordinator {
         delivery: "none",
         suppressCompletion: false,
         generation: reservation.generation,
+        reportRecords: [], seenReportIds: [], reportUpdate: deferred(),
       };
       this.agents.set(id, agent);
       reservation.commit();
@@ -229,16 +244,18 @@ export class SubagentCoordinator {
 
   read(name: string): AgentSnapshot {
     const agent = this.requireAgent(name);
+    const reports = agent.reportRecords.map((record) => ({ ...record.report }));
+    for (const record of agent.reportRecords) record.delivery = "wait";
     if (!isActive(agent)) agent.delivery = "wait";
     this.changed();
-    return this.snapshot(agent);
+    return { ...this.snapshot(agent), reports };
   }
 
   /** Snapshot references pin a conversation leaf; restoring never starts a process. */
   checkpoint(): SavedAgent[] {
     return this.ordered().filter((agent) => agent.status !== "closed").map((agent) => {
       try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Keep the last complete file checkpoint. */ }
-      return { agent: this.snapshot(agent), resume: agent.resume, delivery: agent.delivery, inbox: [...agent.inbox] };
+      return { agent: this.snapshot(agent), resume: agent.resume, delivery: agent.delivery, inbox: [...agent.inbox], reports: structuredClone(agent.reportRecords), seenReportIds: [...agent.seenReportIds] };
     });
   }
 
@@ -247,9 +264,12 @@ export class SubagentCoordinator {
     for (const row of saved.slice(0, 16)) {
       const completion = deferred(); completion.resolve();
       const agent: ManagedAgent = { ...row.agent, status: isActive(row.agent) ? "stopped" : row.agent.status,
+        runId: row.agent.runId ?? crypto.randomUUID(),
+        createdAt: row.agent.createdAt ?? row.agent.startedAt,
         resume: row.resume, inbox: [...row.inbox], cleanup: async () => {}, cleanupDone: true,
         transcriptCache: [], completion, settled: true, waiters: 0, delivery: row.delivery,
-        suppressCompletion: false, generation: this.generation };
+        suppressCompletion: false, generation: this.generation, reportRecords: structuredClone(row.reports ?? []),
+        seenReportIds: [...(row.seenReportIds ?? [])], reportUpdate: deferred() };
       this.agents.set(agent.id, agent); this.usedNames.add(agent.name.toLocaleLowerCase());
     }
     this.changed();
@@ -362,20 +382,31 @@ export class SubagentCoordinator {
     return this.snapshot(agent);
   }
 
-  async wait(names: string[] | undefined, timeoutMs: number, mode: WaitMode, signal?: AbortSignal): Promise<WaitResult> {
+  async wait(names: string[] | undefined, timeoutMs: number, mode: WaitMode, signal?: AbortSignal, wakeOn: WaitWake = "final"): Promise<WaitResult> {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0) throw new Error("timeout_ms must be a non-negative integer");
+    if (mode !== "any" && mode !== "all") throw new Error("wait_mode must be any or all");
+    if (wakeOn !== "any" && wakeOn !== "final") throw new Error("wake_on must be any or final");
+    const generation = this.generation;
     const targets = names && names.length > 0
       ? unique(names.map((name) => this.requireAgent(name)))
-      : this.ordered().filter(isActive);
+      : this.ordered().filter((agent) => isActive(agent) || agent.delivery === "none" && agent.status !== "closed" || agent.reportRecords.some((record) => record.delivery === "none"));
+    const occupied = targets.find((agent) => agent.waiters > 0);
+    if (occupied) throw new Error(`Subagent ${occupied.name} already has an active wait`);
     const running = targets.filter(isActive);
-    for (const agent of running) agent.waiters += 1;
+    const runs = new Map(targets.map((agent) => [agent.id, agent.runId]));
+    const ready = mode === "any" && (running.length < targets.length
+      || wakeOn === "any" && targets.some((agent) => agent.reportRecords.some((record) => record.delivery === "none")));
+    for (const agent of targets) agent.waiters += 1;
     let timedOut = false;
     let interrupted = false;
     try {
-      if (running.length > 0 && timeoutMs > 0) {
-        const pending = mode === "all"
+      if (!ready && running.length > 0 && timeoutMs > 0) {
+        const completion = mode === "all"
           ? Promise.all(running.map((agent) => agent.completion.promise)).then(() => undefined)
           : Promise.race(running.map((agent) => agent.completion.promise));
+        const pending = mode === "any" && wakeOn === "any"
+          ? Promise.race([completion, ...running.map((agent) => agent.reportUpdate.promise)])
+          : completion;
         await new Promise<void>((resolve) => {
           let done = false;
           const finish = () => {
@@ -397,20 +428,25 @@ export class SubagentCoordinator {
           if (signal?.aborted) onAbort();
           else signal?.addEventListener("abort", onAbort, { once: true });
         });
-      } else if (running.length > 0) {
+      } else if (!ready && running.length > 0) {
         timedOut = true;
       }
     } finally {
-      for (const agent of running) agent.waiters = Math.max(0, agent.waiters - 1);
+      for (const agent of targets) agent.waiters = Math.max(0, agent.waiters - 1);
     }
 
-    const alreadyReportedIds = targets.filter((agent) => agent.delivery === "automatic").map((agent) => agent.id);
-    for (const agent of targets) {
+    if (!this.active || generation !== this.generation) return { agents: [], timedOut: false, interrupted: true, alreadyReportedIds: [] };
+    const current = targets.filter((agent) => this.agents.get(agent.id) === agent && agent.runId === runs.get(agent.id));
+    if (current.length !== targets.length) interrupted = true;
+    const snapshots = current.map((agent) => this.snapshot(agent));
+    const alreadyReportedIds = current.filter((agent) => !isActive(agent) && agent.delivery !== "none").map((agent) => agent.id);
+    for (const agent of current) {
       if (!isActive(agent) && agent.delivery === "none") agent.delivery = "wait";
+      for (const record of agent.reportRecords) if (record.delivery === "none") record.delivery = "wait";
     }
     this.changed();
     return {
-      agents: targets.map((agent) => this.snapshot(agent)),
+      agents: snapshots,
       timedOut,
       interrupted,
       alreadyReportedIds,
@@ -455,6 +491,7 @@ export class SubagentCoordinator {
 
   private async startFollowUp(agent: ManagedAgent, client: AgentClient, message: string): Promise<void> {
     const previous = {
+      runId: agent.runId,
       status: agent.status,
       startedAt: agent.startedAt,
       endedAt: agent.endedAt,
@@ -466,6 +503,7 @@ export class SubagentCoordinator {
       delivery: agent.delivery,
     };
     agent.status = "running";
+    agent.runId = crypto.randomUUID();
     agent.startedAt = this.now();
     agent.endedAt = undefined;
     agent.output = "";
@@ -517,6 +555,7 @@ export class SubagentCoordinator {
 
   private handleEvent(agent: ManagedAgent, event: RpcEvent): void {
     if (agent.status === "closed" || agent.generation !== this.generation || !this.active) return;
+    if (agent.settled) return;
     if (event.type === "agent_start") {
       agent.status = "running";
       this.changed();
@@ -555,6 +594,24 @@ export class SubagentCoordinator {
       return;
     }
     if (event.type === "tool_execution_end") {
+      if (event.toolName === REPORT_TOOL_NAME && event.isError !== true) {
+        const details = asRecord(asRecord(event.result)?.details);
+        const report = details?.version === 1 ? decodeParentReport(details.report) : undefined;
+        if (report && report.id === event.toolCallId && !agent.seenReportIds.includes(report.id)) {
+          agent.seenReportIds.push(report.id);
+          agent.seenReportIds = agent.seenReportIds.slice(-MAX_SEEN_REPORT_IDS);
+          const record: SavedReport = { report, runId: agent.runId!, delivery: "none" };
+          if (agent.reportRecords.length >= MAX_RETAINED_REPORTS) {
+            const delivered = agent.reportRecords.findIndex((entry) => entry.delivery !== "none");
+            const [removed] = agent.reportRecords.splice(delivered < 0 ? 0 : delivered, 1);
+            if (removed?.delivery === "none") agent.omittedReports = (agent.omittedReports ?? 0) + 1;
+          }
+          agent.reportRecords.push(record);
+          agent.reportUpdate.resolve();
+          agent.reportUpdate = deferred();
+          queueMicrotask(() => void this.deliverReport(agent, record));
+        }
+      }
       this.changed();
       return;
     }
@@ -588,6 +645,16 @@ export class SubagentCoordinator {
     } catch {
       agent.delivery = "none";
     } finally { this.changed(); }
+  }
+
+  private async deliverReport(agent: ManagedAgent, record: SavedReport): Promise<void> {
+    if (!this.options.hooks?.onReport || !this.active || agent.generation !== this.generation || agent.suppressCompletion || agent.waiters > 0
+      || agent.status === "closed" || agent.runId !== record.runId || record.delivery !== "none") return;
+    const generation = this.generation;
+    record.delivery = "automatic";
+    try { await this.options.hooks?.onReport?.({ ...record.report }, this.snapshot(agent)); }
+    catch { record.delivery = "none"; }
+    finally { if (generation === this.generation && this.agents.get(agent.id) === agent) this.changed(); }
   }
 
   private closeManaged(agent: ManagedAgent, suppressCompletion: boolean): Promise<void> {
@@ -693,6 +760,7 @@ export class SubagentCoordinator {
   private snapshot(agent: ManagedAgent): AgentSnapshot {
     return {
       id: agent.id,
+      runId: agent.runId,
       name: agent.name,
       task: agent.task,
       contextMode: agent.contextMode,
@@ -700,6 +768,7 @@ export class SubagentCoordinator {
       cwd: agent.cwd,
       model: agent.model,
       thinking: agent.thinking,
+      createdAt: agent.createdAt,
       startedAt: agent.startedAt,
       endedAt: agent.endedAt,
       output: boundedText(agent.output, MAX_RESULT_BYTES),
@@ -707,7 +776,10 @@ export class SubagentCoordinator {
       activity: [...agent.activity],
       usage: { ...agent.usage },
       queued: agent.inbox.length,
-      unread: agent.settled && agent.delivery === "none" && ["completed", "failed"].includes(agent.status),
+      unread: agent.settled && agent.delivery === "none" && ["completed", "failed"].includes(agent.status)
+        || agent.reportRecords.some((record) => record.delivery === "none"),
+      reports: agent.reportRecords.filter((record) => record.delivery === "none").map((record) => ({ ...record.report })),
+      omittedReports: agent.omittedReports ?? 0,
     };
   }
 
@@ -741,6 +813,7 @@ function buildChildPrompt(request: SpawnRequest): string {
     "You are an isolated delegated subagent.",
     "Complete only the task below and work autonomously with the available tools.",
     "Do not ask the user questions. Report missing information or blockers to the parent.",
+    "Use report_to_parent only for material interim findings that can unblock or redirect the parent; final results are delivered automatically.",
     "If editing files, stay within the task's stated write scope and report every changed path.",
     "Return a concise final answer with findings, changes, commands, validation, and remaining risks.",
     context,

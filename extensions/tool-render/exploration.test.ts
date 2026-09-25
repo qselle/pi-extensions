@@ -9,6 +9,8 @@ import {
 	noteStart,
 	readRange,
 	resetExploration,
+	previewRows,
+	restoreExploration,
 } from "./exploration.ts";
 
 beforeEach(() => resetExploration());
@@ -124,6 +126,16 @@ describe("display rows", () => {
 		]);
 	});
 
+	test("read coalescing preserves distinct intents and merges matching captions", () => {
+		noteStart("a", "read", { path: "same.ts", offset: 1, limit: 10, purpose: "Inspect token validation" });
+		noteStart("b", "read", { path: "same.ts", offset: 20, limit: 10, purpose: "Inspect token validation" });
+		noteStart("c", "read", { path: "same.ts", offset: 40, limit: 10, purpose: "Review error handling" });
+		const rows = groupState("a")!.rows;
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toMatchObject({ purpose: "Inspect token validation", suffix: "lines 1-10, 20-29" });
+		expect(rows[1]).toMatchObject({ purpose: "Review error handling", suffix: "lines 40-49" });
+	});
+
 	test("merged status is error when any coalesced read errored", () => {
 		noteStart("a", "read", { path: "z.ts", offset: 1, limit: 10 });
 		noteStart("b", "read", { path: "z.ts", offset: 11, limit: 10 });
@@ -138,4 +150,59 @@ test("a coalesced failed read preserves the failure instead of a successful rang
   noteStart("second", "read", { path: "file", offset: 20, limit: 10 });
   noteEnd("second", true, "failed: Permission denied");
   expect(groupState("first")!.rows[0]).toMatchObject({ status: "error", suffix: "failed: Permission denied" });
+});
+
+describe("collapsed viewport", () => {
+	const rows = Array.from({ length: 12 }, (_, index) => ({ verb: "Read", detail: `file-${index}.ts`, status: "done" as "done" | "pending" | "error" }));
+	test("shows recent work while reserving space for failures and pending calls", () => {
+		const input = rows.map((row) => ({ ...row }));
+		input[0]!.status = "error";
+		input[3]!.status = "pending";
+		const preview = previewRows(input);
+		expect(preview.rows.map((row) => row.detail)).toEqual(["file-0.ts", "file-3.ts", "file-9.ts", "file-10.ts", "file-11.ts"]);
+		expect(preview).toMatchObject({ omitted: 7, failed: 0, pending: 0 });
+	});
+	test("counts omitted failures honestly when they exceed the viewport", () => {
+		const preview = previewRows(rows.map((row) => ({ ...row, status: "error" as const })));
+		expect(preview.rows).toHaveLength(5);
+		expect(preview).toMatchObject({ omitted: 7, failed: 7 });
+	});
+});
+
+describe("saved exploration", () => {
+	const call = (id: string, name = "read", args: any = { path: `${id}.ts` }) => ({ type: "toolCall", id, name, arguments: args });
+	const assistant = (calls: any[], stopReason = "toolUse") => ({ type: "message", message: { role: "assistant", content: calls, stopReason } });
+	const result = (id: string, options: any = {}) => ({ type: "message", message: { role: "toolResult", toolCallId: id, toolName: "read", content: "a\n\nb", isError: false, ...options } });
+	test("reconstructs old groups with read ranges, outcomes and assistant/tool boundaries", () => {
+		restoreExploration([
+			assistant([call("a", "read", { path: "large.ts", offset: 20, limit: 10 }), call("b", "grep", { pattern: "cache", path: "src" }), call("bash", "bash"), call("c")]),
+			result("a"), result("b", { toolName: "grep", content: "No matches found" }), result("bash", { toolName: "bash" }), result("c"),
+			assistant([call("d"), call("e")]), result("d"), result("e", { isError: true, content: "Permission denied\nRead another path" }),
+		]);
+		expect(groupState("a")).toMatchObject({ active: false, rows: [{ suffix: "lines 20-29" }, { suffix: "0 matches" }] });
+		expect(isLeader("b")).toBe(false);
+		expect(isLeader("c")).toBe(true);
+		expect(isLeader("d")).toBe(true);
+		expect(groupState("e")?.rows[1]).toMatchObject({ status: "error", suffix: "failed: Permission denied" });
+		noteStart("fresh", "read", { path: "fresh.ts" });
+		expect(isLeader("fresh")).toBe(true);
+	});
+	test("missing, duplicate, mismatched and aborted calls stay visible as standalone cards", () => {
+		restoreExploration([
+			assistant([call("missing"), call("a"), call("duplicate"), call("mismatch"), call("b")]),
+			result("a"), result("duplicate"), result("duplicate"), result("mismatch", { toolName: "ls" }), result("b"),
+			assistant([call("aborted")], "aborted"), result("aborted"),
+			assistant([call("same"), call("same")]), result("same"),
+		]);
+		for (const id of ["missing", "duplicate", "mismatch", "aborted", "same"]) expect(groupState(id)).toBeUndefined();
+		expect(isLeader("a")).toBe(true);
+		expect(isLeader("b")).toBe(true);
+	});
+	test("changing branches discards stale and dangling group membership", () => {
+		restoreExploration([assistant([call("a"), call("b")]), result("a"), result("b")]);
+		restoreExploration([result("a"), assistant([call("new")]), result("new")]);
+		expect(groupState("a")).toBeUndefined();
+		expect(groupState("b")).toBeUndefined();
+		expect(isLeader("new")).toBe(true);
+	});
 });

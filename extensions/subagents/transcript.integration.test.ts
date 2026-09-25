@@ -10,6 +10,10 @@ test("renders and navigates a live transcript with Pi's real TUI utilities", asy
   const script = join(directory, "verify-transcript.ts");
   await writeFile(script, `
 import { LiveTranscriptViewer } from ${JSON.stringify(transcriptModule)};
+import { initTheme } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-coding-agent"))};
+import { visibleWidth } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-tui"))};
+initTheme("dark");
+const plain = (rows) => rows.join("\\n").replace(/\\x1b\\[[0-9;]*m/g, "");
 
 function verify() {
   const theme = {
@@ -27,6 +31,7 @@ function verify() {
         "tui.select.down": ["down"],
         "tui.select.pageUp": ["pageUp"],
         "tui.select.pageDown": ["pageDown"],
+        "tui.select.confirm": ["\\r"],
       };
       return keys[id]?.includes(data) ?? false;
     },
@@ -53,18 +58,32 @@ function verify() {
       { type: "message", message: { role: "assistant", content: [
         { type: "thinking", thinking: "Trace the auth flow" },
         { type: "toolCall", name: "read", arguments: { path: "src/auth.ts" } },
-        { type: "text", text: "Authentication uses signed sessions." },
+        { type: "text", text: "Authentication uses **signed sessions**." },
       ] } },
       { type: "message", message: { role: "toolResult", toolName: "read", isError: false, content: [{ type: "text", text: "file contents" }] } },
     ],
   };
   const viewer = new LiveTranscriptViewer(() => transcript, theme, keybindings, tui, () => { closed = true; });
   const output = viewer.render(60);
-  const text = output.join("\\n");
-  for (const expected of ["Subagent · audit", "provider/model:high", "Task", "Thinking", "Tool · read", "Agent", "Tool result · read"]) {
+  const text = plain(output);
+  for (const expected of ["Subagent · audit", "provider/model · high", "Task", "Tool call · read", "Assistant", "Tool result · read", "signed sessions"]) {
     if (!text.includes(expected)) throw new Error("missing transcript section: " + expected);
   }
-  if (output.some((line) => line.length > 60)) throw new Error("transcript exceeded render width");
+  if (text.includes("**signed sessions**") || text.includes("Trace the auth flow")) throw new Error("Markdown or collapsed thinking regressed");
+  viewer.handleInput("t");
+  if (!plain(viewer.render(80)).includes("Trace the auth flow")) throw new Error("thinking toggle did not reveal reasoning");
+  viewer.handleInput("t");
+  for (const width of [0, 1, 2, 6, 20, 60, 120]) {
+    if (viewer.render(width).some((line) => visibleWidth(line) > width)) throw new Error("transcript exceeded render width");
+  }
+  viewer.focused = true;
+  viewer.handleInput("/");
+  viewer.handleInput("\\x1b[200~signed sessions\\x1b[201~");
+  viewer.handleInput("\\r");
+  if (!plain(viewer.render(90)).includes("1/1 matches")) throw new Error("child transcript Markdown search failed");
+  transcript.agent.status = "completed";
+  viewer.refresh();
+  if (!plain(viewer.render(90)).includes("completed")) throw new Error("child status header did not refresh");
   tui.terminal.rows = 18;
   viewer.render(60);
   viewer.handleInput("up");

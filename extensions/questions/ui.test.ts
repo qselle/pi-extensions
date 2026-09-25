@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { normalizeQuestions } from "./model.ts";
 import { QuestionPrompt, type QuestionPromptResult } from "./ui.ts";
+
+initTheme("dark");
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -39,7 +42,7 @@ function createPrompt(questionInput: any, done: (result: QuestionPromptResult) =
   return { prompt, renders: () => renders };
 }
 
-test("renders a Claude-style picker with freeform Other as the final choice", () => {
+test("renders a compact picker with freeform Other as the final choice", () => {
   const { prompt } = createPrompt({
     id: "color",
     question: "Which color should be used?",
@@ -51,11 +54,48 @@ test("renders a Claude-style picker with freeform Other as the final choice", ()
   const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
   const text = lines.map(strip).join("\n");
 
-  expect(text).toContain("Question 1 of 1");
+  expect(text).toContain("Question 1/1");
   expect(text.indexOf("1. Red")).toBeLessThan(text.indexOf("2. Blue"));
   expect(text.indexOf("2. Blue")).toBeLessThan(text.indexOf("3. Other"));
+  expect(text).toContain("Other · type your answer");
   expect(text.replace(/\s+/g, " ")).toContain("first reply wins");
   expect(lines.every((line) => [...strip(line)].length <= 120)).toBe(true);
+});
+
+test("renders Markdown and shades every wrapped line of the selected choice", () => {
+  const [question] = normalizeQuestions([{
+    id: "scope",
+    question: "Choose a **scope** for `src/app.ts`",
+    options: ["A **complete** pass through all the source and configuration files"],
+    allow_other: false,
+  }]);
+  const selectedColor = "\x1b[48;2;69;64;61m";
+  const coloredTheme = {
+    ...theme,
+    bg: (color: string, value: string) => color === "selectedBg" ? `${selectedColor}${value}\x1b[49m` : value,
+  };
+  const prompt = new QuestionPrompt(question, 0, 1, false, { requestRender() {} } as any, coloredTheme as any, keybindings as any, () => undefined);
+  const lines = prompt.render(36);
+  const plain = lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+  expect(plain).toContain("Choose a scope for src/app.ts");
+  expect(plain).toContain("complete");
+  expect(plain).not.toContain("**complete**");
+  expect(lines.filter((line) => line.includes(selectedColor)).length).toBeGreaterThan(1);
+  expect(lines.every((line) => [...line.replace(/\x1b\[[0-9;]*m/g, "")].length <= 36)).toBe(true);
+});
+
+test("keeps the selected choice visible in long lists", () => {
+  const { prompt } = createPrompt({
+    id: "many",
+    question: "Pick one",
+    options: Array.from({ length: 8 }, (_, index) => `Option ${index + 1}`),
+  }, () => undefined);
+  for (let index = 0; index < 8; index++) prompt.handleInput("down");
+  const text = prompt.render(40).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  expect(text).toContain("9. Other");
+  expect(text).toContain("↑ 4 more");
+  expect(text).not.toContain("1. Option 1");
 });
 
 test("selects an option or submits a freeform answer", () => {

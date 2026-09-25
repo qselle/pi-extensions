@@ -10,6 +10,7 @@ import { createChildContext, checkpointFile } from "./context.ts";
 import { SubagentCoordinator } from "./coordinator.ts";
 import { restoreAgents, SUBAGENT_STATE } from "./persistence.ts";
 import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { sumUsage } from "../footer/usage.ts";
 
 let networkAttempts = 0;
 globalThis.fetch = (() => { networkAttempts++; throw new Error("Native child continuity fixture forbids network"); }) as unknown as typeof fetch;
@@ -113,15 +114,29 @@ try {
   await session.bindExtensions({ onError: (error) => errors.push(error) });
   try {
     await native.spawn({ name: "Native child", task: "Validate reload", contextMode: "fresh", cwd: root, parentContext: nativeContext });
+    const firstChildResponse = answer("First child response");
+    firstChildResponse.usage.input = 20;
+    SessionManager.open(nativeClients[0]!.file).appendMessage(firstChildResponse);
+    nativeClients[0]!.emit({ type: "message_end", message: firstChildResponse });
+    assert.equal(sumUsage(nativeParent.getBranch()).input, 21, "parent totals include the recorded child response once");
     native.queue("Native child", "Queued before reload");
     await session.reload();
     assert.equal(nativeClients.length, 1); assert.equal(nativeClients[0]!.stops, 1);
     assert.equal(native.list()[0]!.status, "stopped"); assert.equal(native.list()[0]!.queued, 1);
     const disk = SessionManager.open(nativeParent.getSessionFile()!);
     assert.equal(restoreAgents(disk.getBranch())[0]!.agent.status, "stopped");
+    assert.equal(sumUsage(disk.getBranch()).input, 21, "reload restores child usage from persisted deltas");
     await native.send("Native child", "Explicit continuation", nativeContext);
     assert.equal(nativeClients.length, 2);
     assert.deepEqual(nativeClients[1]!.prompts, ["Queued before reload\n\nExplicit continuation"]);
+    const secondChildResponse = answer("Follow-up child response");
+    secondChildResponse.usage.input = 30;
+    SessionManager.open(nativeClients[1]!.file).appendMessage(secondChildResponse);
+    nativeClients[1]!.emit({ type: "message_end", message: secondChildResponse });
+    assert.equal(sumUsage(nativeParent.getBranch()).input, 51, "follow-up adds its delta without recounting the first turn");
+    const { usage: _usage, ...unmeasuredResponse } = answer("Provider omitted usage");
+    nativeClients[1]!.emit({ type: "message_end", message: unmeasuredResponse });
+    assert.equal(sumUsage(nativeParent.getBranch()).missing?.input, 1, "missing child usage remains unknown");
     await session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" });
     assert.equal(nativeClients[1]!.stops, 1);
     assert.deepEqual(errors, []);

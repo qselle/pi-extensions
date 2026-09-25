@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { decodeGoalEntry } from "../goal/goal.ts";
-import { GOAL_CHANGED_EVENT } from "../goal/events.ts";
+import { GOAL_ATTENTION_EVENT, GOAL_CHANGED_EVENT, isGoalAttentionEvent } from "../goal/events.ts";
 import {
 	bellSequence,
 	isDuplicate,
@@ -13,6 +13,7 @@ import {
 	preview,
 	shouldEmit,
 	supportsFocusReporting,
+	ToolFailures,
 	type DedupeState,
 } from "./deliver.ts";
 
@@ -77,12 +78,14 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 	let cfg = loadConfig();
 	const dedupe: DedupeState = {};
 	let focusAware = false;
-	let focused = true;
+	let focused: boolean | undefined;
 	let unsubscribe: (() => void) | undefined;
 	let project = "pi";
 	let finalResponse = "";
-	let lastFailure: string | undefined;
+	const failures = new ToolFailures();
 	let goalActive = false;
+	let sessionId: string | undefined;
+	const eventUnsubscribers: Array<() => void> = [];
 	let notifiedThisRun = false;
 
 	const deliver = (title: string, body: string): void => {
@@ -140,7 +143,8 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 				ctx.ui.notify(`Desktop notifications ${a === "on" ? "enabled" : "disabled"}.`, "info");
 			} else {
 				const focusInfo = focusAware
-					? `focus-aware — tab is currently ${focused ? "focused, so it will stay quiet" : "unfocused, so it will notify"}`
+					? focused === undefined ? "focus unknown — no report received yet, so it will notify"
+						: `focus-aware — tab is currently ${focused ? "focused, so it will stay quiet" : "unfocused, so it will notify"}`
 					: "this terminal doesn't report focus, so it always notifies";
 				ctx.ui.notify(
 					`Desktop notifications are ${cfg.enabled ? "on" : "off"} (${focusInfo}). Use \`/notify on|off|test\`.`,
@@ -152,6 +156,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 
 	const restoreGoal = (ctx: ExtensionContext) => {
 		goalActive = false;
+		sessionId = ctx.sessionManager.getSessionId();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== "goal-state") continue;
 			const state = decodeGoalEntry(entry.data);
@@ -163,15 +168,15 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 		restoreGoal(ctx);
 		project = projectOf(ctx.cwd, "pi");
 		finalResponse = "";
-		lastFailure = undefined;
+		failures.clear();
 		notifiedThisRun = false;
-		focused = true;
+		focused = undefined;
 		focusAware = ctx.mode === "tui" && supportsFocusReporting(process.env, !!process.stdout.isTTY);
 		unsubscribe?.();
 		unsubscribe = undefined;
 		if (focusAware) {
 			unsubscribe = ctx.ui.onTerminalInput((data: string) => {
-				const p = parseFocusReports(data, focused);
+				const p = parseFocusReports(data, focused ?? true);
 				if (!p.changed) return undefined;
 				focused = p.focused;
 				return p.data ? { data: p.data } : { consume: true };
@@ -186,6 +191,8 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 	});
 
 	pi.on("session_shutdown", () => {
+		for (const stop of eventUnsubscribers.splice(0)) stop();
+		sessionId = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
 		if (focusAware && process.stdout.isTTY) {
@@ -196,26 +203,24 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 			}
 		}
 		focusAware = false;
-		focused = true;
+		focused = undefined;
+		failures.clear();
 	});
 
 	pi.on("agent_start", () => {
 		finalResponse = "";
-		lastFailure = undefined;
+		failures.clear();
 		notifiedThisRun = false;
 	});
 
 	pi.on("tool_execution_start", (event, ctx) => {
+		failures.start(event.toolCallId, event.toolName, event.args);
 		if (event.toolName !== "questionnaire") return;
 		send(`${projectOf(ctx.cwd, project)}: input needed`, "The agent is waiting for your answer.");
 	});
 
 	pi.on("tool_execution_end", (event) => {
-		if (event.isError) {
-			lastFailure = preview(failureText(event.result) || `${event.toolName} failed`, 120);
-		} else {
-			lastFailure = undefined; // a later success clears the prior failure (recovered)
-		}
+		failures.end(event.toolCallId, event.isError ? preview(failureText(event.result) || `${event.toolName} failed`, 120) : undefined);
 	});
 
 	pi.on("agent_end", (event) => {
@@ -227,6 +232,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 		if (notifiedThisRun || goalActive) return;
 		notifiedThisRun = true;
 		project = projectOf(ctx.cwd, project);
+		const lastFailure = failures.latest();
 		if (lastFailure) send(`${project}: tool failed`, lastFailure);
 		else send(`${project}: done`, finalResponse || "Turn complete.");
 	});
@@ -234,10 +240,21 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 	// Quiet routine turn-complete pings while a goal runs; restoration above
 	// handles either extension load order and branches without a live event.
 	try {
-		pi.events.on(GOAL_CHANGED_EVENT, (data: unknown) => {
+		eventUnsubscribers.push(pi.events.on(GOAL_CHANGED_EVENT, (data: unknown) => {
 			const status = data && typeof data === "object" ? (data as { status?: unknown }).status : undefined;
 			goalActive = status === "active";
-		});
+		}));
+		// State restoration also emits goal:changed. Only transition events may
+		// notify, so reopening a blocked goal stays quiet in either load order.
+		eventUnsubscribers.push(pi.events.on(GOAL_ATTENTION_EVENT, (data: unknown) => {
+			if (!isGoalAttentionEvent(data) || data.sessionId !== sessionId) return;
+			const body = data.status === "blocked" ? "The goal is blocked and needs your attention."
+				: data.status === "stalled" ? "The goal stopped making progress and needs your attention."
+					: data.status === "budget_limited" ? "The goal reached its token budget. Review its progress."
+						: "The goal reached a provider usage limit. Review it before resuming.";
+			send(`${project}: ${data.status === "blocked" ? "input needed" : "goal needs attention"}`, body);
+			notifiedThisRun = true;
+		}));
 	} catch {
 		// no event bus / goal extension — always notify
 	}

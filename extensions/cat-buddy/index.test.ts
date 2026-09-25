@@ -104,6 +104,38 @@ test("docks on the current editor through Pi's public editor lifecycle", async (
   expect(currentFactory).toBe(previousFactory);
 });
 
+test("quit restores the shell cursor after editor teardown", async () => {
+  const pi = new MockPi();
+  let cursorVisible = true;
+  let cursorRestores = 0;
+  const terminal = { rows: 24, showCursor() { cursorVisible = true; cursorRestores++; } };
+  const tui = { terminal, requestRender() {} };
+  const baseFactory = () => ({ render: () => ["─".repeat(40), "prompt", "─".repeat(40)] });
+  let currentFactory: any = baseFactory;
+  const ctx = { mode: "tui", ui: {
+    getEditorComponent: () => currentFactory,
+    setEditorComponent(factory: any) {
+      currentFactory = factory;
+      // Model a late teardown hiding the cursor after Pi has stopped its TUI.
+      if (factory === baseFactory) cursorVisible = false;
+    },
+    notify() {},
+  } };
+
+  catBuddyExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  currentFactory(tui, editorTheme, keybindings).render(40);
+  await pi.emit("session_shutdown", { reason: "new" }, ctx);
+  expect(cursorVisible).toBe(false);
+  expect(cursorRestores).toBe(0);
+
+  await pi.emit("session_start", {}, ctx);
+  currentFactory(tui, editorTheme, keybindings).render(40);
+  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+  expect(cursorVisible).toBe(true);
+  expect(cursorRestores).toBe(1);
+});
+
 for (const tuiMode of ["regular", "fullscreen"] as const) {
   test(`fallback editor embeds Pi's working indicator in ${tuiMode} mode`, async () => {
     const pi = new MockPi();

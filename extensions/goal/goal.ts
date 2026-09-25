@@ -22,6 +22,7 @@ export interface GoalCheck {
 
 export interface GoalBlockerAudit {
   fingerprint: string;
+  conditionId?: string;
   description: string;
   evidence?: string;
   nextInput?: string;
@@ -37,6 +38,7 @@ export interface GoalState {
   progressSummary?: string;
   stallReason?: string;
   blockerAudit?: GoalBlockerAudit;
+  reconciliation?: { requestId: string; requestedAt: number };
   tokenBudget: number | null;
   tokensUsed: number;
   timeUsedMs: number;
@@ -54,6 +56,7 @@ export interface GoalEntry {
 }
 
 export interface BlockerInput {
+  conditionId?: string;
   description: string;
   evidence?: string;
   nextInput?: string;
@@ -208,7 +211,8 @@ export function recordGoalBlocker(
   if (!description) throw new Error("A blocked update requires a concrete blocker description.");
   const evidence = input.evidence?.trim() || undefined;
   const nextInput = input.nextInput?.trim() || undefined;
-  const fingerprint = blockerFingerprint(description, nextInput);
+  const conditionId = normalizeConditionId(input.conditionId);
+  const fingerprint = conditionId ? `condition:${conditionId}` : blockerFingerprint(description, nextInput);
   const previous = goal.blockerAudit;
 
   if (previous?.lastReportedTurn === turn) {
@@ -219,6 +223,7 @@ export function recordGoalBlocker(
   const blocked = count >= BLOCKED_AUDIT_TURNS;
   const blockerAudit: GoalBlockerAudit = {
     fingerprint,
+    ...(conditionId ? { conditionId } : {}),
     description,
     evidence,
     nextInput,
@@ -349,6 +354,14 @@ function blockerFingerprint(description: string, nextInput: string | undefined):
   return `${normalizeText(description)}\n${normalizeText(nextInput ?? "")}`;
 }
 
+function normalizeConditionId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[a-z0-9_.:-]{1,120}$/i.test(value.trim())) {
+    throw new Error("Blocker condition_id must be a stable identifier of 1–120 letters, digits, dots, underscores, colons or hyphens.");
+  }
+  return value.trim().toLowerCase();
+}
+
 function normalizeText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -388,6 +401,7 @@ function decodeGoal(value: unknown): GoalState | undefined {
         ? `Automatic continuation paused after ${NO_TOOL_TURN_LIMIT} runs made no tool call or terminal goal update.`
         : typeof goal.stallReason === "string" ? goal.stallReason : undefined,
       blockerAudit: legacyNoToolStall ? undefined : blockerAudit,
+      ...(goal.reconciliation === undefined ? {} : { reconciliation: decodeReconciliation(goal.reconciliation) }),
       tokenBudget: validateTokenBudget(goal.tokenBudget),
       tokensUsed: validCounter(goal.tokensUsed),
       timeUsedMs: validCounter(goal.timeUsedMs),
@@ -403,6 +417,12 @@ function decodeGoal(value: unknown): GoalState | undefined {
   }
 }
 
+function decodeReconciliation(value: unknown): NonNullable<GoalState["reconciliation"]> {
+  const pending = value as { requestId?: unknown; requestedAt?: unknown } | null;
+  if (!pending || typeof pending.requestId !== "string" || !pending.requestId || pending.requestId.length > 200) throw new Error("Invalid goal reconciliation");
+  return { requestId: pending.requestId, requestedAt: validTimestamp(pending.requestedAt) };
+}
+
 function decodeBlockerAudit(value: unknown): GoalBlockerAudit | undefined {
   if (!value || typeof value !== "object") return undefined;
   const audit = value as Partial<Record<keyof GoalBlockerAudit, unknown>>;
@@ -414,6 +434,7 @@ function decodeBlockerAudit(value: unknown): GoalBlockerAudit | undefined {
   ) return undefined;
   return {
     fingerprint: audit.fingerprint,
+    ...(audit.conditionId === undefined ? {} : { conditionId: normalizeConditionId(audit.conditionId as string) }),
     description: audit.description,
     evidence: typeof audit.evidence === "string" ? audit.evidence : undefined,
     nextInput: typeof audit.nextInput === "string" ? audit.nextInput : undefined,

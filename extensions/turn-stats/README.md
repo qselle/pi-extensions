@@ -5,9 +5,10 @@ Durable full-run summaries, separate from the per-response timing in turn-separa
 ## Usage
 
 `/turn-stats compact|full|hide` sets transcript telemetry for the current branch,
-including work-block separators. The choice survives reload. Compact is the
-default: one compact completion row, with no separate horizontal rule. Work-block
-rules also show recorded usage by default. Full adds detailed accounting; hide
+including opted-in step timing rules. The choice survives reload. Compact is the
+default: one compact completion row, with no separate horizontal rule.
+Intermediate rules are off by default; `/turn-separator on` enables quiet timing
+without repeating usage. Full adds detailed accounting; hide
 removes both displays while continuing to record accounting. `/turn-stats` still
 shows the full latest totals. Failed/interrupted runs use semantic colors.
 
@@ -69,7 +70,9 @@ and remain readable.
 ## Dependencies and limitations
 
 - Pi public lifecycle, custom entries, branch history and rendering APIs; no new
-  third-party dependencies. Uses shared footer and separator number formatting.
+  third-party dependencies. Uses shared footer and telemetry number formatting.
+- Publishes a session-scoped `turn-stats:response` event after each finalized
+  response, including absent measurements, for optional step timing rules.
 - No network calls, timers or prompt text in summary records. These custom entries
   are UI metadata and are not injected into model context.
 - Main-agent assistant usage only. Child agents and independent title/side-chat

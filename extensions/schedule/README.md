@@ -1,5 +1,9 @@
 # schedule
 
+When [`telegram`](../telegram/) is enabled, failed scheduled turns, failed wakeups, unreadable/unwritable queues, and unconfirmed completion saves send one attention card to the owning session's destination. Cards contain only task kind/ID and a fixed status explanation; scheduled prompts, local paths and raw error text stay in Pi. Successful completion and successful user pause/stop remain quiet. An interrupted turn sends no warning unless its paused state cannot be saved safely. Telegram is optional and `/telegram off` disables remote alerts without changing the schedule.
+
+If a turn completed but its completion could not be saved, inspect its outcome before retrying so work is not repeated. Queue errors stop further dispatch until the queue can be loaded again. These events use the public `schedule:attention` channel and never initiate an automatic retry.
+
 Stores project reminders and five-field cron prompts under Pi's agent directory.
 
 ## Usage

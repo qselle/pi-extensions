@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { UsageTotals } from "./format.ts";
 import { entryUsage, sumUsage, UsageTotalsCache } from "./usage.ts";
+import { usageRecord } from "../subagents/usage.ts";
 
 function assistant(input: number, output: number, cost: number) {
   return { type: "message", message: { role: "assistant", usage: { input, output, cacheRead: 0, cacheWrite: 0, cost: { total: cost } } } };
@@ -159,4 +160,65 @@ test("branch changes rebuild completeness metadata without retaining discarded m
   entries.pop();
   cache.invalidate();
   expect(cache.get(() => entries, "complete")).toEqual(complete);
+});
+
+function child(id: string, usage: Record<string, unknown> = {}) {
+  return { id, type: "custom", customType: "subagent-usage", data: {
+    version: 1, agentId: "worker", agentName: "Review", usage,
+  } };
+}
+
+test("adds persisted child deltas once and ignores repeated cumulative snapshots", () => {
+  const first = child("child-response-1", { input: 100, output: 20, cacheRead: 30, cacheWrite: 0, cost: 0.25 });
+  const second = child("child-response-2", { input: 100, output: 20, cacheRead: 30, cacheWrite: 0, cost: 0.25 });
+  const entries = [
+    assistant(10, 2, 0.01), first, first, JSON.parse(JSON.stringify(first)), second,
+    { type: "custom", customType: "subagent-state", data: { agents: [{ usage: { input: 200, cost: 0.5 } }] } },
+    { type: "custom_message", customType: "subagent-completion", details: { usage: { input: 200, cost: 0.5 } } },
+    { type: "message", message: { role: "toolResult", details: { action: "read", agents: [{ usage: { input: 200, cost: 0.5 } }] } } },
+  ];
+  expect(sumUsage(entries)).toEqual(covered({ input: 210, output: 42, cacheRead: 60, cacheWrite: 0, cost: 0.51 }, 3));
+});
+
+test("shared parent entries deduplicate by identity without collapsing equal independent responses", () => {
+  const first = { ...assistant(10, 2, 0.01), id: "parent-1" };
+  const sharedWithoutId = assistant(10, 2, 0.01);
+  expect(sumUsage([first, { ...first }, sharedWithoutId, sharedWithoutId, assistant(10, 2, 0.01)]))
+    .toEqual(covered({ input: 30, output: 6, cacheRead: 0, cacheWrite: 0, cost: 0.03 }, 3));
+});
+
+test("partial and malformed child metrics preserve honest coverage", () => {
+  expect(sumUsage([
+    assistant(0, 0, 0),
+    child("partial", { input: 7, output: -1, cacheRead: "9", cacheWrite: 0, cost: NaN }),
+    child("missing"),
+    { ...child("no-usage"), data: { version: 1, agentId: "worker", agentName: "Review" } },
+    { ...child("invalid-version"), data: { version: 999, agentId: "worker", agentName: "Review", usage: { input: 999 } } },
+    { ...child("invalid-identity"), data: { version: 1, usage: { input: 999 } } },
+  ])).toEqual(covered({ input: 7, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 4,
+    { input: 2, output: 3, cacheRead: 3, cacheWrite: 2, cost: 3 }));
+});
+
+test("new child records preserve omitted usage after JSON persistence instead of recording false zeroes", () => {
+  const record = usageRecord({ role: "assistant", usage: { input: 40, cacheRead: 0 } }, { id: "worker", name: "Review" });
+  const entry = JSON.parse(JSON.stringify({ id: "partial-child", type: "custom", customType: "subagent-usage", data: record }));
+  expect(sumUsage([entry])).toEqual(covered({ input: 40, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 1,
+    { output: 1, cacheWrite: 1, cost: 1 }));
+});
+
+test("reload and branch navigation use persisted child deltas without retaining later turns", () => {
+  const parent = assistant(1, 2, 0.01);
+  const first = child("first", { input: 100, output: 20, cacheRead: 30, cacheWrite: 4, cost: 0.1 });
+  const later = child("later", { input: 200, output: 40, cacheRead: 60, cacheWrite: 8, cost: 0.2 });
+  const original = sumUsage([parent, first]);
+  const cache = new UsageTotalsCache();
+  const saved = JSON.parse(JSON.stringify([parent, first]));
+  expect(cache.get(() => saved, "first")).toEqual(original);
+  saved.push(later);
+  const complete = cache.get(() => saved, "later");
+  expect(complete.input).toBe(301);
+  expect(complete.cost).toBeCloseTo(0.31);
+  expect(complete.responses).toBe(3);
+  expect(cache.get(() => saved.slice(0, 2), "first")).toEqual(original);
+  expect(new UsageTotalsCache().get(() => JSON.parse(JSON.stringify(saved)), "later")).toEqual(complete);
 });

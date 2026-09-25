@@ -1,19 +1,24 @@
+import { plainText } from "../../lib/transcript/model.ts";
+
 export const MAX_PLAN_ITEMS = 10;
 export const MAX_PLAN_NODES = 40;
 export const MAX_PLAN_DEPTH = 3;
 export const MAX_PLAN_STEP_CHARS = 240;
 export const MAX_PLAN_EXPLANATION_CHARS = 600;
+export const MAX_PLAN_DESCRIPTION_CHARS = 600;
 
 export type PlanItemStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
 export interface PlanItem {
   step: string;
+  description?: string;
   status: PlanItemStatus;
   children?: PlanItem[];
 }
 
 export interface PlanItemInput {
   step: string;
+  description?: string;
   status?: PlanItemStatus;
   children?: PlanItemInput[];
 }
@@ -44,16 +49,42 @@ export function createPlanState(now = Date.now()): PlanState {
 }
 
 export function replacePlan(
-  _current: PlanState,
+  current: PlanState,
   items: readonly PlanItemInput[],
   explanation?: string,
   now = Date.now(),
+  reset = false,
 ): PlanState {
+  const normalized = validatePlanItems(items);
+  const rationale = validateExplanation(explanation);
+  if (reset && !rationale) throw new Error("Resetting a plan requires an explanation of the user-requested objective change.");
+  if (!reset && planIsActive(current)) preserveCompletedMilestones(current.items, normalized);
   return {
-    items: validatePlanItems(items),
-    explanation: validateExplanation(explanation),
+    items: normalized,
+    explanation: rationale,
     updatedAt: now,
   };
+}
+
+function completedMilestones(items: readonly PlanItem[], parent: string[] = []): Map<string, string> {
+  const completed = new Map<string, string>();
+  for (const item of items) {
+    const path = [...parent, item.step];
+    if (item.children) {
+      for (const [key, label] of completedMilestones(item.children, path)) completed.set(key, label);
+    } else if (item.status === "completed") {
+      completed.set(JSON.stringify(path.map((step) => step.toLowerCase())), path.join(" › "));
+    }
+  }
+  return completed;
+}
+
+function preserveCompletedMilestones(previous: readonly PlanItem[], next: readonly PlanItem[]): void {
+  const retained = completedMilestones(next);
+  const missing = [...completedMilestones(previous)].filter(([key]) => !retained.has(key)).map(([, label]) => label);
+  if (missing.length) {
+    throw new Error(`Keep completed milestones in the unfinished plan: ${missing.join("; ")}. Preserve their group paths and completed status. Use reset only when the user changes the objective, with an explanation; /plan clear starts over explicitly.`);
+  }
 }
 
 export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
@@ -71,15 +102,19 @@ export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
       const fingerprint = step.toLowerCase();
       if (seen.has(fingerprint)) throw new Error(`Duplicate plan step: ${step}`);
       seen.add(fingerprint);
+      if (item.description !== undefined && typeof item.description !== "string") throw new Error("Plan step descriptions must be text.");
+      const description = plainText(item.description).trim().replace(/\s+/g, " ");
+      if (description && [...description].length > MAX_PLAN_DESCRIPTION_CHARS) throw new Error(`Plan step descriptions must be at most ${MAX_PLAN_DESCRIPTION_CHARS} characters.`);
+      const details = description ? { description } : {};
       if (item.children !== undefined) {
         if (!Array.isArray(item.children) || !item.children.length) throw new Error("Plan groups need at least one child step.");
         const children = normalize(item.children, depth + 1);
         const stats = planStats(children);
         const status: PlanItemStatus = stats.cancelled === stats.total ? "cancelled" : stats.finished === stats.total ? "completed" : stats.inProgress ? "in_progress" : "pending";
-        return { step, status, children };
+        return { step, ...details, status, children };
       }
       if (!isPlanItemStatus(item.status)) throw new Error(`Unknown plan status for step ${index + 1}: ${String(item.status)}`);
-      return { step, status: item.status };
+      return { step, ...details, status: item.status };
     });
   };
   const normalized = normalize(items, 1);

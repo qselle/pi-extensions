@@ -1,4 +1,5 @@
 import { deferredTools } from "../../lib/deferred-tools.ts";
+import { assertGoalIdentity, assertGoalReconciled, reconcileGoal, RECONCILIATION_STALL_REASON, requireGoalReconciliation, resumeGoalForRequest } from "./reconciliation.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
@@ -35,6 +36,9 @@ import {
 import {
   GOAL_COMPLETED_EVENT,
   GOAL_CHANGED_EVENT,
+  GOAL_ATTENTION_EVENT,
+  isGoalAttentionStatus,
+  type GoalAttentionEvent,
   createGoalCompletedEvent,
 } from "./events.ts";
 import {
@@ -67,7 +71,7 @@ interface GoalContextMessage {
 }
 
 interface GoalToolDetails {
-  action: "get" | "create" | "progress" | "update";
+  action: "get" | "create" | "progress" | "update" | "reconcile" | "resume" | "clear";
   goal?: GoalState;
   message?: string;
   blockerCount?: number;
@@ -80,6 +84,17 @@ const GoalCheckParameters = Type.Object({
   status: StringEnum(["pending", "in_progress", "complete", "cancelled"] as const),
 });
 const GetGoalParameters = Type.Object({});
+const GoalIdentityParameters = Type.Object({
+  goal_id: Type.String({ description: "Current goal id from get_goal." }),
+  request_id: Type.String({ description: "Current reconciliation request_id from get_goal or goal context." }),
+});
+const ReconcileGoalParameters = Type.Object({
+  goal_id: Type.String({ description: "Current goal id from get_goal." }),
+  request_id: Type.String({ description: "Current reconciliation request_id from get_goal or goal context." }),
+  action: StringEnum(["keep", "revise", "pause"] as const),
+  objective: Type.Optional(Type.String({ description: "For revise: the complete user-requested objective." })),
+  checks: Type.Optional(Type.Array(GoalCheckParameters, { maxItems: 8, description: "For revise: the complete checks list; [] if none." })),
+});
 const CreateGoalParameters = Type.Object({
   objective: Type.String({ description: "The complete objective explicitly requested by the user." }),
   checks: Type.Optional(Type.Array(GoalCheckParameters, { maxItems: 8 })),
@@ -94,14 +109,17 @@ const UpdateGoalParameters = Type.Object({
     description: "Mark the active goal complete after verification, or report a concrete repeated blocker.",
   }),
   blocker: Type.Optional(Type.String({ description: "Required for blocked: the concrete condition preventing progress." })),
+  condition_id: Type.Optional(Type.String({ description: "Stable blocker identifier, reused across runs even if wording or evidence changes. Change it only for a different underlying condition.", pattern: "^[a-zA-Z0-9_.:-]{1,120}$" })),
   evidence: Type.Optional(Type.String({ description: "Observed evidence for the blocker." })),
   next_input: Type.Optional(Type.String({ description: "User input or external change needed to unblock progress." })),
 });
 
 export default function goalExtension(pi: ExtensionAPI) {
-  const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal"]);
+  const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal", "reconcile_goal", "resume_goal", "clear_goal"]);
   let goal: GoalState | undefined;
   let sessionGeneration = 0;
+  let sessionOpen = false;
+  let currentRequestId: string | undefined;
   let continuationTimer: ReturnType<typeof setTimeout> | undefined;
   let nextRunIsContinuation = false;
   let currentRunIsContinuation = false;
@@ -114,6 +132,17 @@ export default function goalExtension(pi: ExtensionAPI) {
   let runStartedAt: number | undefined;
   let pendingCompletion: { goalId: string; completionId: string; completedAt: number } | undefined;
   const accountedMessages = new WeakSet<object>();
+  let savedGoalStatus: string | undefined;
+  let pendingAttention: GoalAttentionEvent | undefined;
+  let attentionQueued = false;
+
+  const assertCurrentRequest = (goalId: string, requestId: string) => {
+    if (!sessionOpen) throw new Error("The session changed. Read get_goal in the current session.");
+    assertGoalIdentity(goal, goalId);
+    if (!currentRequestId || requestId !== currentRequestId) {
+      throw new Error("The user request changed. Read get_goal and use its current request_id.");
+    }
+  };
 
   const overlayCard = registerOverlayCard({
     id: "goal",
@@ -135,9 +164,30 @@ export default function goalExtension(pi: ExtensionAPI) {
     pi.events.emit(GOAL_CHANGED_EVENT, { version: 1, status: goal?.status ?? "none" });
   };
 
-  const save = (_ctx?: ExtensionContext) => {
+  const save = (ctx?: ExtensionContext) => {
     persist();
     overlayCard.invalidate();
+    const nextStatus = goal ? `${goal.id}:${goal.status}` : undefined;
+    const changed = nextStatus !== savedGoalStatus;
+    savedGoalStatus = nextStatus;
+    if (!goal || !isGoalAttentionStatus(goal.status)) { pendingAttention = undefined; return; }
+    const sessionId = ctx?.sessionManager.getSessionId?.();
+    if (!changed || !sessionId) return;
+    pendingAttention = {
+      version: 1, attentionId: crypto.randomUUID(), sessionId, goalId: goal.id,
+      status: goal.status, turns: goal.turns, tokensUsed: goal.tokensUsed, tokenBudget: goal.tokenBudget,
+    };
+    if (attentionQueued) return;
+    attentionQueued = true;
+    const generation = sessionGeneration;
+    // One provider response can cross both budget and capacity limits. Report
+    // its final state once, and never deliver into a replacement session.
+    queueMicrotask(() => {
+      if (generation !== sessionGeneration) return;
+      attentionQueued = false;
+      const event = pendingAttention; pendingAttention = undefined;
+      if (event) pi.events.emit(GOAL_ATTENTION_EVENT, event);
+    });
   };
 
   const emitPendingCompletion = () => {
@@ -158,7 +208,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   const scheduleContinuation = (ctx: ExtensionContext) => {
     stopContinuationTimer();
-    if (ctx.mode !== "tui" || !goal || goal.status !== "active") return;
+    if (ctx.mode !== "tui" || !goal || goal.status !== "active" || goal.reconciliation) return;
     const expectedGoalId = goal.id;
 
     continuationTimer = setTimeout(() => {
@@ -167,6 +217,7 @@ export default function goalExtension(pi: ExtensionAPI) {
         !goal
         || goal.id !== expectedGoalId
         || goal.status !== "active"
+        || goal.reconciliation
         || !ctx.isIdle()
         || ctx.hasPendingMessages()
       ) return;
@@ -202,6 +253,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     checks: GoalCheck[] = [],
   ) => {
     goal = createGoal(objective, { tokenBudget, initialTurn, checks });
+    currentRequestId = undefined;
     if (initialTurn) {
       runGoalId = goal.id;
       runStartedAt ??= Date.now();
@@ -220,7 +272,8 @@ export default function goalExtension(pi: ExtensionAPI) {
       return;
     }
     stopContinuationTimer();
-    goal = setGoalStatus(goal, "paused");
+    goal = { ...setGoalStatus(goal, "paused"), reconciliation: undefined };
+    currentRequestId = undefined;
     save(ctx);
     ctx.ui.notify("Goal paused.", "info");
   };
@@ -230,7 +283,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       ctx.ui.notify("No goal is currently set.", "warning");
       return;
     }
-    if (goal.status === "budget_limited") {
+    if (goal.status === "budget_limited" || goal.tokenBudget !== null && goal.tokensUsed >= goal.tokenBudget) {
       ctx.ui.notify("The goal cannot resume because its token budget is exhausted.", "warning");
       return;
     }
@@ -239,10 +292,19 @@ export default function goalExtension(pi: ExtensionAPI) {
       return;
     }
     if (goal.status === "active") {
+      if (goal.reconciliation) {
+        goal = { ...goal, reconciliation: undefined, updatedAt: Date.now() };
+        currentRequestId = undefined;
+        save(ctx);
+        ctx.ui.notify("Continuing the current goal.", "info");
+        scheduleContinuation(ctx);
+        return;
+      }
       ctx.ui.notify("The goal is already active.", "info");
       return;
     }
-    goal = setGoalStatus(goal, "active");
+    goal = { ...setGoalStatus(goal, "active"), reconciliation: undefined };
+    currentRequestId = undefined;
     save(ctx);
     ctx.ui.notify("Goal resumed.", "info");
     scheduleContinuation(ctx);
@@ -260,6 +322,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (generation !== sessionGeneration || snapshot !== goal) return;
     stopContinuationTimer();
     goal = undefined;
+    currentRequestId = undefined;
     save(ctx);
     ctx.ui.notify("Goal cleared.", "info");
   };
@@ -276,7 +339,8 @@ export default function goalExtension(pi: ExtensionAPI) {
     if (generation !== sessionGeneration || snapshot !== goal) return;
     try {
       const wasActive = goal.status === "active";
-      goal = editGoalObjective(goal, edited);
+      goal = { ...editGoalObjective(goal, edited), reconciliation: undefined };
+      currentRequestId = undefined;
       save(ctx);
       ctx.ui.notify("Goal updated.", "info");
       if (!wasActive && goal.status === "active") scheduleContinuation(ctx);
@@ -422,24 +486,79 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "reconcile_goal",
+    label: "Reconcile Goal",
+    description: "Reconcile the latest user request with the existing goal. Keep unchanged scope, including status questions; revise with the complete requested objective and checks; pause only at the user's explicit request to pause or cancel this objective. Use current goal_id and request_id. Preserve identity, history, usage and budget; inactive goals remain inactive until explicitly resumed.",
+    parameters: ReconcileGoalParameters,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      assertCurrentRequest(params.goal_id, params.request_id);
+      assertGoalIdentity(goal, params.goal_id);
+      goal = reconcileGoal(goal, params.request_id, params.action, { objective: params.objective, checks: params.checks as GoalCheck[] | undefined });
+      if (goal.status !== "active") stopContinuationTimer();
+      save(ctx);
+      const message = params.action === "revise" ? "Goal revised" : params.action === "pause" ? "Goal paused" : "Goal scope kept";
+      return { content: [{ type: "text", text: `${message}. ${goalResponse(goal)}` }], details: { action: "reconcile", goal, message } satisfies GoalToolDetails };
+    },
+    renderCall: (_args, theme) => toolHeading("Reconciling goal", theme),
+    renderResult: (result, _options, theme) => renderGoalToolResult(result.details as GoalToolDetails | undefined, theme),
+  });
+
+  pi.registerTool({
+    name: "resume_goal",
+    label: "Resume Goal",
+    description: "Resume an inactive goal only when the user explicitly asks to continue it. Preserve its objective, identity, history, usage and budget. Call reconcile_goal with the returned request_id before autonomous continuation. An exhausted budget cannot resume.",
+    parameters: GoalIdentityParameters,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      assertCurrentRequest(params.goal_id, params.request_id);
+      assertGoalIdentity(goal, params.goal_id);
+      goal = resumeGoalForRequest(goal);
+      currentRequestId = goal.reconciliation!.requestId;
+      if (agentRunning && runGoalId !== goal.id) {
+        goal = beginGoalRun(goal, false);
+        runGoalId = goal.id;
+        runStartedAt = Date.now();
+      }
+      save(ctx);
+      return { content: [{ type: "text", text: `Goal resumed; reconcile the latest request before continuing. ${goalResponse(goal)}` }], details: { action: "resume", goal, message: "Goal resumed; reconciliation pending" } satisfies GoalToolDetails };
+    },
+    renderCall: (_args, theme) => toolHeading("Resuming goal", theme),
+    renderResult: (result, _options, theme) => renderGoalToolResult(result.details as GoalToolDetails | undefined, theme),
+  });
+
+  pi.registerTool({
+    name: "clear_goal",
+    label: "Clear Goal",
+    description: "Clear an inactive goal only when the user explicitly cancels or replaces that objective. History remains saved. For an active goal, reconcile the request with action pause first. Never clear to claim success; use update_goal complete after verification.",
+    parameters: GoalIdentityParameters,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      assertCurrentRequest(params.goal_id, params.request_id);
+      assertGoalIdentity(goal, params.goal_id);
+      if (goal.status === "active" || goal.status === "complete") throw new Error("Only an inactive unfinished goal can be cleared with clear_goal.");
+      stopContinuationTimer();
+      goal = undefined;
+      currentRequestId = undefined;
+      save(ctx);
+      return { content: [{ type: "text", text: goalResponse(goal) }], details: { action: "clear", message: "Goal cleared" } satisfies GoalToolDetails };
+    },
+    renderCall: (_args, theme) => toolHeading("Clearing goal", theme),
+    renderResult: (result, _options, theme) => renderGoalToolResult(result.details as GoalToolDetails | undefined, theme),
+  });
+
+  pi.registerTool({
     name: "report_goal_progress",
     label: "Report Goal Progress",
-    description: "Replace an active or stalled goal's concise progress-check list and summary. A progress report automatically revives a stalled goal because it proves implementation is continuing. Keep checks concrete and evidence-based, with at most one in progress. Use this only for an explicit goal, not ordinary tasks.",
+    description: "Replace an active, reconciled goal's concise progress checks and summary. Keep checks concrete and evidence-based, with at most one in progress. This never resumes an inactive goal; use resume_goal only at the user's explicit request.",
     parameters: ReportGoalProgressParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!goal) throw new Error("No goal is currently set.");
-      const resumed = goal.status === "stalled";
-      const reportableGoal = resumed ? setGoalStatus(goal, "active") : goal;
-      let nextGoal = reportGoalProgress(reportableGoal, params.checks as GoalCheck[], params.summary);
-      if (resumed && agentRunning && runGoalId !== nextGoal.id) {
-        nextGoal = beginGoalRun(nextGoal, false);
-        runGoalId = nextGoal.id;
-        runStartedAt = Date.now();
-      }
-      goal = nextGoal;
+      assertGoalReconciled(goal);
+      goal = reportGoalProgress(goal, params.checks as GoalCheck[], params.summary);
       save(ctx);
       const progress = goalCheckProgress(goal);
-      const message = `${resumed ? "Goal resumed; " : ""}goal progress ${progress.complete}/${progress.total}`;
+      const message = `Goal progress ${progress.complete}/${progress.total}`;
       return {
         content: [{ type: "text", text: `${message}. ${goalResponse(goal)}` }],
         details: { action: "progress", goal, message } satisfies GoalToolDetails,
@@ -456,9 +575,12 @@ export default function goalExtension(pi: ExtensionAPI) {
     parameters: UpdateGoalParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!goal) throw new Error("No goal is currently set.");
+      assertGoalReconciled(goal);
 
       if (params.status === "complete") {
         if (goal.status === "complete") throw new Error("The goal is already complete.");
+        const finishingBudgetedRun = goal.status === "budget_limited" && agentRunning && runGoalId === goal.id;
+        if (goal.status !== "active" && !finishingBudgetedRun) throw new Error("Only an active goal or its current budget-limited wrap-up can be completed. Resume only at the user's explicit request.");
         if (!goalChecksComplete(goal)) {
           const progress = goalCheckProgress(goal);
           throw new Error(`Cannot complete the goal: ${progress.total - progress.complete} progress check(s) remain unfinished.`);
@@ -480,6 +602,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       const outcome = recordGoalBlocker(
         goal,
         {
+          conditionId: params.condition_id,
           description: params.blocker ?? "",
           evidence: params.evidence,
           nextInput: params.next_input,
@@ -512,7 +635,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", () => {
-    if (!goal || (goal.status !== "active" && goal.status !== "stalled")) return;
+    if (!goal || goal.status === "complete") return;
     return {
       message: {
         customType: GOAL_CONTEXT_MARKER_TYPE,
@@ -539,7 +662,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     }
     if (latestGoalMarker === -1 && latestContinuationWake === -1) return;
 
-    const contextGoal = goal && (goal.status === "active" || goal.status === "stalled") ? goal : undefined;
+    const contextGoal = goal && goal.status !== "complete" ? goal : undefined;
     const transformed: typeof event.messages = [];
     for (let index = 0; index < event.messages.length; index++) {
       const message = event.messages[index]!;
@@ -570,8 +693,16 @@ export default function goalExtension(pi: ExtensionAPI) {
     return { messages: transformed };
   });
 
-  pi.on("input", () => {
+  pi.on("input", (event, ctx) => {
     stopContinuationTimer();
+    if (event.source === "interactive" || event.source === "rpc") {
+      nextRunIsContinuation = false;
+      if (goal && goal.status !== "complete") {
+        goal = requireGoalReconciliation(goal);
+        currentRequestId = goal.reconciliation!.requestId;
+        save(ctx);
+      }
+    }
     return { action: "continue" };
   });
 
@@ -646,7 +777,7 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("agent_settled", (_event, ctx) => {
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
-      if (goal.status === "active") {
+      if (goal.status === "active" && !goal.reconciliation) {
         if (currentRunIsContinuation) {
           goal = recordRunTools(goal, currentRunHadToolCall);
           if (!currentRunHadToolCall && currentRunRepeatedAssistant) {
@@ -671,6 +802,14 @@ export default function goalExtension(pi: ExtensionAPI) {
     }
     emitPendingCompletion();
 
+    if (goal?.reconciliation && goal.status === "active") {
+      goal = stallGoal(goal, RECONCILIATION_STALL_REASON);
+      save(ctx);
+      ctx.ui.notify("Goal stalled: the latest request was not reconciled. Use /goal resume to keep this objective, or /goal edit or clear.", "warning");
+    } else if (goal?.reconciliation) {
+      ctx.ui.notify("Goal reconciliation is still pending. Use /goal resume to keep this objective, or /goal edit or clear.", "info");
+    }
+
     agentRunning = false;
     runGoalId = undefined;
     runStartedAt = undefined;
@@ -685,6 +824,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   const restore = (ctx: ExtensionContext) => {
     controls.initialize();
     sessionGeneration++;
+    sessionOpen = true;
+    currentRequestId = undefined;
     goal = undefined;
     lastAssistantText = undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -697,6 +838,17 @@ export default function goalExtension(pi: ExtensionAPI) {
       if (restored) goal = restored.goal ?? undefined;
     }
     if (goal) controls.activate();
+    savedGoalStatus = goal ? `${goal.id}:${goal.status}` : undefined;
+    pendingAttention = undefined;
+    attentionQueued = false;
+    // Keep pending work across reload/branch changes while invalidating tool
+    // calls prepared against the previous live session.
+    if (goal?.reconciliation) {
+      goal = { ...goal, reconciliation: { ...goal.reconciliation, requestId: crypto.randomUUID() }, updatedAt: Date.now() };
+      currentRequestId = goal.reconciliation!.requestId;
+      save(ctx);
+      ctx.ui.notify("Goal reconciliation is pending. Use /goal resume to keep this objective, or /goal edit or clear.", "info");
+    }
     pi.events.emit(GOAL_CHANGED_EVENT, { version: 1, status: goal?.status ?? "none" });
     agentRunning = false;
     runGoalId = undefined;
@@ -716,6 +868,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   pi.on("session_compact", () => overlayCard.invalidate());
   pi.on("session_shutdown", () => {
     sessionGeneration++;
+    sessionOpen = false;
+    currentRequestId = undefined;
     stopContinuationTimer();
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
@@ -732,7 +886,7 @@ function toolHeading(label: string, theme: Theme, detail?: string) {
 }
 
 function renderGoalToolResult(details: GoalToolDetails | undefined, theme: Theme) {
-  if (!details?.goal) return new Text(theme.fg("dim", "No goal is set"), 0, 0);
+  if (!details?.goal) return new Text(theme.fg("dim", details?.message ?? "No goal is set"), 0, 0);
   const state = details.goal;
   const title = details.message ?? `Goal ${state.status.replace("_", " ")}`;
   const usage = state.tokenBudget === null

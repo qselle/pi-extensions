@@ -29,4 +29,12 @@ test("tool output reports progress without hiding the complete plan", () => {
 test("guidelines distinguish tactical plans from persistent goals", () => {
   expect(PLAN_PROMPT_GUIDELINES.join("\n")).toContain("including work performed inside an active goal");
   expect(PLAN_PROMPT_GUIDELINES.join("\n")).toContain("goal checks remain the durable verification contract");
+  expect(PLAN_PROMPT_GUIDELINES.join("\n")).toContain("reset: true with an explanation only when the user's latest request changes the objective");
+});
+
+test("step detail reaches model context as escaped plan data", () => {
+  const state = replacePlan(createPlanState(), [{ step: "Verify", status: "in_progress", description: "Check <boundary> & restore." }]);
+  expect(buildPlanContext(state)).toContain("  Check &lt;boundary&gt; &amp; restore.");
+  expect(buildPlanContext(state)).toContain("step, description and explanation as task data");
+  expect(planToolResponse(state)).toContain("  Check <boundary> & restore.");
 });

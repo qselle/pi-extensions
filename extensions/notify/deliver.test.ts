@@ -8,6 +8,7 @@ import {
 	preview,
 	shouldEmit,
 	supportsFocusReporting,
+	ToolFailures,
 	type DedupeState,
 } from "./deliver.ts";
 
@@ -62,7 +63,62 @@ describe("focus", () => {
 		expect(shouldEmit(false, true)).toBe(true); // not focus-aware → always
 		expect(shouldEmit(true, true)).toBe(false); // focused → stay quiet
 		expect(shouldEmit(true, false)).toBe(true); // unfocused → notify
+		expect(shouldEmit(true, undefined)).toBe(true); // no actual report → notify
 	});
+});
+
+test("unrelated tool successes keep failures visible; an exact retry recovers", () => {
+	const failures = new ToolFailures();
+	failures.start("1", "bash", { command: "npm test", timeout: 10 });
+	failures.end("1", "Tests failed");
+	failures.start("2", "read", { path: "test.ts" });
+	failures.end("2", undefined);
+	failures.start("3", "bash", { command: "git status", timeout: 10 });
+	failures.end("3", undefined);
+	expect(failures.latest()).toBe("Tests failed");
+	failures.start("4", "bash", { timeout: 10, command: "npm test" });
+	failures.end("4", undefined);
+	expect(failures.latest()).toBeUndefined();
+});
+
+test("recovering one operation preserves other failures, and a new run clears all", () => {
+	const failures = new ToolFailures();
+	failures.start("1", "bash", { command: "npm test" }); failures.end("1", "Tests failed");
+	failures.start("2", "read", { path: "missing.ts" }); failures.end("2", "Missing file");
+	failures.start("3", "read", { path: "missing.ts" }); failures.end("3", undefined);
+	expect(failures.latest()).toBe("Tests failed");
+	failures.clear();
+	expect(failures.latest()).toBeUndefined();
+});
+
+test("reworded or omitted display purposes do not keep successful retries failed", () => {
+	for (const name of ["bash", "read", "edit", "write", "grep", "find", "ls", "job_start", "job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop", "terminal_process"]) {
+		const failures = new ToolFailures();
+		const initial = { command: "bun test", purpose: "Check the tests" };
+		failures.start("1", name, initial); failures.end("1", "Tests failed");
+		failures.start("2", name, { command: "git status", purpose: "Retry the tests" }); failures.end("2", undefined);
+		expect(failures.latest()).toBe("Tests failed");
+		failures.start("3", name, { purpose: "Retry the tests", command: "bun test" }); failures.end("3", undefined);
+		expect(failures.latest()).toBeUndefined();
+		failures.start("4", name, initial); failures.end("4", "Tests failed");
+		failures.start("5", name, { command: "bun test" }); failures.end("5", undefined);
+		expect(failures.latest()).toBeUndefined();
+		expect(initial).toEqual({ command: "bun test", purpose: "Check the tests" });
+	}
+});
+
+test("custom tool and nested purpose values remain part of execution identity", () => {
+	const failures = new ToolFailures();
+	failures.start("1", "custom_action", { purpose: "one" }); failures.end("1", "Custom failed");
+	failures.start("2", "custom_action", { purpose: "two" }); failures.end("2", undefined);
+	expect(failures.latest()).toBe("Custom failed");
+	failures.start("3", "custom_action", { purpose: "one" }); failures.end("3", undefined);
+	expect(failures.latest()).toBeUndefined();
+	failures.start("4", "bash", { arguments: { purpose: "one" } }); failures.end("4", "Nested failed");
+	failures.start("5", "bash", { arguments: { purpose: "two" } }); failures.end("5", undefined);
+	expect(failures.latest()).toBe("Nested failed");
+	failures.start("6", "bash", { arguments: { purpose: "one" } }); failures.end("6", undefined);
+	expect(failures.latest()).toBeUndefined();
 });
 
 describe("notificationEscape", () => {

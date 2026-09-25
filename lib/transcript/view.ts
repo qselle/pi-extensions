@@ -6,6 +6,12 @@ import type { TranscriptBlock } from "./model.ts";
 import { TranscriptSearch, type SearchMatch } from "./search.ts";
 
 interface RenderedBlock { block: TranscriptBlock; width: number; lines: string[]; search?: TranscriptSearch }
+export interface TranscriptNavigation {
+  previous(): void;
+  next(): void;
+  hint(): string;
+  position?(): string;
+}
 
 export const TRANSCRIPT_OVERLAY_OPTIONS = {
   anchor: "center", width: "100%", maxHeight: "90%",
@@ -45,13 +51,14 @@ export class TranscriptView implements Component, Focusable {
 
   constructor(
     private readonly load: () => TranscriptBlock[],
-    private readonly scope: string,
+    private readonly scope: string | (() => string),
     private readonly theme: Theme,
     private readonly keys: KeybindingsManager,
     private readonly tui: TUI,
     private readonly done: () => void,
     initialQuery = "",
     private readonly presentation: "live" | "snapshot" = "live",
+    private readonly navigation?: TranscriptNavigation,
   ) {
     this.follow = presentation === "live";
     this.query = initialQuery;
@@ -103,6 +110,12 @@ export class TranscriptView implements Component, Focusable {
     } else if (this.keys.matches(data, "tui.select.cancel") || matchesKey(data, "q")) {
       this.close();
       return;
+    } else if (this.navigation && matchesKey(data, "left")) {
+      this.navigation.previous();
+      return;
+    } else if (this.navigation && matchesKey(data, "right")) {
+      this.navigation.next();
+      return;
     } else if (matchesKey(data, "/")) {
       this.previousQuery = this.query;
       this.searching = true;
@@ -145,8 +158,15 @@ export class TranscriptView implements Component, Focusable {
     this.maxScroll = Math.max(0, this.lines.length - bodyHeight);
     this.scroll = this.follow ? this.maxScroll : Math.min(this.scroll, this.maxScroll);
     const count = this.query ? ` · ${this.matches.length ? this.matchIndex + 1 : 0}/${this.matches.length} matches` : "";
-    const header = this.theme.fg("accent", this.theme.bold(this.presentation === "snapshot" ? this.scope : `Transcript · ${this.scope}`))
-      + this.theme.fg("muted", `${this.follow ? " · following" : ""}${count}`);
+    const scope = typeof this.scope === "function" ? this.scope() : this.scope;
+    const headerWidth = Math.max(0, width - 4);
+    // Keep search counts intact and omit optional state as a whole. A narrow
+    // frame should never end in an ambiguous fragment such as " · fol".
+    const countLabel = visibleWidth(count) + 8 <= headerWidth ? count : "";
+    const label = truncateToWidth(this.presentation === "snapshot" ? scope : `Transcript · ${scope}`,
+      Math.max(0, headerWidth - visibleWidth(countLabel)), "…");
+    const following = this.follow && visibleWidth(label + countLabel + " · following") <= headerWidth ? " · following" : "";
+    const header = this.theme.fg("accent", this.theme.bold(label)) + this.theme.fg("muted", countLabel + following);
     if (height === 1) return [this.frameEdge(header, width, "top")];
     const rows = this.lines.slice(this.scroll, this.scroll + bodyHeight).map((line, offset) => {
       const match = this.matches[this.matchIndex];
@@ -169,7 +189,8 @@ export class TranscriptView implements Component, Focusable {
   private navigationHints(width: number): string {
     const close = `q/${keyLabel(this.keys, "tui.select.cancel", "Esc")} close`;
     const hints = [
-      visibleWidth(close) <= width ? close : "q close", "/ search",
+      visibleWidth(close) <= width ? close : "q close",
+      ...(this.navigation ? [this.navigation.hint()] : []), "/ search",
       `${keyLabel(this.keys, "tui.select.up", "↑")}${keyLabel(this.keys, "tui.select.down", "↓")} scroll`,
       "n/N matches",
       ...(this.presentation === "snapshot" ? ["End bottom"] : [`t thinking ${this.showThinking ? "on" : "off"}`, "End follow"]),

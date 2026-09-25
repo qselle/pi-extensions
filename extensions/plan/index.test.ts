@@ -50,7 +50,7 @@ const { default: planExtension } = await import("./index.ts");
 const { default: goalExtension } = await import("../goal/index.ts");
 const { OverlayStackView } = await import("../overlay-stack/index.ts");
 const { createPlanState, replacePlan } = await import("./plan.ts");
-const { PlanOverlayCard, PlanPanel } = await import("./ui.ts");
+const { PlanOverlayCard, PlanPanel, PlanToolResult, renderPlanSummary, renderPlanText } = await import("./ui.ts");
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -259,6 +259,33 @@ test("keeps the card and full panel inside responsive widths", () => {
   }
 });
 
+test("step descriptions follow selection and expand without making the receipt verbose", () => {
+  const description = "Check reload, cancellation and restored branches.";
+  const plan = replacePlan(createPlanState(), [
+    { step: "Implement", status: "completed", description: "Keep the existing API." },
+    { step: "Verify", status: "in_progress", description },
+  ]);
+  const panel = new PlanPanel(plan, plainTheme, () => {});
+  expect(panel.render(80).join("\n")).toContain(description);
+  panel.handleInput("up");
+  expect(panel.render(80).join("\n")).toContain("Keep the existing API.");
+  expect(panel.render(80).join("\n")).not.toContain(description);
+  expect(new PlanToolResult(plan, plainTheme).render(80)).toHaveLength(1);
+  expect(renderPlanSummary(plan, 80, plainTheme)).not.toContain(description);
+  expect(new PlanToolResult(plan, plainTheme, true).render(80).join("\n")).toContain(description);
+  expect(renderPlanText(plan)).toContain(description);
+  const long = replacePlan(plan, plan.items.map((item) => ({ ...item, description: "Verification detail. ".repeat(28) })));
+  for (const width of [0, 1, 2, 24, 40, 80]) {
+    for (const height of [5, 10, 15, 30]) {
+      const lines = new PlanPanel(long, plainTheme, () => {}, () => {}, () => height).render(width);
+      expect(lines.length).toBeLessThanOrEqual(Math.floor(height * .8));
+      expect(lines.every((line: string) => line.length <= width)).toBe(true);
+    }
+    expect(new PlanToolResult(long, plainTheme, true).render(width).every((line: string) => line.length <= width)).toBe(true);
+  }
+  expect(new PlanPanel(long, plainTheme, () => {}).render(40).join("\n")).toContain("More details: /plan status");
+});
+
 test("nested plans persist as version two and restore branch-local leaf progress", async () => {
   const { pi, ctx } = harness();
   await pi.emit("session_start", {}, ctx);
@@ -283,7 +310,7 @@ test("a late clear confirmation cannot remove a replaced plan", async () => {
   let answer!: (value: boolean) => void;
   ctx.ui.confirm = () => new Promise<boolean>((resolve) => { answer = resolve; });
   const clearing = pi.commands.get("plan").handler("clear", ctx);
-  await update.execute("new", { plan: [{ step: "New work", status: "in_progress" }] });
+  await update.execute("new", { plan: [{ step: "New work", status: "in_progress" }], reset: true, explanation: "The user requested a different objective" });
   answer(true); await clearing;
   expect(pi.entries.at(-1).data.plan.items[0].step).toBe("New work");
   await pi.emit("session_shutdown", {}, ctx);
@@ -352,4 +379,47 @@ test("malformed display entries keep the default and failed saves do not change 
   } finally {
     await pi.emit("session_shutdown", {}, ctx);
   }
+});
+
+test("rejected replacements preserve saved state and user clear allows a new plan", async () => {
+  const { pi, ctx, notifications } = harness();
+  const update = pi.tools.get("update_plan");
+  try {
+    await pi.emit("session_start", {}, ctx);
+    await update.execute("initial", activePlan);
+    const snapshot = JSON.stringify(pi.entries);
+    const newWork = { plan: [{ step: "New work", status: "in_progress" }] };
+    await expect(update.execute("narrowed", newWork)).rejects.toThrow("Keep completed milestones");
+    await expect(update.execute("missing reason", { ...newWork, reset: true })).rejects.toThrow("requires an explanation");
+    expect(JSON.stringify(pi.entries)).toBe(snapshot);
+    ctx.ui.confirm = async () => false;
+    await pi.commands.get("plan").handler("clear", ctx);
+    await expect(update.execute("still guarded", newWork)).rejects.toThrow("Keep completed milestones");
+    ctx.ui.confirm = async () => true;
+    await pi.commands.get("plan").handler("clear", ctx);
+    expect(notifications.at(-1)).toBe("Plan cleared.");
+    await update.execute("new objective", newWork);
+    expect(pi.entries.at(-1).data.plan.items).toEqual(newWork.plan);
+    expect(pi.entries[0].data.plan.items[0].step).toBe("Research behavior");
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("continuity follows restored branch state and an explicit reset remains append-only", async () => {
+  const { pi, ctx } = harness();
+  const update = pi.tools.get("update_plan");
+  try {
+    await update.execute("initial", activePlan);
+    const originalBranch = [...pi.entries];
+    await update.execute("later", { plan: activePlan.plan.map((item, index) => ({ ...item, status: index < 2 ? "completed" : "in_progress" })) });
+    await expect(update.execute("drop later milestone", activePlan)).rejects.toThrow("Implement extension");
+    await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => JSON.parse(JSON.stringify(originalBranch)) } });
+    await update.execute("old branch", activePlan);
+    await expect(update.execute("drop restored milestone", { plan: activePlan.plan.slice(1) })).rejects.toThrow("Research behavior");
+    await update.execute("changed objective", {
+      reset: true, explanation: "User requested the documentation project instead",
+      plan: [{ step: "Write documentation", status: "in_progress" }],
+    });
+    expect(pi.entries.at(-1).data.plan.explanation).toContain("documentation project");
+    expect(pi.entries[0].data.plan.items[0].step).toBe("Research behavior");
+  } finally { await pi.emit("session_shutdown", {}, ctx); }
 });

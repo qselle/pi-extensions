@@ -1,4 +1,5 @@
 import type { UsageTotals } from "./format.ts";
+import { decodeUsageRecord, SUBAGENT_USAGE_ENTRY_TYPE } from "../subagents/usage.ts";
 
 interface UsageLike {
   input?: number;
@@ -8,10 +9,14 @@ interface UsageLike {
   cost?: { total?: number };
 }
 
-/** Include assistant, nested tool, summary, and compaction usage. */
+/** Include parent calls and persisted child response deltas, never child snapshots. */
 export function entryUsage(entry: unknown): UsageLike | undefined {
   if (!entry || typeof entry !== "object") return undefined;
-  const candidate = entry as { type?: string; message?: { role?: string; usage?: UsageLike }; usage?: UsageLike };
+  const candidate = entry as { type?: string; customType?: string; data?: unknown; message?: { role?: string; usage?: UsageLike }; usage?: UsageLike };
+  if (candidate.type === "custom" && candidate.customType === SUBAGENT_USAGE_ENTRY_TYPE) {
+    const record = decodeUsageRecord(candidate.data);
+    return record ? { ...record.usage, cost: { total: record.usage.cost } } : undefined;
+  }
   if (candidate.type === "message") {
     const role = candidate.message?.role;
     return role === "assistant" || role === "toolResult" ? candidate.message?.usage : undefined;
@@ -24,12 +29,22 @@ export function sumUsage(entries: Iterable<unknown>): UsageTotals {
   const fields = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
   const known = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   const missing = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const seenIds = new Set<string>();
+  const seenEntries = new WeakSet<object>();
   let responses = 0;
   for (const entry of entries) {
     const usage = entryUsage(entry);
     // An assistant or standalone usage entry represents a model call even when
     // its usage is missing. Ordinary tools and custom summaries need not call a model.
     if (!usage && !expectsUsage(entry)) continue;
+    // The same append-only entry can be shared by branch projections. Deduplicate
+    // identity only: equal usage from two distinct child responses is real work.
+    if (entry && typeof entry === "object") {
+      const id = (entry as { id?: unknown }).id;
+      if (seenEntries.has(entry) || typeof id === "string" && id !== "" && seenIds.has(id)) continue;
+      seenEntries.add(entry);
+      if (typeof id === "string" && id !== "") seenIds.add(id);
+    }
     responses++;
     for (const field of fields) {
       const value = field === "cost" ? usage?.cost?.total : usage?.[field];

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { fileUri as sharedFileUri, link as osc8Link, toAbsolutePath } from "../../lib/links.ts";
 import { PlainOutput } from "../../lib/output.ts";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export type ToolName = "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls";
 
@@ -9,6 +10,24 @@ const HOME = homedir();
 export function shortPath(p: string): string {
 	if (!p) return "";
 	return p === HOME || p.startsWith(`${HOME}/`) ? `~${p.slice(HOME.length)}` : p;
+}
+
+/** Keep the identifying filename and extension when a path must fit one row. */
+export function compactPath(path: string, width: number): string {
+	const value = labelText(shortPath(path));
+	const budget = Math.max(0, Math.floor(width));
+	if (visibleWidth(value) <= budget) return value;
+	if (budget < 2) return budget ? "…" : "";
+	const split = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+	const name = value.slice(split + 1);
+	const nameWidth = visibleWidth(name);
+	if (split >= 0 && nameWidth + 2 <= budget) {
+		return `${truncateToWidth(value.slice(0, split), budget - nameWidth - 2, "")}…${value[split]}${name}`;
+	}
+	const head = Math.ceil((budget - 1) / 2);
+	const tail = budget - head - 1;
+	const subject = name || value;
+	return truncateToWidth(subject, head, "") + "…" + sliceByColumn(subject, Math.max(0, visibleWidth(subject) - tail), tail, true);
 }
 
 export function firstLine(s: string): string {

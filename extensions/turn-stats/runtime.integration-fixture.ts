@@ -25,6 +25,7 @@ try {
       extensionFactories: [extension, separator, (pi) => { pi.registerTool({ name: "fixture_tool", label: "Fixture", description: "Local fixture", parameters: Type.Object({}), execute: async () => { await Bun.sleep(100); return { content: [{ type: "text", text: "done" }], details: {} }; } }); }] } });
   ({ session } = await createAgentSessionFromServices({ services, sessionManager: manager, model }));
   await session.bindExtensions({ onError: error => extensionErrors.push(error) });
+  await session.prompt("/turn-separator on");
   session.setActiveToolsByName(["fixture_tool"]);
   let calls = 0;
   session.agent.streamFunction = async (_model, _context, options) => {
@@ -89,6 +90,8 @@ try {
   await session.prompt("/turn-stats hide");
   assert.deepEqual(renderer(summary as any, { expanded: false } as any, { fg: (_: string, text: string) => text } as any)!.render(120), []);
   const work = manager.getBranch().find(entry => entry.type === "custom" && entry.customType === "worked-for-separator")!;
+  assert(work, "explicitly enabled step timing must persist across a native tool loop");
+  assert(Number.isFinite((work as any).data.timing?.ttftMs), "step timing must come from the shared finalized-response sample");
   const renderWork = () => session!.extensionRunner.getEntryRenderer("worked-for-separator")!(work as any, { expanded: false } as any, { fg: (_: string, text: string) => text } as any)!.render(120);
   assert.deepEqual(renderWork(), []);
   await session.reload();
@@ -97,9 +100,13 @@ try {
   assert.deepEqual(renderWork(), []);
   await session.prompt("/turn-stats compact");
   assert(restoredRenderer(summary as any, { expanded: false } as any, { fg: (_: string, text: string) => text } as any)!.render(120).length > 0);
-  assert(renderWork().join("\n").includes("$"), "compact Worked for rules include usage");
+  assert(renderWork().join("\n").includes("first token"), "optional rules retain per-response timing");
+  assert(!renderWork().join("\n").includes("$"), "optional rules must not duplicate whole-turn usage");
   await session.prompt("/turn-stats full");
-  assert(renderWork().join("\n").includes("$"));
+  assert(!renderWork().join("\n").includes("$"));
+  await session.prompt("/turn-separator off");
+  await session.reload();
+  assert.deepEqual(renderWork(), [], "disabled step timing remains hidden after reload, including saved entries");
   assert.equal(calls, 2);
   assert.deepEqual(extensionErrors, []);
   assert.equal(network, 0);
