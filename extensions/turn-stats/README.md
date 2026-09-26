@@ -15,23 +15,24 @@ shows the full latest totals. Failed/interrupted runs use semantic colors.
 Every settled agent run with responses or tools adds a compact transcript entry:
 
 ```text
- Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88% · 48 tokens/s · first token 320ms · 3 replies · 2 tools · finished 14:32:05
+ 14:32 · Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88% · 48 tokens/s · first token 320ms · 3 replies · 2 tools
 ```
 
-`Turn 42s` measures the whole agent run, including its replies, tool work and
-provider waits. It is separate from each `Worked for` block. `finished 14:32:05`
-marks when that run completed, not its duration or the current time.
+`14:32` leads with the saved local completion time. `Turn 42s`
+measures the whole agent run, including its replies, tool work and provider
+waits. It is separate from each `Worked for` block.
 Internal restarts for retries, compaction or pre-settlement continuation stay in
 the same turn until Pi emits settlement; they do not reset its totals or clock.
 
 The turn duration uses one accent color, labels are muted, values use normal text, and
 separators are dim. Warning/error colors are reserved for partial usage,
-interruptions and failures. Compact stays exactly one row at every positive terminal width. It drops
-the clock, cache counters, response/tool counts, latency, rate, cache hit, tokens,
-then cost as space runs out; duration and failure indicators have highest priority.
+interruptions and failures. Compact stays exactly one row at every positive terminal width.
+The clock leads when it fits alongside duration, input/output and cost. Narrower
+rows show that core without the clock. Other metrics yield as space runs out;
+duration and failure indicators have highest priority.
 Expand the entry or use `/turn-stats full` for every metric, wrapped to the viewport.
 The optional clock uses the local timezone and saved completion time in 24-hour
-`HH:mm:ss` form. Elapsed duration uses a separate monotonic clock. Older entries use Pi's
+`HH:mm` form. Elapsed duration uses a separate monotonic clock. Older entries use Pi's
 saved entry timestamp when available and omit the clock when it is unknown.
 
 `in` is fresh input and `out` is output. Wide views also show `cache read` and

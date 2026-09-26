@@ -8,7 +8,7 @@ import { FIELDS, summaryText, type Summary, type Totals } from "./stats.ts";
 export function completionClock(summary: Summary, entryTimestamp?: string): string | undefined {
   const timestamp = summary.endedAt ?? (entryTimestamp ? Date.parse(entryTimestamp) : NaN);
   if (!Number.isFinite(timestamp) || timestamp < 0 || timestamp > 8.64e15) return;
-  return new Intl.DateTimeFormat(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(timestamp);
+  return new Intl.DateTimeFormat(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }
 
 function amount(total: Totals, responses: number, formatter: (value: number) => string = formatTokens): string {
@@ -24,11 +24,11 @@ function completionGroups(summary: Summary, theme: Theme, entryTimestamp?: strin
   const field = (label: string, value: string, color: Parameters<Theme["fg"]>[0] = "text") =>
     `${theme.fg("muted", label)} ${styledValue(value, color)}`;
   const groups: string[] = [];
+  const clock = completionClock(summary, entryTimestamp);
+  if (clock) groups.push(styledValue(clock));
+  groups.push(field("turn duration", summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000), "accent"));
   if (summary.outcome !== "settled") groups.push(theme.fg(summary.outcome === "error" ? "error" : "warning", summary.outcome));
   if (summary.failedTools) groups.push(theme.fg("error", `${summary.failedTools} failed tool${summary.failedTools === 1 ? "" : "s"}`));
-  const clock = completionClock(summary, entryTimestamp);
-  if (clock) groups.push(field("finished", clock));
-  groups.push(field("turn duration", summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000), "accent"));
   groups.push(`${styledValue(String(summary.responses))} ${label(summary.responses === 1 ? "reply" : "replies")}`, `${styledValue(String(summary.tools))} ${label(summary.tools === 1 ? "tool" : "tools")}`);
   const timing = summary.timing;
   const coverage = (count: number) => label(`(${count}/${summary.responses} replies)`);
@@ -71,29 +71,36 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
   const hit = !promptComplete ? "?" : prompt > 0 ? `${Math.round(100 * usage.cacheRead.known / prompt)}%` : "—";
   const value = (text: string, color: Parameters<Theme["fg"]>[0] = "text") => theme.fg(text.startsWith("≥") ? "warning" : text.includes("?") || text === "—" ? "muted" : color, text);
   const field = (label: string, text: string) => `${theme.fg("muted", label)} ${value(text)}`;
+  const padding = width > 2 ? 1 : 0;
+  const budget = width - padding * 2;
+  const turn = value(`Turn ${summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000)}`, "accent");
+  const clock = completionClock(summary, entryTimestamp);
+  const leading = clock ? `${value(clock)}${dim(" · ")}${turn}` : turn;
+  const tokens = `${field("in", amount(usage.input, summary.responses))}${dim(" · ")}${field("out", amount(usage.output, summary.responses))}`;
+  const cost = value(amount(usage.cost, summary.responses, formatCost).replace(/^\?$/, "$?"));
+  // Show the clock first when the clock, turn duration, tokens and cost all fit.
+  // On a narrower screen, retain the useful core instead of a clipped clock.
+  const coreWidth = visibleWidth(leading) + 6 + visibleWidth(tokens) + visibleWidth(cost);
+  const identity = clock && coreWidth <= budget ? leading : turn;
   const cells: { text: string; priority: number }[] = [];
+  cells.push({ text: identity, priority: 0 });
   if (summary.outcome !== "settled") cells.push({ text: theme.fg(summary.outcome === "error" ? "error" : "warning", summary.outcome), priority: 0 });
   if (summary.failedTools) cells.push({ text: theme.fg("error", `${summary.failedTools} failed tool${summary.failedTools === 1 ? "" : "s"}`), priority: 0 });
   cells.push(
-    { text: value(`Turn ${summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000)}`, "accent"), priority: 0 },
-    { text: `${field("in", amount(usage.input, summary.responses))}${dim(" · ")}${field("out", amount(usage.output, summary.responses))}`, priority: 20 },
-    { text: value(amount(usage.cost, summary.responses, formatCost).replace(/^\?$/, "$?")), priority: 10 },
+    { text: tokens, priority: 20 },
+    { text: cost, priority: 10 },
   );
   if (prompt > 0 || !promptComplete) cells.push({ text: field("cache hit", hit), priority: 30 });
   const timing = summary.timing;
   const coverage = (count: number) => count < summary.responses ? theme.fg("muted", ` (${count}/${summary.responses} replies)`) : "";
   if (timing?.streamSamples) cells.push({ text: `${value(formatRate(timing.outputTokens / (timing.streamMs / 1000)))} ${theme.fg("muted", "tokens/s")}${coverage(timing.streamSamples)}`, priority: 40 });
-  if (timing?.latencySamples) cells.push({ text: `${field("first token", formatLatency(timing.latencyMs / timing.latencySamples))}${coverage(timing.latencySamples)}`, priority: 50 });
+  if (timing?.latencySamples) cells.push({ text: `${field("first token", formatLatency(timing.latencyMs / timing.latencySamples))}${coverage(timing.latencySamples)}`, priority: 25 });
   cells.push(
     { text: `${value(String(summary.responses))} ${theme.fg("muted", summary.responses === 1 ? "reply" : "replies")}`, priority: 60 },
   );
   if (summary.tools) cells.push({ text: `${value(String(summary.tools))} ${theme.fg("muted", summary.tools === 1 ? "tool" : "tools")}`, priority: 60 });
   if (usage.cacheRead.known || usage.cacheRead.missing) cells.push({ text: field("cache read", amount(usage.cacheRead, summary.responses)), priority: 70 });
   if (usage.cacheWrite.known || usage.cacheWrite.missing) cells.push({ text: field("cache write", amount(usage.cacheWrite, summary.responses)), priority: 70 });
-  const clock = completionClock(summary, entryTimestamp);
-  if (clock) cells.push({ text: field("finished", clock), priority: 90 });
-  const padding = width > 2 ? 1 : 0;
-  const budget = width - padding * 2;
   const fitted = fitCells(cells, budget, 3, visibleWidth).map((cell) => cell.text).join(dim(" · "));
   const rows = [`${" ".repeat(padding)}${truncateToWidth(fitted, budget, "…")}`];
   if (expanded) {
