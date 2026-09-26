@@ -80,7 +80,7 @@ try {
     const compact = component.render(120).join("\n");
     assert(compact.includes("first token ") && compact.includes("tokens/s"));
     assert(compact.includes("$0.06"), "turn cost is visible without expansion");
-    assert(compact.includes("2 replies") && compact.includes("1 tool"), "work counts are readable without expansion");
+    assert(component.render(180).join("\n").includes("2 replies") && component.render(180).join("\n").includes("1 tool"), "wide receipts retain work counts");
     assert(compact.includes("in 20 · out 10") && compact.includes("cache hit 0%"), "input/output and a known uncached prompt are visible");
     if (!expanded) assert(!compact.includes("cache write 0"), "irrelevant zero cache writes are omitted");
     if (!expanded) assert.equal(component.render(120).length, 1, "default receipt is exactly one row");

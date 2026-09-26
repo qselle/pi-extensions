@@ -20,8 +20,8 @@ test("compact completion is one rich line with no separate rule", () => {
   const summary = example();
   const rows = renderCompletion(summary, 160, theme, false);
   expect(rows).toHaveLength(1);
-  expect(plain(rows[0])).toStartWith(" Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88%");
-  expect(plain(rows[0])).toContain(`finished ${completionClock(summary)}`);
+  expect(plain(rows[0])).toStartWith(` ${completionClock(summary)} · Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88%`);
+  expect(plain(rows[0])).toContain(completionClock(summary)!);
   expect(plain(rows[0])).toContain("48 tokens/s · first token 320ms · 1 reply · 2 tools · cache read 8.4K");
   expect(plain(rows[0])).not.toContain("─");
   expect(plain(rows[0])).not.toContain("cache write 0");
@@ -39,6 +39,7 @@ test("ordinary receipts use only one accent and preserve readable labels at 60, 
   expect(colors).toContainEqual(["text", "320ms"]);
   for (const width of [60, 100, 180]) {
     const [row] = renderCompletion(summary, width, theme, false);
+    expect(row).toStartWith(` ${completionClock(summary)} · Turn 42s`);
     expect(row).toContain("Turn 42s · in 1.2K · out 2.1K · $0.04");
     expect(visibleWidth(row!)).toBeLessThanOrEqual(width);
     expect(row).not.toMatch(/ttft|[↓↑]|\d+r\/\d+t|hit\d/);
@@ -58,7 +59,7 @@ test("compact width fitting always returns exactly one bounded row", () => {
   }
   const readable = plain(renderCompletion(summary, 100, theme, false).join(" ")).replace(/\s+/g, " ");
   expect(readable).toContain("first token 320ms");
-  expect(readable).toContain("48 tokens/s");
+  expect(readable.trimStart()).toStartWith(`${completionClock(summary)} · Turn 42s`);
   expect(readable).toContain("$0.04");
 });
 
@@ -76,17 +77,17 @@ test("narrow receipts drop low priority metrics before tokens and cost", () => {
   expect(expanded).toContain("cache read: 8.4K"); expect(expanded).toContain("replies measured");
 });
 
-test("turn scope stays visible while the labeled completion clock drops first", () => {
+test("completion clock leads when the core fits; narrow rows retain duration, tokens and cost", () => {
   const summary = example();
-  for (const width of [60, 100]) {
+  for (const width of [60, 100, 180]) {
     const rows = renderCompletion(summary, width, theme, false);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toStartWith(" Turn 42s · in 1.2K · out 2.1K · $0.04");
-    expect(rows[0]).toContain("cache hit 88%");
-    expect(rows[0]).not.toContain("finished");
+    expect(rows[0]).toStartWith(` ${completionClock(summary)} · Turn 42s · in 1.2K · out 2.1K · $0.04`);
   }
-  expect(renderCompletion(summary, 180, theme, false)[0]).toContain(`finished ${completionClock(summary)}`);
-  expect(completionRows(summary, theme)[0]).toContain("turn duration 42s");
+  const narrow = renderCompletion(summary, 40, theme, false)[0];
+  expect(narrow).toStartWith(" Turn 42s · in 1.2K · out 2.1K · $0.04");
+  expect(narrow).not.toContain("finished");
+  expect(completionRows(summary, theme)[0]).toStartWith(`${completionClock(summary)} · turn duration 42s`);
 });
 
 test("partial totals, unknown timing and measured zeros remain distinct in the compact row", () => {
@@ -130,7 +131,7 @@ test("partial timing coverage and failure states remain visible with semantic co
   const colors: Array<[string, string]> = [];
   const semantic = { fg: (color: string, value: string) => { colors.push([color, value]); return value; } } as Theme;
   const row = completionRows(summary, semantic).join("\n");
-  expect(row).toStartWith("interrupted · 1 failed tool · ");
+  expect(row).toStartWith(`${completionClock(summary)} · turn duration 42s · interrupted · 1 failed tool · `);
   expect(row).toContain("3 replies · 2 tools · first token avg 320ms (1/3 replies) · rate 48 tokens/s (1/3 replies)");
   expect(colors).toContainEqual(["warning", "interrupted"]);
   expect(colors).toContainEqual(["error", "1 failed tool"]);
@@ -139,17 +140,18 @@ test("partial timing coverage and failure states remain visible with semantic co
   expect(colors).toContainEqual(["text", "88%"]);
   expect(colors).toContainEqual(["text", "$0.04"]);
   const compact = renderCompletion(summary, 160, semantic, false)[0];
-  expect(compact).toContain("interrupted · 1 failed tool · Turn 42s");
-  expect(compact).toContain("48 tokens/s (1/3 replies) · first token 320ms (1/3 replies)");
+  expect(compact).toStartWith(` ${completionClock(summary)} · Turn 42s · interrupted · 1 failed tool`);
+  expect(compact).toContain("first token 320ms (1/3 replies)");
+  expect(completionRows(summary, semantic)[0]).toContain("rate 48 tokens/s (1/3 replies)");
   summary.outcome = "error";
-  expect(completionRows(summary, semantic)[0]).toStartWith("error · ");
+  expect(completionRows(summary, semantic)[0]).toContain(" · error · 1 failed tool");
   expect(colors).toContainEqual(["error", "error"]);
 });
 
 test("legacy entries use their saved timestamp while unknown and invalid clocks are never invented", () => {
   const summary = example();
   const expected = completionClock(summary);
-  expect(expected).toMatch(/^\d{2}:\d{2}:05$/);
+  expect(expected).toMatch(/^\d{2}:\d{2}$/);
   const timestamp = new Date(summary.endedAt!).toISOString();
   delete summary.endedAt;
   expect(decodeSummary(summary)).toBeDefined();

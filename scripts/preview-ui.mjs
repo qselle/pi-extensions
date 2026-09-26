@@ -192,14 +192,14 @@ try {
     assert.equal(receipt.length, 1, 'Final compact statistics must occupy exactly one row.');
     assert(receipt[0].includes('$0.03'));
     const receiptIndex = capture.lines.indexOf(receipt[0]);
-    assert(receipt[0].trimStart().startsWith('Turn '), 'The final receipt must identify its whole-turn scope.');
+    assert(/^\d{2}:\d{2} · Turn /.test(receipt[0].trimStart()), 'Completion time must lead the whole-turn receipt when it fits.');
     for (const row of [capture.cells[receiptIndex], capture.cells.at(-1)]) {
       const content = row.filter((cell) => cell.text.trim());
       assert(content.every((cell) => cell.fgRgb && telemetryColors.has(cell.fg)), 'Normal footer and turn statistics must share one accent and neutral palette.');
     }
     assert(!/(?:ttft|\bctx\b|\bR\d|\bW\d|\d+r\/\d+t)/.test(receipt[0]), 'Telemetry labels must be readable words.');
   }
-  assert(/finished \d{2}:\d{2}:\d{2}/.test(frame('settled-roomy')), 'Wide turn receipts must label their completion time.');
+  assert(/^\s*\d{2}:\d{2} · Turn /m.test(frame('settled-roomy')), 'Wide turn receipts must lead with their completion time.');
   const footer = frames.find((item) => item.name === 'settled-roomy').lines.at(-1);
   assert(footer.includes('cache R 3.6K hit 34%'), 'Footer cache metrics share one concise label.');
   assert(!footer.includes('prompt ') && !footer.includes('cache read') && !footer.includes('cache write'), 'Footer must omit repeated totals and verbose cache labels.');
