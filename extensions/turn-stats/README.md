@@ -15,11 +15,11 @@ shows the full latest totals. Failed/interrupted runs use semantic colors.
 Every settled agent run with responses or tools adds a compact transcript entry:
 
 ```text
- 14:32 · Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88% · 48 tokens/s · first token 320ms · 3 replies · 2 tools
+ 14:32 · Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88% · ttft avg 320ms · tps 48 · 3 responses · 2 tools
 ```
 
 `14:32` leads with the saved local completion time. `Turn 42s`
-measures the whole agent run, including its replies, tool work and provider
+measures the whole agent run, including its model responses, tool work and provider
 waits. It is separate from each `Worked for` block.
 Internal restarts for retries, compaction or pre-settlement continuation stay in
 the same turn until Pi emits settlement; they do not reset its totals or clock.
@@ -55,15 +55,19 @@ values remain zero. A partial total is the sum of reported values only. Timing
 covers the entire agent run, including tool execution and provider waits; it is
 not model token throughput. Queued follow-ups belong to their actual agent run.
 
-The completion row includes mean request-to-first-output latency (`first token`)
-and aggregate streaming `tokens/s`. Partial timing coverage is always marked
-when that metric fits, such as `(2/3 replies)`; expanded details also show complete sample
+The completion row uses `ttft avg` as compact shorthand for average time to first
+output; expanded details spell it out as `first output avg`. Compact `tps`
+means aggregate streaming tokens per second; expanded details use `tokens/s`.
+Partial timing coverage is always marked
+when that metric fits, such as `(2/3 responses)`; expanded details also show complete sample
 counts. First output can be nonempty text, thinking or tool-call data; empty block
 starts and empty deltas do not establish a timing anchor. Rate divides recorded output tokens by the sum
 of measured streaming windows, excluding tool execution and initial waits; it is
 not an average of per-response rates. Windows shorter than 250 ms or lacking valid
 usage are excluded from rate measurements. Missing anchors remain unknown.
-Retries use the latest request anchor; this is not total retry latency. Streaming
+`responses` counts finalized model responses, including tool-call responses;
+it is not the number of user-visible final answers. Retries use the latest request
+anchor; this is not total retry latency. Streaming
 windows can include provider stalls and reasoning, so the rate is an observation
 of the run, not a provider benchmark. Older saved summaries lack these measurements
 and remain readable.

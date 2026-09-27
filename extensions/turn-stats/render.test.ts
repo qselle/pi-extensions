@@ -22,10 +22,10 @@ test("compact completion is one rich line with no separate rule", () => {
   expect(rows).toHaveLength(1);
   expect(plain(rows[0])).toStartWith(` ${completionClock(summary)} · Turn 42s · in 1.2K · out 2.1K · $0.04 · cache hit 88%`);
   expect(plain(rows[0])).toContain(completionClock(summary)!);
-  expect(plain(rows[0])).toContain("48 tokens/s · first token 320ms · 1 reply · 2 tools · cache read 8.4K");
+  expect(plain(rows[0])).toContain("ttft avg 320ms · tps 48 · 1 response · 2 tools · cache read 8.4K");
   expect(plain(rows[0])).not.toContain("─");
   expect(plain(rows[0])).not.toContain("cache write 0");
-  expect(plain(renderCompletion(summary, 160, theme, true).join("\n"))).toContain("1/1 replies measured");
+  expect(plain(renderCompletion(summary, 160, theme, true).join("\n"))).toContain("1/1 responses measured");
 });
 
 test("ordinary receipts use only one accent and preserve readable labels at 60, 100 and 180 columns", () => {
@@ -35,14 +35,15 @@ test("ordinary receipts use only one accent and preserve readable labels at 60, 
   renderCompletion(summary, 180, neutral, false);
   expect(colors.filter(([color]) => color === "accent")).toEqual([["accent", "Turn 42s"]]);
   expect(colors.some(([color]) => ["success", "warning", "error"].includes(color))).toBe(false);
-  expect(colors).toContainEqual(["muted", "first token"]);
+  expect(colors).toContainEqual(["muted", "ttft avg"]);
+  expect(colors).toContainEqual(["muted", "tps"]);
   expect(colors).toContainEqual(["text", "320ms"]);
   for (const width of [60, 100, 180]) {
     const [row] = renderCompletion(summary, width, theme, false);
     expect(row).toStartWith(` ${completionClock(summary)} · Turn 42s`);
     expect(row).toContain("Turn 42s · in 1.2K · out 2.1K · $0.04");
     expect(visibleWidth(row!)).toBeLessThanOrEqual(width);
-    expect(row).not.toMatch(/ttft|[↓↑]|\d+r\/\d+t|hit\d/);
+    expect(row).not.toMatch(/TTFT|[↓↑]|\d+r\/\d+t|hit\d/);
   }
   expect(renderCompletion(summary, 180, theme, false)[0]).toContain("cache write 1.5K");
 });
@@ -58,7 +59,7 @@ test("compact width fitting always returns exactly one bounded row", () => {
     }
   }
   const readable = plain(renderCompletion(summary, 100, theme, false).join(" ")).replace(/\s+/g, " ");
-  expect(readable).toContain("first token 320ms");
+  expect(readable).toContain("ttft avg 320ms");
   expect(readable.trimStart()).toStartWith(`${completionClock(summary)} · Turn 42s`);
   expect(readable).toContain("$0.04");
 });
@@ -72,9 +73,9 @@ test("narrow receipts drop low priority metrics before tokens and cost", () => {
   }
   const narrow = plain(renderCompletion(summary, 40, theme, false)[0]);
   expect(narrow).toContain("42s"); expect(narrow).toContain("$0.04"); expect(narrow).toContain("in 1.2K · out 2.1K");
-  expect(narrow).not.toContain("first token"); expect(narrow).not.toContain("cache read");
+  expect(narrow).not.toContain("ttft avg"); expect(narrow).not.toContain("cache read");
   const expanded = plain(renderCompletion(summary, 80, theme, true).join("\n"));
-  expect(expanded).toContain("cache read: 8.4K"); expect(expanded).toContain("replies measured");
+  expect(expanded).toContain("cache read: 8.4K"); expect(expanded).toContain("responses measured");
 });
 
 test("completion clock leads when the core fits; narrow rows retain duration, tokens and cost", () => {
@@ -95,17 +96,17 @@ test("partial totals, unknown timing and measured zeros remain distinct in the c
   recordResponse(summary, { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } });
   let row = completionRows(summary, theme).join("\n");
   expect(row).toContain("prompt 0 · in 0 · out 0 · cache read 0 · cache write 0 · cache hit — · cost $0.00");
-  expect(row).toContain("first token avg ? (0/1 replies) · rate unknown (0/1 replies)");
+  expect(row).toContain("first output avg ? (0/1 responses) · rate unknown (0/1 responses)");
   expect(row).not.toContain("partial usage");
   expect(renderCompletion(summary, 160, theme, false)[0]).toContain("in 0 · out 0 · $0.00");
-  expect(renderCompletion(summary, 160, theme, false)[0]).not.toMatch(/tokens\/s|first token|cache write/);
+  expect(renderCompletion(summary, 160, theme, false)[0]).not.toMatch(/tokens\/s|first output|cache write/);
   summary.timing = { latencyMs: 0, latencySamples: 1, streamMs: 1000, outputTokens: 0, streamSamples: 1 };
-  expect(renderCompletion(summary, 160, theme, false)[0]).toContain("0.0 tokens/s · first token 0ms");
+  expect(renderCompletion(summary, 160, theme, false)[0]).toContain("ttft avg 0ms · tps 0.0");
   summary.timing = undefined;
   recordResponse(summary, {});
   row = completionRows(summary, theme).join("\n");
   expect(row).toContain("prompt ≥0 · in ≥0 · out ≥0 · cache read ≥0 · cache write ≥0 · cache hit ? · cost ≥$0.00 · partial usage");
-  expect(row).toContain("first token avg ? (0/2 replies) · rate unknown (0/2 replies)");
+  expect(row).toContain("first output avg ? (0/2 responses) · rate unknown (0/2 responses)");
   const unknown = emptySummary(); recordResponse(unknown, {});
   expect(completionRows(unknown, theme)[1]).toBe("prompt ? · in ? · out ? · cache read ? · cache write ? · cache hit ? · cost ? · partial usage");
   expect(renderCompletion(unknown, 160, theme, false)[0]).toContain("in ? · out ? · $? · cache hit ?");
@@ -132,7 +133,7 @@ test("partial timing coverage and failure states remain visible with semantic co
   const semantic = { fg: (color: string, value: string) => { colors.push([color, value]); return value; } } as Theme;
   const row = completionRows(summary, semantic).join("\n");
   expect(row).toStartWith(`${completionClock(summary)} · turn duration 42s · interrupted · 1 failed tool · `);
-  expect(row).toContain("3 replies · 2 tools · first token avg 320ms (1/3 replies) · rate 48 tokens/s (1/3 replies)");
+  expect(row).toContain("3 model responses · 2 tools · first output avg 320ms (1/3 responses) · rate 48 tokens/s (1/3 responses)");
   expect(colors).toContainEqual(["warning", "interrupted"]);
   expect(colors).toContainEqual(["error", "1 failed tool"]);
   expect(colors).toContainEqual(["muted", "turn duration"]);
@@ -141,8 +142,8 @@ test("partial timing coverage and failure states remain visible with semantic co
   expect(colors).toContainEqual(["text", "$0.04"]);
   const compact = renderCompletion(summary, 160, semantic, false)[0];
   expect(compact).toStartWith(` ${completionClock(summary)} · Turn 42s · interrupted · 1 failed tool`);
-  expect(compact).toContain("first token 320ms (1/3 replies)");
-  expect(completionRows(summary, semantic)[0]).toContain("rate 48 tokens/s (1/3 replies)");
+  expect(compact).toContain("ttft avg 320ms (1/3 responses)");
+  expect(completionRows(summary, semantic)[0]).toContain("rate 48 tokens/s (1/3 responses)");
   summary.outcome = "error";
   expect(completionRows(summary, semantic)[0]).toContain(" · error · 1 failed tool");
   expect(colors).toContainEqual(["error", "error"]);

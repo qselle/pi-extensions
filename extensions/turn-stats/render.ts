@@ -29,12 +29,12 @@ function completionGroups(summary: Summary, theme: Theme, entryTimestamp?: strin
   groups.push(field("turn duration", summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000), "accent"));
   if (summary.outcome !== "settled") groups.push(theme.fg(summary.outcome === "error" ? "error" : "warning", summary.outcome));
   if (summary.failedTools) groups.push(theme.fg("error", `${summary.failedTools} failed tool${summary.failedTools === 1 ? "" : "s"}`));
-  groups.push(`${styledValue(String(summary.responses))} ${label(summary.responses === 1 ? "reply" : "replies")}`, `${styledValue(String(summary.tools))} ${label(summary.tools === 1 ? "tool" : "tools")}`);
+  groups.push(`${styledValue(String(summary.responses))} ${label(summary.responses === 1 ? "model response" : "model responses")}`, `${styledValue(String(summary.tools))} ${label(summary.tools === 1 ? "tool" : "tools")}`);
   const timing = summary.timing;
-  const coverage = (count: number) => label(`(${count}/${summary.responses} replies)`);
+  const coverage = (count: number) => label(`(${count}/${summary.responses} responses)`);
   const latency = timing?.latencySamples ? formatLatency(timing.latencyMs / timing.latencySamples) : "?";
   const rate = timing?.streamSamples ? `${formatRate(timing.outputTokens / (timing.streamMs / 1000))} tokens/s` : "unknown";
-  groups.push(`${field("first token avg", latency)} ${coverage(timing?.latencySamples ?? 0)}`, `${field("rate", rate)} ${coverage(timing?.streamSamples ?? 0)}`);
+  groups.push(`${field("first output avg", latency)} ${coverage(timing?.latencySamples ?? 0)}`, `${field("rate", rate)} ${coverage(timing?.streamSamples ?? 0)}`);
 
   const usage = summary.usage;
   const promptTotals = [usage.input, usage.cacheRead, usage.cacheWrite];
@@ -92,11 +92,11 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
   );
   if (prompt > 0 || !promptComplete) cells.push({ text: field("cache hit", hit), priority: 30 });
   const timing = summary.timing;
-  const coverage = (count: number) => count < summary.responses ? theme.fg("muted", ` (${count}/${summary.responses} replies)`) : "";
-  if (timing?.streamSamples) cells.push({ text: `${value(formatRate(timing.outputTokens / (timing.streamMs / 1000)))} ${theme.fg("muted", "tokens/s")}${coverage(timing.streamSamples)}`, priority: 40 });
-  if (timing?.latencySamples) cells.push({ text: `${field("first token", formatLatency(timing.latencyMs / timing.latencySamples))}${coverage(timing.latencySamples)}`, priority: 25 });
+  const coverage = (count: number) => count < summary.responses ? theme.fg("muted", ` (${count}/${summary.responses} responses)`) : "";
+  if (timing?.latencySamples) cells.push({ text: `${field("ttft avg", formatLatency(timing.latencyMs / timing.latencySamples))}${coverage(timing.latencySamples)}`, priority: 25 });
+  if (timing?.streamSamples) cells.push({ text: `${field("tps", formatRate(timing.outputTokens / (timing.streamMs / 1000)))}${coverage(timing.streamSamples)}`, priority: 40 });
   cells.push(
-    { text: `${value(String(summary.responses))} ${theme.fg("muted", summary.responses === 1 ? "reply" : "replies")}`, priority: 60 },
+    { text: `${value(String(summary.responses))} ${theme.fg("muted", summary.responses === 1 ? "response" : "responses")}`, priority: 60 },
   );
   if (summary.tools) cells.push({ text: `${value(String(summary.tools))} ${theme.fg("muted", summary.tools === 1 ? "tool" : "tools")}`, priority: 60 });
   if (usage.cacheRead.known || usage.cacheRead.missing) cells.push({ text: field("cache read", amount(usage.cacheRead, summary.responses)), priority: 70 });
