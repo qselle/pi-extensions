@@ -183,7 +183,7 @@ try {
   assert(orangeBars.length >= 2, 'Both editor bars must use the visible orange accent.');
   for (const name of ['tools-wide', 'tools-narrow', 'settled-wide', 'settled-narrow']) {
     assert(!frame(name).includes('Worked for'), 'Default tool loops must stay free of intermediate usage receipts.');
-    assert(!/first token .*─|─.*in 3.5K/.test(frame(name)), 'Only the final receipt should show turn telemetry by default.');
+    assert(!/ttft avg .*─|─.*in 3.5K/.test(frame(name)), 'Only the final receipt should show turn telemetry by default.');
   }
   const telemetryColors = new Set([0xfe8019, 0xa89984, 0xebdbb2, 0x928374]);
   for (const name of ['settled-wide', 'settled-narrow']) {
@@ -197,9 +197,10 @@ try {
       const content = row.filter((cell) => cell.text.trim());
       assert(content.every((cell) => cell.fgRgb && telemetryColors.has(cell.fg)), 'Normal footer and turn statistics must share one accent and neutral palette.');
     }
-    assert(!/(?:ttft|\bctx\b|\bR\d|\bW\d|\d+r\/\d+t)/.test(receipt[0]), 'Telemetry labels must be readable words.');
+    assert(!/(?:TTFT|\bctx\b|\bR\d|\bW\d|\d+r\/\d+t)/.test(receipt[0]), 'Telemetry labels must be readable words.');
   }
   assert(/^\s*\d{2}:\d{2} · Turn /m.test(frame('settled-roomy')), 'Wide turn receipts must lead with their completion time.');
+  assert(frame('settled-roomy').includes('ttft avg') && frame('settled-roomy').includes('responses'), 'Wide receipts must identify the average response timing and count.');
   const footer = frames.find((item) => item.name === 'settled-roomy').lines.at(-1);
   assert(footer.includes('cache R 3.6K hit 34%'), 'Footer cache metrics share one concise label.');
   assert(!footer.includes('prompt ') && !footer.includes('cache read') && !footer.includes('cache write'), 'Footer must omit repeated totals and verbose cache labels.');

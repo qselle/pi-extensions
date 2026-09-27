@@ -42,12 +42,12 @@ export function decodeSummary(value: unknown): Summary | undefined {
 }
 export function summaryText(summary: Summary, expanded = false, inProgress = false): string {
   const partial = FIELDS.some((key) => summary.usage[key].missing > 0);
-  const headline = `${inProgress ? "Turn in progress" : `Turn ${summary.outcome}`} · ${formatDuration(summary.durationMs / 1000)} · ${summary.responses} ${summary.responses === 1 ? "reply" : "replies"} · ${summary.tools} tool${summary.tools === 1 ? "" : "s"}${summary.failedTools ? ` (${summary.failedTools} failed)` : ""}${partial ? " · usage incomplete" : ""}`;
+  const headline = `${inProgress ? "Turn in progress" : `Turn ${summary.outcome}`} · ${formatDuration(summary.durationMs / 1000)} · ${summary.responses} model response${summary.responses === 1 ? "" : "s"} · ${summary.tools} tool${summary.tools === 1 ? "" : "s"}${summary.failedTools ? ` (${summary.failedTools} failed)` : ""}${partial ? " · usage incomplete" : ""}`;
   const rows = FIELDS.map((key) => {
     const total = summary.usage[key];
     const amount = total.missing === summary.responses && summary.responses > 0 ? "unknown" : key === "cost" ? formatCost(total.known) : formatTokens(total.known);
     const label = { input: "in", output: "out", cacheRead: "cache read", cacheWrite: "cache write", cost: "Recorded cost" }[key];
-    return `${label}: ${amount}${total.missing ? ` · missing for ${total.missing} ${total.missing === 1 ? "reply" : "replies"}` : ""}`;
+    return `${label}: ${amount}${total.missing ? ` · missing for ${total.missing} ${total.missing === 1 ? "response" : "responses"}` : ""}`;
   });
   return expanded ? `${headline}\n${rows.join("\n")}\n${timingText(summary.timing, summary.responses).join("\n")}\nElapsed time includes tool work and provider waits; streaming rate excludes tool work. Recorded cost is an estimate.` : headline;
 }

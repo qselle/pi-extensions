@@ -66,7 +66,7 @@ test("missing and invalid measurements remain unknown while recorded zeros remai
   recordResponse(summary, { stopReason: "aborted" });
   expect(summary.outcome).toBe("error");
   expect(summaryText(summary, true)).toContain("out: unknown");
-  expect(summaryText(summary, true)).toContain("in: 0 · missing for 1 reply");
+  expect(summaryText(summary, true)).toContain("in: 0 · missing for 1 response");
   expect(decodeSummary({ ...summary, durationMs: -1 })).toBeUndefined();
   expect(decodeSummary({ ...summary, usage: {} })).toBeUndefined();
 });
@@ -104,8 +104,8 @@ test("timing aggregates measured response windows without tool time or missing s
   h.setTime(20000); h.fire("agent_settled");
   const summary = h.entries[0].data;
   expect(summary.timing).toEqual({ latencyMs: 4000, latencySamples: 2, streamMs: 4000, outputTokens: 160, streamSamples: 2 });
-  expect(summaryText(summary, true)).toContain("Average first token: 2000ms · 2/3 replies measured");
-  expect(summaryText(summary, true)).toContain("Streaming rate: 40.0 tokens/s · 2/3 replies measured");
+  expect(summaryText(summary, true)).toContain("Average first output: 2000ms · 2/3 responses measured");
+  expect(summaryText(summary, true)).toContain("Streaming rate: 40.0 tokens/s · 2/3 responses measured");
   expect(decodeSummary(summary)).toBeDefined();
 });
 
@@ -121,7 +121,7 @@ test("retry anchors and lifecycle reset prevent timing from leaking across reque
   h.fire("message_update", { assistantMessageEvent: { type: "text_delta", delta: "x" } });
   h.setTime(6200); h.fire("message_end", { message: { role: "assistant", usage: { output: 100 } } });
   h.fire("agent_settled");
-  expect(summaryText(h.entries[1].data, true)).toContain("first token: unknown · 0/1 replies measured");
+  expect(summaryText(h.entries[1].data, true)).toContain("first output: unknown · 0/1 responses measured");
 });
 
 test("empty stream chunks are not first output and a retry replaces the request anchor", () => {

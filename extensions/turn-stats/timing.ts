@@ -40,7 +40,7 @@ export function timingText(value: ResponseTiming | undefined, responses: number)
   const latency = value?.latencySamples ? `${Math.round(value.latencyMs / value.latencySamples)}ms` : "unknown";
   const rate = value?.streamSamples ? `${(value.outputTokens / (value.streamMs / 1000)).toFixed(1)} tokens/s` : "unknown";
   return [
-    `Average first token: ${latency} · ${value?.latencySamples ?? 0}/${responses} replies measured`,
-    `Streaming rate: ${rate} · ${value?.streamSamples ?? 0}/${responses} replies measured`,
+    `Average first output: ${latency} · ${value?.latencySamples ?? 0}/${responses} responses measured`,
+    `Streaming rate: ${rate} · ${value?.streamSamples ?? 0}/${responses} responses measured`,
   ];
 }
