@@ -185,7 +185,7 @@ try {
     assert(!frame(name).includes('Worked for'), 'Default tool loops must stay free of intermediate usage receipts.');
     assert(!/first token .*─|─.*in 3.5K/.test(frame(name)), 'Only the final receipt should show turn telemetry by default.');
   }
-  const telemetryColors = new Set([0xfe8019, 0xa89984, 0xebdbb2, 0x7c6f64]);
+  const telemetryColors = new Set([0xfe8019, 0xa89984, 0xebdbb2, 0x928374]);
   for (const name of ['settled-wide', 'settled-narrow']) {
     const capture = frames.find((item) => item.name === name);
     const receipt = capture.lines.filter((row) => row.includes('in 7K') && row.includes('out 480'));

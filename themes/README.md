@@ -12,6 +12,11 @@ the panel a blank row above and below the message. Neutral borders and an
 almost-neutral olive success background keep tool output quiet. Orange marks interaction and selection;
 yellow marks warnings; red text and a dark red panel mark failures.
 
+Secondary details such as tool gutters, search metadata, and footer separators use
+Gruvbox gray (`#928374`): readable against the dark base while remaining quieter
+than labels. Native transcript matches use a warm brown wash with cream text, so
+search remains visible without adding another bright hue to the conversation.
+
 Shell commands use the softer `toolPendingBg` surface (`#3c3836`) throughout
 execution, with a quiet left gutter. The command panel stays visually separate
 from its output and quieter than the user-message panel; completion does not
