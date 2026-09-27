@@ -52,7 +52,7 @@ test("thinking, code and message text remain readable on their intended surfaces
     ["toolOutput", "toolPendingBg"], ["toolOutput", "toolSuccessBg"], ["toolOutput", "toolErrorBg"],
     ["text", "selectedBg"],
   ] as const) expect(contrast(color(foreground), color(background))).toBeGreaterThanOrEqual(7);
-  expect(contrast(color("searchMatchText"), color("searchMatchBg"))).toBeGreaterThanOrEqual(4.5);
+  expect(contrast(color("searchMatchText"), color("searchMatchBg"))).toBeGreaterThanOrEqual(7);
   expect(contrast(color("error"), color("toolErrorBg"))).toBeGreaterThanOrEqual(4);
 });
 
@@ -66,6 +66,10 @@ test("structure and success panels stay quieter than content and attention state
   expect(contrast(color("toolPendingBg"), theme.vars.bg0)).toBeLessThan(contrast(color("userMessageBg"), theme.vars.bg0));
   expect(color("toolErrorBg")).not.toBe(color("toolSuccessBg"));
   expect(color("borderAccent")).not.toBe(color("border"));
+  expect(contrast(color("dim"), theme.vars.bg0)).toBeGreaterThanOrEqual(4);
+  expect(contrast(color("dim"), theme.vars.bg0)).toBeLessThan(contrast(color("muted"), theme.vars.bg0));
+  expect(contrast(color("searchMatchBg"), theme.vars.bg0)).toBeGreaterThanOrEqual(1.5);
+  expect(contrast(color("searchMatchBg"), theme.vars.bg0)).toBeGreaterThan(contrast(color("selectedBg"), theme.vars.bg0));
 });
 
 test("user messages have a distinct warm panel and high-contrast text", () => {
