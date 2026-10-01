@@ -1,51 +1,44 @@
 # handoff
 
-Carries a reviewed task checkpoint into a fresh Pi session while preserving the
-original session and validated goal/plan/journal state.
+Hand off work to a new Pi session that starts from a summary of the current
+one instead of a copy of its history. Unlike `/fork` and `/clone`, the new
+session does not re-send or re-count the parent's tokens, and ownership is
+explicit: the new session owns the task and the parent is told so.
 
 ## Usage
 
 ```text
-/handoff        Review the latest checkpoint (searchable TUI, text elsewhere)
-/handoff edit   Edit the summary in Pi's native editor
-/handoff new    Start fresh context from the reviewed checkpoint
+/handoff          Hand off this session's work
+/handoff <task>   Hand off one task, e.g. /handoff fix the flaky test
 ```
 
-Ask the agent to call `prepare_handoff` with the full user objective, constraints,
-decisions, changed files, exact test evidence, unresolved questions, unfinished
-work, and the next concrete action. It accepts a `summary` (up to 20,000 characters)
-and optional `next_prompt` (up to 2,000). Preparing a checkpoint does not replace
-the session or mark any work complete.
+In Herdr, `/handoff` asks where to open the new session: the current pane, a
+new pane to the right or below, a new tab, or a new workspace. Outside Herdr it
+switches the current pane.
 
-`/handoff new` seeds the new session with the summary and the latest valid goal,
-plan and context-journal records from the current branch. Goal objective, status, usage budget,
-consumption and progress survive. An active goal retains its existing automatic
-continuation behavior; other tasks wait for a user message. The optional next
-prompt is placed in the editor without submission.
+The current model writes the summary by calling the `handoff` tool, continuing
+its cached conversation instead of re-reading it in a separate request. The new
+session gets that summary as its only context, with the task, the parent session
+file for details the summary omits, and the model and thinking level. With a
+task it starts working at once; without one it waits for your prompt.
 
-The original session is retained and linked as the parent. Workspace files remain
-unchanged. Reopen the parent through Pi's session navigation to inspect original
-evidence. Running managed jobs stop through their normal shutdown handlers.
+The tool result stays in the parent: it names the new session and tells the
+model not to continue that work. The parent keeps running in a new pane, tab, or
+workspace; in the current pane it remains in Pi's session list, linked as the
+new session's parent.
 
-A newer user request makes a prepared checkpoint stale. Prepare a new checkpoint
-or review/edit it before starting fresh context. Session changes while editing
-prevent saving the old draft. Active runs and queued messages block handoff.
+You can also ask the agent directly, e.g. "hand off the admin panel to a new
+tab". It then asks for a new pane, tab, or workspace; switching the current
+pane needs `/handoff`.
 
 ## Dependencies and limitations
 
-- Uses Pi's public session setup/replacement, custom entry, tool and editor APIs.
-  Uses the existing transcript viewer and goal/plan validation helpers.
-- Checkpoints live in the source session. Pi normally persists sessions after the
-  first assistant message. A fresh destination is therefore not saved to disk
-  until its first real assistant response; the source checkpoint remains the
-  recovery copy. No fabricated assistant message forces a disk write.
-- Summaries are fallible: the destination is told to verify files and evidence.
-  Fresh context cannot reconstruct omitted facts or attachments automatically.
-- Only validated goal/plan/journal state is transferred. Tool logs, images, background
-  process handles, timers and other extension state stay in the source session.
-- Known questionnaire secret values are redacted when preparing/editing a
-  checkpoint. This is literal redaction, not comprehensive credential detection;
-  review summaries before saving sensitive material.
-- Handoff is user-initiated. No automatic context threshold switches sessions,
-  background summarization calls, network services, or external memory stores.
-- No additional runtime packages; cross-platform.
+- Pi 0.87.0 public command, tool, and session APIs; no runtime packages.
+- New panes, tabs, and workspaces require a Herdr-managed Pi. Herdr starts `pi`
+  from the pane's `PATH` and waits up to 30 seconds for it. If Pi does not
+  start, the new pane, tab, or workspace and the new session are removed; if
+  Herdr cannot close it, the session is kept for the Pi that may be running.
+- The summary is written by the model and may omit facts. Files, background
+  jobs, and other extension state are not transferred.
+- Handing off waits for the current run and queued messages to finish, and
+  needs at least one message and a selected model.
