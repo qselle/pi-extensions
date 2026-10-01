@@ -13,7 +13,7 @@ default; use [`memory`](../memory/) for notes shared across sessions.
 ```
 
 Settings and note versions follow the session branch through resume and tree
-navigation. `/handoff new` also transfers journal state.
+navigation.
 
 | Tool | Purpose |
 |---|---|

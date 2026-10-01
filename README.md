@@ -38,7 +38,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`fast-mode`](extensions/fast-mode/) | Request fast processing for supported OpenAI models |
 | [`footer`](extensions/footer/) | Model, context, usage, cost, and local Git status |
 | [`goal`](extensions/goal/) | Persistent goals that continue across turns |
-| [`handoff`](extensions/handoff/) | Carry a task checkpoint into a fresh session |
+| [`handoff`](extensions/handoff/) | Hand off work to a new session, pane, tab, or workspace that starts from a summary |
 | [`history-search`](extensions/history-search/) | Fuzzy search of the active prompt history |
 | [`hyperlinks`](extensions/hyperlinks/) | Clickable terminal paths |
 | [`image-history`](extensions/image-history/) | Opt-in image deferral, compact previews, original viewing, portable export and storage cleanup |
