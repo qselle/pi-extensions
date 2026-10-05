@@ -1,6 +1,6 @@
 /** Card rendering behaviors verified through Pi's native tool component. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
@@ -74,6 +74,39 @@ try {
     // Tree navigation rebuilds groups without recreating or invalidating cards.
     fire("session_tree", {});
     assert(!text(leader.render(80)).includes("Explored"), "cleared groups are not hidden by the cache");
+  }
+
+  // 2. Overwrites diff against the previous content; new files are all added.
+  {
+    const write = tools.get("write")!;
+    const run = async (id: string, args: Record<string, unknown>) => {
+      const result = await write.execute(id, args, undefined, undefined, context as never);
+      const view = card("write", id, args);
+      view.updateResult({ ...result, isError: false } as never);
+      return { result, rows: view.render(100).map(plain) };
+    };
+    const original = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`);
+    const created = await run("write-new", { path: "ten.txt", content: `${original.join("\n")}\n` });
+    assert(created.rows[1]!.includes("Wrote ten.txt (+10)"), created.rows[1]);
+    assert.equal(created.result.details, undefined, "new files keep native details");
+    const changed = original.with(4, "line five");
+    const overwrite = await run("write-over", { path: "ten.txt", content: `${changed.join("\n")}\n`, purpose: "Rename one line" });
+    assert(overwrite.rows[1]!.includes("(+1 -1)"), overwrite.rows[1]);
+    assert.equal(await readFile(join(root, "ten.txt"), "utf8"), `${changed.join("\n")}\n`);
+    const body = overwrite.rows.slice(2).join("\n");
+    assert(body.includes("- line 5") && body.includes("+ line five") && body.includes("line 4"), body);
+    assert(!/line 10\s*$/m.test(body), "distant unchanged lines are not shown");
+
+    const many = Array.from({ length: 1200 }, (_, index) => `old ${index}`).join("\n");
+    await writeFile(join(root, "big.txt"), many);
+    const rewritten = await run("write-big", { path: "big.txt", content: many.replace(/old/g, "new") });
+    const details = rewritten.result.details as { patch: string; added: number; removed: number; omittedRows: number };
+    assert.equal(details.added, 1200);
+    assert.equal(details.removed, 1200);
+    assert(details.patch.split("\n").length < 420, "saved patches are bounded");
+    assert.equal(details.omittedRows, 2000);
+    assert(rewritten.rows[1]!.includes("(+1200 -1200)"));
+    assert(rewritten.rows.join("\n").includes("+2388 lines"), "omitted rows include unsaved patch rows");
   }
 
   await handlers.get("session_shutdown")!({}, context);

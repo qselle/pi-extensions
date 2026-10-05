@@ -38,6 +38,7 @@ import {
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
 import { commandPanel } from "./command-panel.ts";
 import { baseRevision, fit, Lines } from "./lines.ts";
+import { executeWriteWithDiff } from "./write-diff.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -140,11 +141,11 @@ interface DiffView {
 }
 
 /** Bound the rows first, so collapsed cards never highlight content they hide. */
-function diffView(rows: DiffRow[], path: string, theme: Theme, expanded: boolean): DiffView {
+function diffView(rows: DiffRow[], path: string, theme: Theme, expanded: boolean, hidden = 0): DiffView {
 	const shown = rows.slice(0, expanded ? 400 : 12);
 	return {
 		shown,
-		omitted: rows.length - shown.length,
+		omitted: rows.length - shown.length + hidden,
 		gutter: gutterWidth(rows),
 		highlighted: memo(() => {
 			const contents = shown.map((r) => r.content);
@@ -355,7 +356,17 @@ function makeRenderResult(name: ToolName) {
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
 			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision });
 		}
-		let view: DiffView | undefined;
+		const diff = memo(() => {
+			const details = result?.details;
+			const patch = typeof details?.patch === "string" ? details.patch : undefined;
+			const content = typeof ctx?.args?.content === "string" ? ctx.args.content : "";
+			// Overwrites carry a patch against the previous content; new files do not.
+			const rows = patch !== undefined ? parseUnifiedPatch(patch) : name === "write" ? contentToAddRows(content) : [];
+			const counted = Number.isSafeInteger(details?.added) && Number.isSafeInteger(details?.removed)
+				? { added: details.added as number, removed: details.removed as number } : diffCounts(rows);
+			const hidden = Number.isSafeInteger(details?.omittedRows) ? Math.max(0, details.omittedRows as number) : 0;
+			return { counts: counted, view: diffView(rows, String(ctx?.args?.path ?? ""), theme, !!opts?.expanded, hidden) };
+		});
 		const build = (width: number): string[] => {
 			// edit/write own their headline here (renderCall is empty) so the +/-
 			// count can be read from the result patch.
@@ -364,14 +375,8 @@ function makeRenderResult(name: ToolName) {
 				if (ctx?.isError) {
 					return [diffHeadline(name, theme, ctx, width), ...bashBody(result, opts, theme, width, true)];
 				}
-				const rows =
-					name === "edit"
-						? parseUnifiedPatch(result?.details?.patch ?? "")
-						: contentToAddRows(typeof ctx?.args?.content === "string" ? ctx.args.content : "");
-				const { added, removed } = diffCounts(rows);
-				const head = diffHeadline(name, theme, ctx, width, { added, removed });
-				view ??= diffView(rows, String(ctx?.args?.path ?? ""), theme, !!opts?.expanded);
-				return [head, ...diffBody(view, theme, width, !!opts?.expanded)];
+				const { counts, view } = diff();
+				return [diffHeadline(name, theme, ctx, width, counts), ...diffBody(view, theme, width, !!opts?.expanded)];
 			}
 			if (ctx?.isError) {
 				return bashBody(result, opts, theme, width, true);
@@ -439,6 +444,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
 						execute: (id, args, signal, update, context) => {
 							const { purpose: _purpose, ...toolArgs } = args as Record<string, unknown>;
+							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},
 					};
