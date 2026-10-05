@@ -188,6 +188,15 @@ function purposeSuffix(purpose: string | undefined, width: number, theme: Theme)
 	return theme.fg("dim", " · ") + theme.fg("text", fit(purpose, width - 3));
 }
 
+const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? "" : "s"}`;
+
+/** Size of a streamed write or edit; partial arguments may still be growing. */
+function pendingProgress(name: ToolName, args: any): string {
+	if (name === "write") return typeof args?.content === "string" ? plural(contentToAddRows(args.content).length, "line") : "";
+	const edits = Array.isArray(args?.edits) ? args.edits.length : typeof args?.oldText === "string" ? 1 : 0;
+	return edits ? plural(edits, "edit") : "";
+}
+
 /** Render edit/write headlines with the result so patch counts are available. */
 function diffHeadline(
 	name: ToolName,
@@ -196,9 +205,12 @@ function diffHeadline(
 	width: number,
 	count?: { added: number; removed: number },
 ): string {
-	const verbText = actionVerb(name, ctx);
+	// Streaming arguments already describe the intended change, before execution.
+	const pending = ctx?.isPartial && !ctx?.isError;
+	const verbText = pending ? runningVerbs[verbFor(name)]! : actionVerb(name, ctx);
 	const verb = theme.bold(theme.fg("text", verbText));
-	const label = count ? countLabel(theme, count.added, count.removed) : "";
+	const progress = pending ? pendingProgress(name, ctx?.args) : "";
+	const label = count ? countLabel(theme, count.added, count.removed) : progress ? theme.fg("dim", `· ${progress}`) : "";
 	const overhead = 3 + verbText.length + (label ? 1 + visibleWidth(label) : 0);
 	const a = ctx?.args;
 	const target = labelText(targetFor(name, a));
@@ -295,9 +307,9 @@ function makeRenderCall(name: ToolName) {
 			bindExploration(ctx);
 			return explorationBlock(state.rows, state.active, theme, width, ctx?.cwd ?? process.cwd());
 		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision });
-		// Completed edit/write counts need the result patch; pending writes do not
-		// claim the intended additions have already succeeded.
-		if (name === "edit" || name === "write") return new Lines((width) => ctx?.executionStarted && ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "", { volatile: !!ctx?.isPartial });
+		// Completed edit/write counts need the result patch. Streaming and running
+		// cards show the intended size without claiming any change succeeded.
+		if (name === "edit" || name === "write") return new Lines((width) => ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "", { volatile: !!ctx?.isPartial });
 		const a = args ?? ctx?.args;
 		// Tabs become fixed display indentation, never terminal cursor movement.
 		// Preserve the actual tool argument, including its shell whitespace.

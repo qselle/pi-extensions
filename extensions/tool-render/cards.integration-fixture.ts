@@ -23,6 +23,7 @@ try {
   const ui = { requestRender() {} } as TUI;
   const card = (name: string, id: string, args: Record<string, unknown>) =>
     new ToolExecutionComponent(name, id, args, undefined, tools.get(name), ui, root);
+  const plainTheme = { fg: (_color: string, value: string) => value, bold: (value: string) => value } as never;
   const text = (rows: string[]) => rows.map(plain).join("\n");
   const builds = (run: () => void) => {
     const before = renderCacheStats.builds;
@@ -107,6 +108,24 @@ try {
     assert.equal(details.omittedRows, 2000);
     assert(rewritten.rows[1]!.includes("(+1200 -1200)"));
     assert(rewritten.rows.join("\n").includes("+2388 lines"), "omitted rows include unsaved patch rows");
+  }
+
+  // 3. Streaming write/edit arguments render before execution starts.
+  {
+    const streaming = card("write", "stream-write", { path: "src/new.ts", content: "a\nb" });
+    assert.equal(text(streaming.render(80)), "\n• Writing src/new.ts · 2 lines");
+    streaming.updateArgs({ path: "src/new.ts", content: "a\nb\nc" });
+    assert(text(streaming.render(80)).includes("Writing src/new.ts · 3 lines"), "growing arguments refresh");
+    const write = tools.get("write")!;
+    const direct = write.renderCall!({}, plainTheme, { args: { path: "x.ts", content: "1\n2\n3\n" }, isPartial: true, executionStarted: false } as never);
+    assert(text(direct.render(80)).includes("3 lines"));
+    const editing = card("edit", "stream-edit", { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }, { oldText: "c" }] });
+    assert(text(editing.render(80)).includes("Editing src/a.ts · 2 edits"));
+    editing.markExecutionStarted();
+    assert(text(editing.render(80)).includes("Editing src/a.ts · 2 edits"));
+    editing.updateResult({ content: [{ type: "text", text: "ok" }], details: { patch: "@@ -1 +1 @@\n-a\n+b" }, isError: false } as never);
+    const done = text(editing.render(80));
+    assert(done.includes("Edited src/a.ts (+1 -1)") && !done.includes("edits"), done);
   }
 
   await handlers.get("session_shutdown")!({}, context);
