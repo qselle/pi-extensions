@@ -2,12 +2,17 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { STATE_TYPE, referenceOlderImages, restoreEnabled, retrieveImage } from "./history.ts";
-import { ImageStore, ORIGINAL_IMAGE, originalReference, isImagePart } from "./storage.ts";
-import { exportPortableSession, hydrateImages, restoreStorageEnabled, STORAGE_STATE_TYPE, storeMessage, storedImages } from "./pipeline.ts";
+import { ImageStore, ORIGINAL_IMAGE, originalReference } from "./storage.ts";
+import { exportPortableSession, hasStorableImage, hydrateImages, restoreStorageEnabled, STORAGE_STATE_TYPE, storeMessage, storedImages } from "./pipeline.ts";
 import { inspectStorage, originalFiles, removeUnusedOriginals } from "./cleanup.ts";
 import { OriginalImageViewer, prepareImageForViewer } from "./viewer.ts";
+import { loadConfig, storageSupported, type ImageHistoryConfig } from "./config.ts";
 
-export default function imageHistory(pi: ExtensionAPI): void {
+export interface ImageHistoryOptions { agentDir?: string; config?: ImageHistoryConfig }
+
+export default function imageHistory(pi: ExtensionAPI, options: ImageHistoryOptions = {}): void {
+  const agentDir = options.agentDir ?? getAgentDir();
+  const config = options.config ?? loadConfig(agentDir);
   let enabled = false;
   let replaced = 0;
   let storageEnabled = false;
@@ -16,7 +21,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
   let exportAbort: AbortController | undefined;
   let cleanupAbort: AbortController | undefined;
   let closeViewer: (() => void) | undefined;
-  const store = new ImageStore(join(getAgentDir(), "image-store"));
+  const store = new ImageStore(join(agentDir, "image-store"));
   const rememberSession = async (ctx: ExtensionContext) => {
     await store.rememberSessionDirectory(ctx.sessionManager.getSessionDir());
     const file = ctx.sessionManager.getSessionFile();
@@ -32,9 +37,11 @@ export default function imageHistory(pi: ExtensionAPI): void {
     generation++; exportAbort?.abort(); exportAbort = undefined; store.clearCache(); warned = false;
     cleanupAbort?.abort(); cleanupAbort = undefined; closeViewer?.(); closeViewer = undefined;
     const entries = ctx.sessionManager.getBranch();
-    enabled = restoreEnabled(entries); storageEnabled = restoreStorageEnabled(entries); replaced = 0; sync(ctx);
+    enabled = restoreEnabled(entries, config.deferral);
+    storageEnabled = restoreStorageEnabled(entries, config.storage && storageSupported()); replaced = 0; sync(ctx);
     const version = generation;
-    if (storageEnabled || storedImages(entries).length) {
+    // A global default alone never creates the store; the first storable image does.
+    if (restoreStorageEnabled(entries) || storedImages(entries).length) {
       try { await rememberSession(ctx); }
       catch { if (version === generation) warning(ctx, "Image session directory could not be recorded; new originals will stay embedded until storage is available."); }
     }
@@ -48,7 +55,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
   });
   pi.on("message_end", async (event, ctx) => {
     if (!storageEnabled || !["user", "toolResult"].includes(event.message.role)
-      || !("content" in event.message) || !Array.isArray(event.message.content) || !event.message.content.some(isImagePart)) return;
+      || !hasStorableImage(event.message)) return;
     const version = generation;
     try { await rememberSession(ctx); }
     catch { if (version === generation) warning(ctx, "Image storage unavailable; this image remains embedded."); return; }
@@ -98,7 +105,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
           await rememberSession(ctx);
           const extra = args.trim().slice(action.length).trim();
           if (extra) await store.rememberSessionDirectory(resolve(ctx.cwd, extra));
-          const sessions = join(getAgentDir(), "sessions");
+          const sessions = join(agentDir, "sessions");
           const inventory = await inspectStorage(store, sessions, abort.signal);
           if (version !== generation) return;
           const bytes = inventory.candidates.reduce((sum, file) => sum + file.bytes, 0);
@@ -122,7 +129,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
         const abort = new AbortController(); exportAbort = abort;
         try {
           const supplied = args.trim().slice(action.length).trim();
-          const exportsDirectory = join(getAgentDir(), "exports");
+          const exportsDirectory = join(agentDir, "exports");
           if (!supplied) await mkdir(exportsDirectory, { recursive: true, mode: 0o700 });
           const destination = supplied ? resolve(ctx.cwd, supplied)
             : join(exportsDirectory, `${ctx.sessionManager.getSessionId()}-${Date.now()}.portable.jsonl`);

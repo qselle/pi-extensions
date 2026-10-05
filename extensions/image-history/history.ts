@@ -1,8 +1,9 @@
 import { entryContent, ORIGINAL_IMAGE, originalReference, type ImagePart as Image } from "./storage.ts";
 export const STATE_TYPE = "image-history-state";
 const isImage = (part: any): part is Image => part?.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string";
-export function restoreEnabled(entries: readonly any[]): boolean {
-  let enabled = false;
+/** The latest branch entry wins; without one, the configured default applies. */
+export function restoreEnabled(entries: readonly any[], fallback = false): boolean {
+  let enabled = fallback;
   for (const entry of entries) if (entry.type === "custom" && entry.customType === STATE_TYPE && entry.data?.version === 1 && typeof entry.data.enabled === "boolean") enabled = entry.data.enabled;
   return enabled;
 }

@@ -1,13 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { link, open, unlink } from "node:fs/promises";
-import { ImageStore, ORIGINAL_IMAGE, entryContent, isImagePart, originalReference, type ImagePart } from "./storage.ts";
+import { ImageStore, MIN_ORIGINAL_BYTES, ORIGINAL_IMAGE, entryContent, isImagePart, originalReference, type ImagePart } from "./storage.ts";
 
 export const STORAGE_STATE_TYPE = "image-store-state";
-export function restoreStorageEnabled(entries: readonly any[]): boolean {
-  let enabled = false;
+/** The latest branch entry wins; without one, the configured default applies. */
+export function restoreStorageEnabled(entries: readonly any[], fallback = false): boolean {
+  let enabled = fallback;
   for (const entry of entries) if (entry?.type === "custom" && entry.customType === STORAGE_STATE_TYPE
     && entry.data?.version === 1 && typeof entry.data.enabled === "boolean") enabled = entry.data.enabled;
   return enabled;
+}
+
+/** Cheap pre-check so messages with only small images never touch the store. */
+export function hasStorableImage(message: unknown): boolean {
+  const content = (message as { content?: unknown })?.content;
+  return Array.isArray(content) && content.some((part) => isImagePart(part) && part[ORIGINAL_IMAGE] === undefined
+    && Math.floor(part.data.length * 3 / 4) >= MIN_ORIGINAL_BYTES);
 }
 
 export interface StoredImageLocation { reference: string; image: ImagePart }
