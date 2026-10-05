@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
+import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
 import { toolText } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
@@ -11,6 +12,7 @@ import {
   MAX_PLAN_DESCRIPTION_CHARS,
   createPlanState,
   decodePlanEntry,
+  decodePlanState,
   planIsActive,
   planResponse,
   replacePlan,
@@ -19,6 +21,7 @@ import {
   type PlanState,
 } from "./plan.ts";
 import {
+  PLAN_CLEARED_CONTEXT,
   PLAN_CONTEXT_TYPE,
   PLAN_PROMPT_GUIDELINES,
   buildPlanContext,
@@ -65,14 +68,23 @@ interface PlanToolDetails {
   plan: PlanState;
 }
 
-interface TransientPlanMessage {
-  role: "custom";
-  customType: string;
-  content: string;
-  display: boolean;
-  details?: unknown;
-  timestamp: number;
-}
+const planAnchorText = (state: PlanState): string => planIsActive(state) ? buildPlanContext(state) : PLAN_CLEARED_CONTEXT;
+
+/**
+ * update_plan results already show the model each plan it writes. A hidden
+ * checkpoint is persisted only when the visible conversation stops showing the
+ * current plan: after compaction, branch navigation, restore, or /plan clear.
+ */
+const planAnchor = createContextAnchor<PlanState>({
+  customType: PLAN_CONTEXT_TYPE,
+  render: planAnchorText,
+  readMessage: (message) => {
+    if (message.role !== "toolResult" || message.toolName !== "update_plan" || message.isError) return undefined;
+    const state = decodePlanState((message.details as Partial<PlanToolDetails> | undefined)?.plan);
+    return state ? planAnchorText(state) : undefined;
+  },
+  emptyText: PLAN_CLEARED_CONTEXT,
+});
 
 export default function planExtension(pi: ExtensionAPI): void {
   let plan = createPlanState();
@@ -100,6 +112,8 @@ export default function planExtension(pi: ExtensionAPI): void {
     overlayCard.invalidate();
   };
 
+  const syncAnchor = (ctx: AnchorContext) => planAnchor.sync(pi, ctx, plan);
+
   const clearPlan = async (ctx: ExtensionCommandContext) => {
     if (plan.items.length === 0) {
       ctx.ui.notify("No plan is set.", "info");
@@ -111,6 +125,7 @@ export default function planExtension(pi: ExtensionAPI): void {
     if (!confirmed || version !== generation) return;
     if (snapshot !== plan) { ctx.ui.notify("Plan changed while confirming. Review the current plan before clearing it.", "warning"); return; }
     commit(createPlanState());
+    syncAnchor(ctx);
     ctx.ui.notify("Plan cleared.", "info");
   };
 
@@ -191,27 +206,6 @@ export default function planExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("context", (event) => {
-    const activePlan = planIsActive(plan) ? plan : undefined;
-    const transformed: typeof event.messages = [];
-    for (const message of event.messages) {
-      if ((message as { customType?: string }).customType !== PLAN_CONTEXT_TYPE) transformed.push(message);
-    }
-    if (!activePlan) {
-      return transformed.length === event.messages.length ? undefined : { messages: transformed };
-    }
-
-    transformed.push({
-      role: "custom",
-      customType: PLAN_CONTEXT_TYPE,
-      content: buildPlanContext(activePlan),
-      display: false,
-      details: { transient: true },
-      timestamp: Date.now(),
-    } as unknown as TransientPlanMessage as typeof event.messages[number]);
-    return { messages: transformed };
-  });
-
   const restore = (ctx: ExtensionContext) => {
     generation++;
     plan = createPlanState();
@@ -229,8 +223,8 @@ export default function planExtension(pi: ExtensionAPI): void {
     overlayCard.invalidate();
   };
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
-  pi.on("session_compact", () => overlayCard.invalidate());
+  pi.on("session_start", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
+  pi.on("session_tree", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
+  pi.on("session_compact", (_event, ctx) => { overlayCard.invalidate(); syncAnchor(ctx); });
   pi.on("session_shutdown", () => { generation++; overlayCard.unregister(); });
 }

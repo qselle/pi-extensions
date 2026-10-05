@@ -10,13 +10,15 @@ function plan() {
   ], "The design is ready");
 }
 
-test("injects escaped plan data and the current execution contract", () => {
+test("checkpoints escape plan data and restate the continuity contract", () => {
   const context = buildPlanContext(plan());
   expect(context).toContain("<execution_plan>");
   expect(context).toContain("[x] Inspect &lt;input&gt;");
   expect(context).toContain("[>] Implement &amp; verify");
   expect(context).toContain("Current step: Implement &amp; verify");
-  expect(context).toContain("call update_plan with the complete latest list");
+  expect(context).toContain("## Execution plan checkpoint");
+  expect(context).toContain("preserve completed milestones in the next update_plan call");
+  expect(buildPlanContext(plan())).toBe(context);
 });
 
 test("tool output reports progress without hiding the complete plan", () => {
@@ -24,6 +26,7 @@ test("tool output reports progress without hiding the complete plan", () => {
   expect(output).toContain("Plan updated: 1/3 finalized");
   expect(output).toContain("Current: Implement & verify");
   expect(output).toContain("- [ ] Polish output");
+  expect(output).toContain("Before finishing the response, call update_plan");
 });
 
 test("guidelines distinguish tactical plans from persistent goals", () => {

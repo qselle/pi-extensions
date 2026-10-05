@@ -28,7 +28,7 @@ Cancelled work remains separate from successful completion in progress totals.
 
 Steps and groups accept an optional `description` (up to 600 characters) for
 implementation context or verification details. Keep `step` concise. Descriptions
-are saved with the plan, included in active model context, and shown when their
+are saved with the plan, included in tool results and checkpoints, and shown when their
 row is selected in `/plan`. Long descriptions remain complete in `/plan status`
 and expanded tool results; the passive progress line stays compact.
 
@@ -74,7 +74,25 @@ or enter groups, Space to toggle a group, and `q` or Escape to close.
 `/plan status` prints the full tree. Explanations and completed steps remain
 available in the panel and expanded tool results.
 
-Plan state follows session branches and is injected only while active. Plans describe the current route through work; they do not replace persistent goal completion checks.
+Plans describe the current route through work; they do not replace persistent goal completion checks.
+
+## Model context
+
+Each `update_plan` result already shows the model the complete plan, so nothing
+is added to individual provider requests. This keeps the conversation prefix
+identical between requests and preserves prompt caching.
+
+A hidden `plan-context` checkpoint is appended to the session only when the
+visible conversation stops showing the current plan:
+
+- after compaction removes the latest `update_plan` result;
+- after `/tree` navigation, resume, or reload when the branch's visible
+  messages show a different plan;
+- after `/plan clear`, as one notice that the earlier plan no longer applies.
+
+The newest visible `update_plan` result or checkpoint is compared with the
+current plan first, so repeated restores never send a duplicate. Finished plans
+are treated like no plan. Plan state follows session branches.
 
 ## Dependencies and limitations
 

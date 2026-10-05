@@ -200,7 +200,7 @@ export function planResponse(plan: PlanState): string {
   });
 }
 
-function decodePlanState(value: unknown): PlanState | undefined {
+export function decodePlanState(value: unknown): PlanState | undefined {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as { items?: unknown; explanation?: unknown; updatedAt?: unknown };
   if (!Array.isArray(raw.items)) return undefined;
