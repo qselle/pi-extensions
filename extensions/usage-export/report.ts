@@ -1,5 +1,5 @@
 import { entryUsage } from "../footer/usage.ts";
-import { SUBAGENT_USAGE_ENTRY_TYPE } from "../subagents/usage.ts";
+import { decodeUsageRecord, SUBAGENT_USAGE_ENTRY_TYPE } from "../subagents/usage.ts";
 
 const METRICS = ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"] as const;
 type Metric = typeof METRICS[number];
@@ -35,10 +35,9 @@ export function buildReport(entries: Iterable<unknown>, scope: UsageReport["scop
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as Record<string, any>;
     const assistant = entry.type === "message" && entry.message?.role === "assistant";
-    const child = entry.type === "custom" && entry.customType === SUBAGENT_USAGE_ENTRY_TYPE
-      && entry.data?.version === 1 && typeof entry.data.agentId === "string"
-      && typeof entry.data.agentName === "string" && entry.data.usage && typeof entry.data.usage === "object"
-      ? entry.data : undefined;
+    // Includes legacy child rows that carry provider/model but no agent identity.
+    const decoded = entry.type === "custom" && entry.customType === SUBAGENT_USAGE_ENTRY_TYPE ? decodeUsageRecord(entry.data) : undefined;
+    const child = decoded && entry.data.usage && typeof entry.data.usage === "object" ? decoded : undefined;
     const usage = (child ? { ...child.usage, cost: { total: child.usage.cost } } : entryUsage(entry)) as Record<string, any> | undefined;
     // Keep assistant responses even if the provider omitted usage. Other entry
     // kinds contribute only when Pi explicitly records nested/summary usage.

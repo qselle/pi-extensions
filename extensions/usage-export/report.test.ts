@@ -59,3 +59,14 @@ test("includes recorded child-agent usage without exporting child task or identi
   expect(report.totals.cacheRead.known).toBe(45);
   expect(formatReport(report, "json")).not.toContain("private");
 });
+
+test("counts legacy child usage rows that carry provider and model but no agent identity", () => {
+  const legacy = { type: "custom", customType: "subagent-usage", id: "legacy-1", data: {
+    version: 1, provider: "anthropic", model: "claude", usage: { input: 300, output: 40, cacheRead: 900, cacheWrite: 10, cacheWrite1h: 0, cost: 0.5 },
+  } };
+  const report = buildReport([assistant, legacy, legacy, { ...legacy, id: "anonymous", data: { version: 1, usage: { input: 999 } } }], "branch");
+  expect(report.rows).toHaveLength(2);
+  expect(report.rows[1]).toMatchObject({ source: "subagent", provider: "anthropic", model: "claude", input: 300, output: 40, cacheRead: 900, cacheWrite: 10, cost: 0.5 });
+  expect(report.totals.cost.known).toBe(0.51);
+  expect(report.totals.input.known).toBe(assistant.message.usage.input + 300);
+});
