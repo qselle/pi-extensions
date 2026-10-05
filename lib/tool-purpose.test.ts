@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Type } from "typebox";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "./tool-purpose.ts";
+import { changePurposeParameter, commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, purposeArgument, toolPurpose, toolPurposeParameter, withoutPurpose } from "./tool-purpose.ts";
 
 test("command purpose is optional metadata without a validation length failure", () => {
   const schema = Type.Object({ command: Type.String(), purpose: commandPurposeParameter });
@@ -50,4 +50,22 @@ test("general tool purposes remain optional and omit redundant target captions",
   expect(toolPurpose("Find the authentication boundary", ["src/app.ts"])).toBe("Find the authentication boundary");
   expect(toolPurpose("\x1b[31mCheck\x1b[0m input\u202e")).toBe("Check input");
   expect(toolPurpose("🌍".repeat(200))).toBe("🌍".repeat(159) + "…");
+});
+
+test("commands and file changes are asked to always carry a purpose, still optionally", () => {
+  for (const name of ["bash", "edit", "write"]) expect(COMMAND_PURPOSE_GUIDELINE).toContain(name);
+  expect(COMMAND_PURPOSE_GUIDELINE).toContain("Omit it only for self-evident reads");
+  expect((commandPurposeParameter as any).description).toContain("Always include it");
+  expect((changePurposeParameter as any).description).toContain("Always include it");
+  expect(Type.Object({ purpose: changePurposeParameter, path: Type.String() }).required).toEqual(["path"]);
+});
+
+test("saved reasoning is a display alias, and neither field reaches execution", () => {
+  expect(purposeArgument({ reasoning: "Check tests" })).toBe("Check tests");
+  expect(purposeArgument({ purpose: "Fix the parser", reasoning: "Check tests" })).toBe("Fix the parser");
+  expect(purposeArgument({ purpose: " ", reasoning: "Check tests" })).toBe("Check tests");
+  expect(purposeArgument(undefined)).toBeUndefined();
+  const args = { path: "a.ts", purpose: "Fix", reasoning: "Check" };
+  expect(withoutPurpose(args)).toEqual({ path: "a.ts" });
+  expect(args).toEqual({ path: "a.ts", purpose: "Fix", reasoning: "Check" });
 });

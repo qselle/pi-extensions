@@ -20,6 +20,7 @@ const ALIASES: Record<string, string> = { sh: "bash", shell: "bash", zsh: "bash"
 let highlighter: Highlighter | undefined;
 let initialization: Promise<boolean> | undefined;
 let generation = 0;
+let revision = 0;
 let supported = new Set<string>();
 const cache = new Map<string, { lines: string[]; size: number }>();
 let cachedCharacters = 0;
@@ -42,6 +43,7 @@ export function initializeSyntax(): Promise<boolean> {
       const languages = new Set(instance.getLoadedLanguages());
       highlighter = instance;
       supported = languages;
+      revision++;
       return true;
     } catch {
       instance.dispose();
@@ -54,6 +56,7 @@ export function initializeSyntax(): Promise<boolean> {
 /** Release this extension's resources, including an initialization still in flight. */
 export function disposeSyntax(): void {
   generation++;
+  revision++;
   const instance = highlighter;
   highlighter = undefined;
   initialization = undefined;
@@ -61,6 +64,11 @@ export function disposeSyntax(): void {
   cache.clear();
   cachedCharacters = 0;
   try { instance?.dispose(); } catch { /* Cleanup must not interrupt session shutdown. */ }
+}
+
+/** Changes whenever highlighting output can change, so renderers can drop cached rows. */
+export function syntaxRevision(): number {
+  return revision;
 }
 
 /** Known, explicitly loaded grammars only; there is no content-based guessing. */

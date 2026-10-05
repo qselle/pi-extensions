@@ -1,6 +1,6 @@
 /** The first call renders the group; followers render empty until expanded. */
 import { firstLine, labelText, resultText, searchTarget, shortPath, summarize, type ToolName } from "./render.ts";
-import { toolPurpose } from "../../lib/tool-purpose.ts";
+import { purposeArgument, toolPurpose } from "../../lib/tool-purpose.ts";
 
 export const EXPLORATION_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
 
@@ -42,6 +42,12 @@ const groups = new Map<string, Group>();
 const callToGroup = new Map<string, string>();
 let currentId: string | undefined;
 let seq = 0;
+let revision = 0;
+
+/** Changes whenever any group's rows or activity can render differently. */
+export function explorationRevision(): number {
+	return revision;
+}
 
 export function readRange(args: any): string | undefined {
 	const offset = Number.isInteger(args?.offset) ? args.offset : undefined;
@@ -54,7 +60,7 @@ export function readRange(args: any): string | undefined {
 
 export function activityFor(name: string, args: any): Activity | undefined {
 	const a = args ?? {};
-	const purpose = toolPurpose(a.purpose, [a.path, a.pattern, a.query, a.name]) || undefined;
+	const purpose = toolPurpose(purposeArgument(a), [a.path, a.pattern, a.query, a.name]) || undefined;
 	if (name === "read" && typeof a.path === "string") {
 		const path = shortPath(labelText(a.path));
 		return { verb: "Read", detail: path, path: a.path, filePath: a.path, range: readRange(a), purpose };
@@ -77,6 +83,7 @@ export function noteStart(id: string, name: string, args: any): void {
 	}
 	g.calls.push({ ...act, id, status: "pending", index: g.calls.length });
 	callToGroup.set(id, g.id);
+	revision++;
 	g.rerender?.();
 }
 
@@ -86,6 +93,7 @@ export function noteEnd(id: string, isError: boolean, count?: string): void {
 	if (g && c) {
 		c.status = isError ? "error" : "done";
 		if (count) c.count = count;
+		revision++;
 		g.rerender?.();
 	}
 }
@@ -96,6 +104,7 @@ export function closeGroup(): void {
 	currentId = undefined;
 	if (g) {
 		g.accepting = false;
+		revision++;
 		g.rerender?.();
 	}
 }
@@ -242,4 +251,5 @@ export function resetExploration(): void {
 	callToGroup.clear();
 	currentId = undefined;
 	seq = 0;
+	revision++;
 }
