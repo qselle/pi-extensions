@@ -5,6 +5,8 @@ import { join } from "node:path";
 import imageHistory from "./index.ts";
 import { CONFIG_FILE, loadConfig, type ImageHistoryConfig } from "./config.ts";
 import { STATE_TYPE } from "./history.ts";
+import { legacyToolResult, writeLegacyBlob } from "./legacy.fixture.ts";
+import { LEGACY_PLACEHOLDER, LEGACY_PREVIEW_ENTRY } from "./legacy.ts";
 import { STORAGE_STATE_TYPE } from "./pipeline.ts";
 import { syntheticPng } from "./png.fixture.ts";
 import { ORIGINAL_IMAGE } from "./storage.ts";
@@ -20,6 +22,7 @@ function setup(agentDir: string, options: { config?: ImageHistoryConfig; mode?: 
     on: (event: string, handler: Function) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
     registerTool: () => {},
+    registerEntryRenderer: (type: string, renderer: Function) => renderers.set(type, renderer),
     getActiveTools: () => active,
     setActiveTools: (tools: string[]) => { active = tools; },
     appendEntry: (customType: string, data: unknown) => branch.push({ type: "custom", id: `e${branch.length}`, customType, data }),
@@ -84,5 +87,36 @@ test("configured deferral default activates history_image unless the branch turn
     h.branch.push({ type: "custom", id: "off", customType: STATE_TYPE, data: { version: 1, enabled: false } });
     await h.emit("session_tree");
     expect(h.active()).not.toContain("history_image");
+  } finally { await rm(agentDir, { recursive: true, force: true }); }
+});
+
+test("a resumed sidecar session gets its images back in model context and the transcript", async () => {
+  const agentDir = await temporary();
+  try {
+    const blob = await writeLegacyBlob(agentDir, Buffer.from("legacy screenshot"));
+    const image = { type: "image", data: Buffer.from("legacy screenshot").toString("base64"), mimeType: "image/png" };
+    const entry = () => ({ type: "message", id: "read", parentId: null, message: legacyToolResult([blob.ref]) });
+
+    // Model context restores without touching the loaded entry outside the terminal UI.
+    const rpc = setup(agentDir, { branch: [entry()] });
+    await rpc.emit("session_start");
+    expect(rpc.branch[0].message.content[1]).toEqual({ type: "text", text: LEGACY_PLACEHOLDER });
+    const context = await rpc.emit("context", { messages: [rpc.branch[0].message, { role: "user", content: "next", timestamp: 2 }] });
+    expect(context.messages[0].content[1]).toEqual(image);
+
+    // The terminal transcript renders from loaded entries, restored in memory before display.
+    const tui = setup(agentDir, { mode: "tui", branch: [entry()] });
+    await tui.emit("session_start");
+    expect(tui.branch[0].message.content[1]).toEqual(image);
+    expect(tui.notices).toEqual([]);
+
+    // A missing sidecar leaves a labeled note and one warning.
+    await rm(blob.path);
+    const missing = setup(agentDir, { branch: [entry()] });
+    await missing.emit("session_start");
+    const result = await missing.emit("context", { messages: [missing.branch[0].message, missing.branch[0].message] });
+    expect(result.messages[0].content[1].text).toContain("unavailable");
+    expect(missing.notices).toHaveLength(1);
+    expect(tui.renderers.has(LEGACY_PREVIEW_ENTRY)).toBe(true);
   } finally { await rm(agentDir, { recursive: true, force: true }); }
 });

@@ -109,6 +109,35 @@ before retrying. Sessions copied outside the known directories cannot be
 discovered automatically: include their directory before confirming cleanup, or
 make them portable with export. No background cleanup runs.
 
+### Sessions from the earlier sidecar store
+
+Sessions written by the earlier sidecar image store keep tool-result images as
+`[image stored externally]` placeholders, with references in the message's
+`details.__pi_image_store` and bytes under
+`$PI_CODING_AGENT_DIR/image-store/sha256/<2 hex>/<sha256>.<ext>`. When such a
+session is resumed:
+
+- Every model request replaces each placeholder with its image. Attached-image
+  messages (`image-store-context-v1`) get their images appended. This works with
+  storage on or off.
+- In Pi's terminal UI, tool results on the active branch show their images: the
+  loaded entries are restored in memory before display, newest first, up to
+  64 MiB. The session file is not written. Images restored this way can be
+  deferred and retrieved like native ones. A fork or clone written afterwards
+  embeds them. Pi renders the transcript before extensions bind on an in-app
+  `/resume`, so there they appear on the next transcript rebuild (`/tree`, `/reload`)
+  or when reopening Pi with the session.
+- Attached-image transcript rows (`image-store-v1` entries) render the image.
+
+Only references in message `details` are read; free-text `pi-image://` markers
+never load files. Each file must be a regular, non-symlinked file owned by the
+current user, inside non-symlinked directories, at most 32 MiB, matching the
+recorded size and SHA-256. Missing or failed files become an explicit
+"unavailable" note plus one warning. PNG, JPEG, GIF and WebP are supported.
+Verified bytes share a 16 MiB cache cleared on navigation and shutdown.
+`/image-store gc` only manages `originals/`; it never inspects or deletes
+`image-store/sha256/`.
+
 ### Sharing sessions
 
 Pi's built-in exports contain the embedded preview. Use `/image-store export`
