@@ -18,7 +18,7 @@ try {
   const services = await createAgentSessionServices({
     cwd: root, agentDir: process.env.PI_CODING_AGENT_DIR, settingsManager: SettingsManager.inMemory({}),
     resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
-      extensionFactories: [(pi) => { runtime = telegramExtension(pi, {
+      extensionFactories: [(pi) => { runtime = telegramExtension(pi, { isSubagentChild: false,
         env: { PI_TELEGRAM_BOT_TOKEN: "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi", PI_TELEGRAM_CHAT_ID: "12345" },
         configFile: false,
         fetch: async (url, init) => {

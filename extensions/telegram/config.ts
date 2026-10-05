@@ -11,6 +11,8 @@ export type TelegramTopicsMode = "auto" | "required" | "off";
 export interface TelegramConfig {
   botToken: string;
   chatId: string;
+  /** The only Telegram user whose answers count; required for group chats. */
+  answerUserId?: string;
   threadId?: number;
   topics?: TelegramTopicsMode;
   details: TelegramGoalDetails;
@@ -20,6 +22,7 @@ export interface TelegramConfig {
 export interface TelegramConfigFile {
   botToken?: string;
   chatId?: string;
+  answerUserId?: string;
   threadId?: number;
   topics?: TelegramTopicsMode;
   details?: TelegramGoalDetails;
@@ -31,6 +34,16 @@ export type TelegramConfigResult =
   | { status: "enabled"; config: TelegramConfig }
   | { status: "disabled"; config?: TelegramConfig }
   | { status: "invalid"; message: string };
+
+/** Where a loaded configuration came from; legacy files are read-only inputs. */
+export type TelegramConfigSource =
+  | { kind: "file"; path: string; format: "current" | "legacy" }
+  | { kind: "environment" };
+
+export interface LoadedTelegramConfig {
+  result: TelegramConfigResult;
+  source: TelegramConfigSource;
+}
 
 export interface LoadTelegramConfigOptions {
   env?: Readonly<Record<string, string | undefined>>;
@@ -50,11 +63,19 @@ export interface SaveTelegramConfigOptions {
 
 export const TELEGRAM_CONFIG_FILENAME = "telegram.json";
 export const LEGACY_TELEGRAM_CONFIG_FILENAME = "telegram-notify.json";
+/** Older single-purpose notification config: botToken, chatId, delayMinutes, enabled. */
+export const LEGACY_NOTIFICATIONS_CONFIG_FILENAME = "telegram-notifications.json";
 export const MAX_TELEGRAM_CONFIG_BYTES = 64 * 1024;
 
 export const DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES = 5;
 const MAX_QUESTION_DELAY_MINUTES = 7 * 24 * 60;
-const CONFIG_KEYS = new Set(["botToken", "chatId", "threadId", "topics", "details", "questionDelayMinutes", "enabled"]);
+const CONFIG_KEYS = new Set(["botToken", "chatId", "answerUserId", "threadId", "topics", "details", "questionDelayMinutes", "enabled"]);
+const USER_ID = /^[1-9]\d{0,19}$/;
+
+/** The user allowed to answer: answerUserId, or the user of a private chat. */
+export function telegramAnswerUserId(config: Pick<TelegramConfig, "chatId" | "answerUserId">): string | undefined {
+  return config.answerUserId ?? (USER_ID.test(config.chatId) ? config.chatId : undefined);
+}
 
 export function defaultTelegramConfigPath(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -71,8 +92,17 @@ export function defaultTelegramConfigPath(
 }
 
 export function loadTelegramConfig(options: LoadTelegramConfigOptions = {}): TelegramConfigResult {
+  return loadTelegramConfigWithSource(options).result;
+}
+
+/**
+ * Reads telegram.json, then the legacy telegram-notify.json and
+ * telegram-notifications.json files when no explicit path is configured.
+ */
+export function loadTelegramConfigWithSource(options: LoadTelegramConfigOptions = {}): LoadedTelegramConfig {
   const env = options.env ?? process.env;
-  if (options.configFile === false) return readTelegramConfig(env);
+  const environment = (result: TelegramConfigResult): LoadedTelegramConfig => ({ result, source: { kind: "environment" } });
+  if (options.configFile === false) return environment(readTelegramConfig(env));
   const homeDir = options.homeDir ?? homedir();
   const cwd = options.cwd ?? process.cwd();
   const explicitPath = typeof options.configFile === "string"
@@ -86,17 +116,25 @@ export function loadTelegramConfig(options: LoadTelegramConfigOptions = {}): Tel
     platform: options.platform ?? process.platform,
     currentUid: options.currentUid ?? process.getuid?.(),
   };
-  let selectedPath = path;
-  let file = readSecureConfigFile(path, security);
-  if (file.status === "missing" && !explicitPath && typeof options.configFile !== "string") {
-    selectedPath = join(dirname(path), LEGACY_TELEGRAM_CONFIG_FILENAME);
-    file = readSecureConfigFile(selectedPath, { ...security, required: false });
+  const candidates: Array<{ path: string; format: "current" | "legacy" }> = [{ path, format: "current" }];
+  if (!explicitPath && typeof options.configFile !== "string") {
+    candidates.push(
+      { path: join(dirname(path), LEGACY_TELEGRAM_CONFIG_FILENAME), format: "current" },
+      { path: join(dirname(path), LEGACY_NOTIFICATIONS_CONFIG_FILENAME), format: "legacy" },
+    );
   }
-  if (file.status === "missing") return readTelegramConfig(env);
-  if (file.status === "invalid") return file;
-  const parsed = parseTelegramConfigFile(file.content, selectedPath);
-  if (parsed.status === "invalid") return parsed;
-  return readTelegramConfig(env, parsed.config);
+  for (const [index, candidate] of candidates.entries()) {
+    const file = readSecureConfigFile(candidate.path, { ...security, required: security.required && index === 0 });
+    if (file.status === "missing") continue;
+    const source: TelegramConfigSource = { kind: "file", ...candidate };
+    if (file.status === "invalid") return { result: file, source };
+    const parsed = candidate.format === "legacy"
+      ? parseLegacyNotificationsFile(file.content, candidate.path)
+      : parseTelegramConfigFile(file.content, candidate.path);
+    if (parsed.status === "invalid") return { result: parsed, source };
+    return { result: readTelegramConfig(env, parsed.config), source };
+  }
+  return environment(readTelegramConfig(env));
 }
 
 export async function saveTelegramConfig(
@@ -137,6 +175,7 @@ export function readTelegramConfig(
 ): TelegramConfigResult {
   const botToken = env.PI_TELEGRAM_BOT_TOKEN?.trim() || file.botToken?.trim();
   const chatId = env.PI_TELEGRAM_CHAT_ID?.trim() || file.chatId?.trim();
+  const answerUserId = env.PI_TELEGRAM_ANSWER_USER_ID?.trim() || file.answerUserId?.trim();
   const envThreadId = env.PI_TELEGRAM_THREAD_ID?.trim();
   const rawThreadId: string | number | undefined = envThreadId || file.threadId;
   const rawDetails = env.PI_TELEGRAM_GOAL_DETAILS?.trim() || file.details || "summary";
@@ -149,6 +188,7 @@ export function readTelegramConfig(
     || Boolean(
       botToken
       || chatId
+      || answerUserId
       || rawThreadId !== undefined
       || env.PI_TELEGRAM_GOAL_DETAILS?.trim()
       || envQuestionDelay || topics,
@@ -162,6 +202,9 @@ export function readTelegramConfig(
   }
   if (!/^-?\d+$/.test(chatId) && !/^@[A-Za-z0-9_]{5,32}$/.test(chatId)) {
     return { status: "invalid", message: "The Telegram chat ID must be numeric or an @channel username." };
+  }
+  if (answerUserId !== undefined && !USER_ID.test(answerUserId)) {
+    return { status: "invalid", message: "The Telegram answer user ID must be a positive numeric user ID." };
   }
 
   let threadId: number | undefined;
@@ -186,7 +229,11 @@ export function readTelegramConfig(
     };
   }
 
-  const config: TelegramConfig = { botToken, chatId, threadId, details, questionDelayMinutes, ...(topics ? { topics: topics as TelegramTopicsMode } : {}) };
+  const config: TelegramConfig = {
+    botToken, chatId, threadId, details, questionDelayMinutes,
+    ...(answerUserId ? { answerUserId } : {}),
+    ...(topics ? { topics: topics as TelegramTopicsMode } : {}),
+  };
   return file.enabled === false
     ? { status: "disabled", config }
     : { status: "enabled", config };
@@ -214,6 +261,8 @@ function parseTelegramConfigFile(
     return invalidFile(path, "field chatId must be a string or integer");
   }
   if (typeof record.chatId === "number" && !Number.isSafeInteger(record.chatId)) return invalidFile(path, "field chatId must be a safe integer");
+  const answerUserError = answerUserIdError(record.answerUserId, path);
+  if (answerUserError) return answerUserError;
   if (record.threadId !== undefined && (!Number.isSafeInteger(record.threadId) || (record.threadId as number) <= 0)) {
     return invalidFile(path, "field threadId must be a positive integer");
   }
@@ -237,6 +286,7 @@ function parseTelegramConfigFile(
     config: {
       botToken: record.botToken as string | undefined,
       chatId: record.chatId === undefined ? undefined : String(record.chatId),
+      ...(record.answerUserId !== undefined ? { answerUserId: String(record.answerUserId) } : {}),
       threadId: record.threadId as number | undefined,
       ...(record.topics ? { topics: record.topics as TelegramTopicsMode } : {}),
       details: record.details as TelegramGoalDetails | undefined,
@@ -244,6 +294,55 @@ function parseTelegramConfigFile(
       enabled: record.enabled as boolean | undefined,
     },
   };
+}
+
+/** Maps the older notification schema; unknown legacy fields are ignored. */
+function parseLegacyNotificationsFile(
+  content: string,
+  path: string,
+): { status: "valid"; config: TelegramConfigFile } | { status: "invalid"; message: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    return invalidFile(path, "is not valid JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return invalidFile(path, "must contain one JSON object");
+  }
+  const record = value as Record<string, unknown>;
+  if (record.botToken !== undefined && typeof record.botToken !== "string") return invalidFile(path, "field botToken must be a string");
+  if (record.chatId !== undefined && typeof record.chatId !== "string" && !Number.isSafeInteger(record.chatId)) {
+    return invalidFile(path, "field chatId must be a string or integer");
+  }
+  const answerUserError = answerUserIdError(record.answerUserId, path);
+  if (answerUserError) return answerUserError;
+  if (record.delayMinutes !== undefined && (typeof record.delayMinutes !== "number" || !Number.isFinite(record.delayMinutes))) {
+    return invalidFile(path, "field delayMinutes must be a finite number");
+  }
+  if (record.enabled !== undefined && typeof record.enabled !== "boolean") {
+    return invalidFile(path, "field enabled must be a boolean");
+  }
+  return {
+    status: "valid",
+    config: {
+      botToken: record.botToken as string | undefined,
+      chatId: record.chatId === undefined ? undefined : String(record.chatId),
+      ...(record.answerUserId !== undefined ? { answerUserId: String(record.answerUserId) } : {}),
+      topics: "auto",
+      // Older files accepted longer delays and capped them at load time.
+      questionDelayMinutes: record.delayMinutes === undefined
+        ? undefined
+        : Math.min(record.delayMinutes as number, MAX_QUESTION_DELAY_MINUTES),
+      enabled: record.enabled as boolean | undefined,
+    },
+  };
+}
+
+function answerUserIdError(value: unknown, path: string): { status: "invalid"; message: string } | undefined {
+  if (value === undefined) return undefined;
+  const valid = typeof value === "string" ? USER_ID.test(value.trim()) : Number.isSafeInteger(value) && (value as number) > 0;
+  return valid ? undefined : invalidFile(path, "field answerUserId must be a positive numeric user ID");
 }
 
 function readSecureConfigFile(

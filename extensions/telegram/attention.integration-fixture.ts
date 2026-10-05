@@ -53,7 +53,7 @@ async function runtime(source: "goal" | "schedule", reverse: boolean, failure?: 
       await saveScheduleStore(path, store);
     } });
   };
-  const installTelegram = (pi: ExtensionAPI) => { telegram = telegramExtension(pi, { service: {
+  const installTelegram = (pi: ExtensionAPI) => { telegram = telegramExtension(pi, { isSubagentChild: false, service: {
     send: async (text) => { messages.push(text); return { messageId: messages.length }; },
     openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
   } })!; };

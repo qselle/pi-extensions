@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { diagnoseTelegram, formatTelegramDiagnostics } from "./doctor.ts";
+import { describeTelegramConfigSource, diagnoseTelegram, formatTelegramDiagnostics } from "./doctor.ts";
 import type { TelegramConfig } from "./config.ts";
 
 const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
@@ -23,6 +23,25 @@ test("doctor checks bot, recipient, webhook and private topics without messages 
   expect(checks).toHaveLength(4);
   expect(checks.every((check) => check.status === "ok")).toBe(true);
   expect(formatTelegramDiagnostics(checks)).toContain("read-only");
+});
+
+test("doctor warns when a group has no single answering user", async () => {
+  const group = () => harness({ getMe: { id: 1, is_bot: true }, getChat: { type: "supergroup", is_forum: false }, getWebhookInfo: { url: "" } });
+  const missing = await diagnoseTelegram({ ...config, chatId: "-100123" }, group());
+  expect(missing.find((check) => check.name === "Answers")).toMatchObject({ status: "warning", message: expect.stringContaining("answerUserId") });
+  const set = await diagnoseTelegram({ ...config, chatId: "-100123", answerUserId: "42" }, group());
+  expect(set.find((check) => check.name === "Answers")).toMatchObject({ status: "ok" });
+  const privateChat = harness({ getMe: { id: 1, is_bot: true, has_topics_enabled: true }, getChat: { type: "private" }, getWebhookInfo: { url: "" } });
+  expect((await diagnoseTelegram({ ...config, answerUserId: "42" }, privateChat)).find((check) => check.name === "Answers")?.status).toBe("warning");
+});
+
+test("doctor names the config source and environment overrides", () => {
+  expect(describeTelegramConfigSource({ kind: "environment" }, {})).toEqual({ name: "Config", status: "ok", message: "Environment variables only." });
+  const legacy = describeTelegramConfigSource({ kind: "file", path: "/agent/telegram-notifications.json", format: "legacy" }, { PI_TELEGRAM_CHAT_ID: "1" });
+  expect(legacy.message).toContain("/agent/telegram-notifications.json.");
+  expect(legacy.message).toContain("saves telegram.json");
+  expect(legacy.message).toContain("override");
+  expect(describeTelegramConfigSource({ kind: "file", path: "/agent/telegram.json", format: "current" }, {}).message).toBe("/agent/telegram.json.");
 });
 
 test("doctor identifies webhook conflicts without exposing the webhook URL or error detail", async () => {

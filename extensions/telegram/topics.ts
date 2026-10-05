@@ -4,6 +4,16 @@ import { TelegramApiClient, TelegramApiError, safeTelegramError } from "./api.ts
 import type { TelegramConfig, TelegramTopicsMode } from "./config.ts";
 
 export const TOPIC_ENTRY = "telegram:session-topic";
+/** Read-only: topic mappings written by an earlier notification integration. */
+export const LEGACY_TOPIC_ENTRY = "telegram-session-topic";
+interface LegacyTopicRecord {
+  version: 1;
+  sessionId: string;
+  /** sha256(`${botToken}\0${chatId}`) truncated to 24 hex characters. */
+  configKey: string;
+  messageThreadId: number;
+  name: string;
+}
 interface TopicRecord {
   version: 1;
   account: string;
@@ -37,6 +47,7 @@ export function topicName(title: string | undefined, cwd: string, id: string): s
 /** Session topics live in Pi metadata; forks cannot inherit their parent's destination. */
 export class SessionTopics {
   private readonly account: string;
+  private readonly legacyKey: string;
   private current?: SessionState;
   private supported?: Promise<boolean>;
   private readonly lifecycle = new AbortController();
@@ -44,6 +55,7 @@ export class SessionTopics {
   constructor(private readonly config: TelegramConfig, private readonly api: TelegramApiClient) {
     // Bot ID survives token rotation; no credential or raw recipient is persisted.
     this.account = createHash("sha256").update(`${config.botToken.split(":")[0]}\0${config.chatId.toLowerCase()}`).digest("hex");
+    this.legacyKey = createHash("sha256").update(`${config.botToken}\0${config.chatId}`).digest("hex").slice(0, 24);
   }
 
   bind(input: TopicSession): void {
@@ -53,7 +65,18 @@ export class SessionTopics {
     }
     let record: TopicRecord = { version: 1, account: this.account, sessionId: input.id };
     for (const entry of input.entries) {
-      if (entry.type !== "custom" || entry.customType !== TOPIC_ENTRY) continue;
+      if (entry.type !== "custom") continue;
+      if (entry.customType === LEGACY_TOPIC_ENTRY) {
+        // Reuse the topic an earlier integration created instead of opening a duplicate.
+        const legacy = entry.data as Partial<LegacyTopicRecord> | undefined;
+        if (
+          legacy?.version !== 1 || legacy.sessionId !== input.id || legacy.configKey !== this.legacyKey
+          || !Number.isSafeInteger(legacy.messageThreadId) || legacy.messageThreadId! <= 0 || typeof legacy.name !== "string"
+        ) continue;
+        record = { ...record, threadId: legacy.messageThreadId, title: legacy.name, creating: false };
+        continue;
+      }
+      if (entry.customType !== TOPIC_ENTRY) continue;
       const candidate = entry.data as TopicRecord | undefined;
       if (candidate?.version !== 1 || candidate.account !== this.account || candidate.sessionId !== input.id) continue;
       if (candidate.threadId !== undefined && (!Number.isSafeInteger(candidate.threadId) || candidate.threadId <= 0)) continue;

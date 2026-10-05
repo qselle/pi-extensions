@@ -78,6 +78,17 @@ export async function promptTelegramSetup(
     current?.chatId ?? "Get your chat ID first",
   ))?.trim();
   if (!chatId) return undefined;
+  // In a private chat the chat ID is the user. In groups any member could
+  // otherwise answer, so one user ID must be named explicitly.
+  let answerUserId: string | undefined;
+  if (!/^[1-9]\d*$/.test(chatId)) {
+    const value = await ctx.ui.input(
+      "Your Telegram user ID (only this user can answer; leave empty to disable Telegram answers)",
+      current?.answerUserId ?? "e.g. 123456789",
+    );
+    if (value === undefined) return undefined;
+    answerUserId = value.trim() || undefined;
+  }
   const delayText = (await ctx.ui.input(
     "Question delay in minutes",
     String(current?.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES),
@@ -87,6 +98,7 @@ export async function promptTelegramSetup(
   const result = readTelegramConfig({}, {
     botToken,
     chatId,
+    answerUserId,
     threadId: current?.threadId,
     topics: current?.topics,
     details: current?.details ?? "summary",

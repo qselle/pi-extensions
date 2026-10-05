@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { TelegramApiClient, TelegramApiError } from "./api.ts";
+import { isTransientTelegramError, TelegramApiClient, TelegramApiError } from "./api.ts";
 import type { TelegramConfig } from "./config.ts";
 
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
@@ -197,4 +197,12 @@ test("rejects invalid and oversized Telegram responses", async () => {
     fetch: (async () => new Response("x".repeat(70_000), { status: 200 })),
   });
   await expect(oversized.sendMessage("test")).rejects.toMatchObject({ code: "response" });
+});
+
+test("classifies only bad request, credential, permission and missing-resource failures as permanent", () => {
+  for (const code of [400, 401, 403, 404]) expect(isTransientTelegramError(new TelegramApiError("x", "rejected", code))).toBe(false);
+  for (const code of [409, 429, 500, 502]) expect(isTransientTelegramError(new TelegramApiError("x", code === 429 ? "rate_limited" : "rejected", code))).toBe(true);
+  expect(isTransientTelegramError(new TelegramApiError("x", "network"))).toBe(true);
+  expect(isTransientTelegramError(new TelegramApiError("x", "timeout"))).toBe(true);
+  expect(isTransientTelegramError(new DOMException("Aborted", "AbortError"))).toBe(false);
 });
