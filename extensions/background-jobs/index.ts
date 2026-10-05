@@ -206,8 +206,10 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderShell: bashStyle?.renderShell,
     renderCall: (args: any, theme, context) => {
-      const purpose = safePurpose(args.purpose, [args.command]);
-      const shown = { ...args, purpose, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) };
+      // Saved calls may carry intent as `reasoning`: redact it like `purpose` and never pass it on raw.
+      const { reasoning, ...rest } = args;
+      const purpose = safePurpose(args.purpose || reasoning, [args.command]);
+      const shown = { ...rest, purpose, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) };
       return bashStyle?.renderCall?.(shown, theme, context)
         ?? lines([...(purpose ? [theme.fg("muted", purpose)] : []), theme.fg("accent", `$ ${safeLabel(args.command)}`)].join("\n"));
     },

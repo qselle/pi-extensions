@@ -7,10 +7,15 @@ import { join } from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { registerSecretVault, SecretVault } from "../questions/secrets.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pi-tool-render-managed-"));
 process.env.PI_CODING_AGENT_DIR = root;
 initTheme("dark", false);
+const vault = new SecretVault();
+const secret = "managed-fixture-private-value";
+vault.issue("reasoning", secret);
+const unregisterSecrets = registerSecretVault(vault);
 try {
   const { default: background } = await import("../background-jobs/index.ts");
   const { default: renderer } = await import("./index.ts");
@@ -38,6 +43,7 @@ try {
     view.updateResult(result, partial);
     return view;
   };
+  const plainTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
   const rows = (view: ToolExecutionComponent, width = 100) => view.render(width).map(plain).slice(1);
   try {
     // Success: status and elapsed on the headline, only output below it.
@@ -71,6 +77,12 @@ try {
     assert(rows(running).join("\n").includes("Still running — job_wait"));
     await tools.get("job_stop").execute("stop", { id: yielded.details.id });
 
+    // Legacy `reasoning` captions are redacted like `purpose`, and execution sees `purpose`.
+    const legacy = { command: "printf ok", reasoning: `Check ${secret} access` };
+    assert.deepEqual(bash.prepareArguments(legacy), { command: "printf ok", purpose: legacy.reasoning });
+    const caption = plain(bash.renderCall(legacy, plainTheme, { args: legacy }).render(120)[0]!);
+    assert.equal(caption, "• Ran command · Check [redacted] access");
+
     // Streaming partials: live elapsed from the job's start time.
     const partial = { content: [{ type: "text", text: "5s elapsed · ● Shell command · running · 5s\nJob: p1 · cursor: 0\n\nworking" }],
       details: { managed: true, id: "p1", status: "running", exitCode: null, startedAt: Date.now() - 5_000 } };
@@ -79,4 +91,7 @@ try {
     for (const width of [1, 20, 40, 80]) assert(streaming.render(width).every((row) => visibleWidth(row) <= width));
   } finally { await fire("session_shutdown"); }
   console.log("managed bash cards verified");
-} finally { await rm(root, { recursive: true, force: true }); }
+} finally {
+  unregisterSecrets();
+  await rm(root, { recursive: true, force: true });
+}
