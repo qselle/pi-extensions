@@ -1,9 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import extension, { FOREGROUND_GUIDELINE, PI_ENV_GUIDELINE } from "./index.ts";
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
+import { COLLAPSED_TAIL_ROWS } from "./render.ts";
 
+initTheme("dark");
 const plain = { fg: (_color: string, text: string) => text };
 const shutdowns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const stop of shutdowns.splice(0)) await stop(); });
@@ -145,6 +149,36 @@ test("argument aliases from other shell tool sets validate", async () => {
   expect(tools.get("job_wait").prepareArguments({ id: "kept", job_id: "ignored" })).toEqual({ id: "kept" });
   const canonical = { id: "abc" };
   expect(tools.get("job_stop").prepareArguments(canonical)).toBe(canonical);
+});
+
+test("job cards render compactly without the default boxed shell", async () => {
+  const { tools } = await session();
+  const tail = Array.from({ length: 30 }, (_, index) => `line-${index}`).join("\n");
+  const value = { content: [{ type: "text", text: `✓ build · completed · 1s · exit 0\nJob: abc · cursor: 200\n\n${tail}` }], details: { managed: true, status: "completed" }, isError: false };
+  for (const name of ["job_wait", "job_output", "job_stop"]) {
+    const tool = tools.get(name);
+    expect(tool.renderShell).toBe("self");
+    const card = new ToolExecutionComponent(name, `card-${name}`, { id: "abc", purpose: "Check the build" }, undefined, tool, { requestRender() {} } as never, process.cwd());
+    card.setArgsComplete(); card.markExecutionStarted(); card.updateResult(value);
+    const raw = card.render(100);
+    expect(raw).toEqual(card.render(100));
+    expect(raw.join("\n")).not.toContain("\x1b[48");
+    const rows = raw.map((row) => stripVTControlCharacters(row));
+    expect(rows.length).toBeLessThanOrEqual(3 + 1 + COLLAPSED_TAIL_ROWS);
+    expect(rows[1]!.startsWith("• ")).toBe(true);
+    expect(rows[1]).toContain("· Check the build");
+    expect(rows[2]).toBe("  └ ✓ build · completed · 1s · exit 0");
+    expect(rows.at(-1)).toBe("    line-29");
+    card.setExpanded(true);
+    expect(card.render(100).map((row) => stripVTControlCharacters(row))).toContain("    line-0");
+  }
+  const list = tools.get("job_list");
+  const jobs = Array.from({ length: 9 }, (_, index) => ({ id: `job${index}`, name: `Job ${index}`, status: index ? "completed" : "running", icon: index ? "✓" : "●" }));
+  const card = new ToolExecutionComponent("job_list", "list", {}, undefined, list, { requestRender() {} } as never, process.cwd());
+  card.setArgsComplete(); card.markExecutionStarted(); card.updateResult({ content: [{ type: "text", text: "listing" }], details: { jobs }, isError: false });
+  const rows = card.render(100).map((row) => stripVTControlCharacters(row));
+  expect(rows[2]).toBe("  └ 9 jobs · 1 active");
+  expect(rows.length).toBeLessThanOrEqual(3 + COLLAPSED_TAIL_ROWS + 1);
 });
 
 test("managed results carry exit, signal, status and timing details", async () => {

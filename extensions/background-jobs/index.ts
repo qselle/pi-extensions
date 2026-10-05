@@ -1,6 +1,5 @@
 import { getShellConfig, type ExtensionAPI, type ExtensionContext, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import { registerOverlayCard, type OverlayCardHandle } from "../overlay-stack/index.ts";
 import { TranscriptView } from "../../lib/transcript/view.ts";
 import { elapsed } from "../working-status/state.ts";
@@ -13,6 +12,7 @@ import { JOB_HISTORY_ENTRY, JobHistory } from "./history.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
 import { commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
 import { argumentAliases, DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS, MAX_OUTPUT_CHARS, MAX_YIELD_MS, outputBudget, START_YIELD_MS, waitDuration, yieldDuration } from "./arguments.ts";
+import { headline, lines, renderJobList, renderJobResult } from "./render.ts";
 const JOB_CONTROLS = ["job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"];
 /** Pi's built-in bash guideline, kept when the managed executor replaces bash. */
 export const PI_ENV_GUIDELINE = "You can inspect PI_* environment variables for current model and session details.";
@@ -37,13 +37,8 @@ const cap = (text: string, maximum: number) => {
 /** Default job label: the caller's purpose, else the start of the command. Redacted before capping. */
 export const jobName = (purpose: unknown, command: unknown) => cap(safePurpose(purpose), 80) || cap(safeLabel(command).trim(), 60) || "Shell command";
 
-function lines(text: string) {
-  return { invalidate() {}, render: (width: number) => width > 0 ? text.split("\n").map((line) => truncateToWidth(line, width, "…")) : [] };
-}
-
-function jobHeading(title: string, args: Record<string, unknown>, theme: Theme, _context?: ToolRenderContext) {
-  const purpose = safePurpose(args.purpose, [args.id, args.name, args.command]);
-  return lines(theme.fg("muted", title) + (purpose ? theme.fg("dim", " · ") + theme.fg("text", purpose) : ""));
+function jobHeading(title: string, args: Record<string, unknown>, theme: Theme, context?: ToolRenderContext) {
+  return headline(title, safePurpose(args.purpose, [args.id, args.name, args.command]), theme, context);
 }
 
 interface ReadRequest {
@@ -128,14 +123,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       cursor: output.cursor, more: output.more, lost: output.lost, omitted: output.omitted,
     } };
   };
-  const renderResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, _context?: ToolRenderContext) => {
-    if (options.isPartial && !value.content?.length) return lines(theme.fg("muted", "Waiting for job…"));
-    const text = value.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
-    if (options.expanded) return lines(text);
-    const rows = text.split("\n");
-    return lines([theme.fg(value.details?.status === "failed" ? "error" : "muted", rows[0] ?? "Job result"),
-      ...(rows.length > 9 ? [theme.fg("dim", `… ${rows.length - 9} lines hidden`)] : []), ...rows.slice(Math.max(1, rows.length - 8))].join("\n"));
-  };
+  const renderResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext) => renderJobResult(value, options, theme, context);
   const renderStartResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext, renderer = renderResult) => {
     const id = value.details?.id;
     const observedStatus = value.details?.status;
@@ -245,6 +233,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     promptSnippet: "Run long-lived commands as managed background jobs with bounded logs and explicit cleanup.",
     parameters: startParameters,
     prepareArguments: argumentAliases(startParameters),
+    renderShell: "self",
     async execute(_id, params, signal, update, ctx) {
       const { purpose: _purpose, ...execution } = params;
       return startManaged({ ...execution, yield_ms: yieldDuration(execution.yield_ms, START_YIELD_MS) }, signal, ctx, update);
@@ -262,6 +251,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       : "Read managed job output without waiting (wait_ms optional). Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
     parameters: readParameters,
     prepareArguments: argumentAliases(readParameters),
+    renderShell: "self",
     async execute(_id, params, signal) {
       const jobs = service;
       if (jobs.list().some((job) => job.id === params.id)) await jobs.wait(params.id, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), signal);
@@ -275,18 +265,20 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_list", label: "List background jobs", description: "List this session's managed jobs and their IDs, including recent finished jobs. Use job_output for logs.",
     parameters: listParameters,
     prepareArguments: argumentAliases(listParameters),
+    renderShell: "self",
     async execute() {
       const jobs = allJobs();
       return { content: [{ type: "text", text: jobs.map((job) => `${job.id} · ${brief(job)}\n${job.command.slice(0, 180)}`).join("\n\n") || "No managed jobs in this session." }],
         details: { jobs: jobs.map(({ id, name, status, code, signal, startedAt, endedAt }) => ({ id, name, status, icon: icons[status], exitCode: code, signal, startedAt, endedAt })) } };
     },
-    renderCall: (args, theme, context) => jobHeading("List background jobs", args, theme, context), renderResult,
+    renderCall: (args, theme, context) => jobHeading("List background jobs", args, theme, context), renderResult: renderJobList,
   });
   const writeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()), cursor: Type.Optional(Type.Integer({ minimum: 0 })), max_chars: budgetParameter });
   pi.registerTool({
     name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs need stdin=true at start and support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
     parameters: writeParameters,
     prepareArguments: argumentAliases(writeParameters),
+    renderShell: "self",
     async execute(_id, params, signal) { const jobs = service; await jobs.write(params.id, params.text, params.eof, signal); return result(params.id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, jobs); },
     renderCall: (args, theme, context) => jobHeading(`Write job input · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
@@ -295,6 +287,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_resize", label: "Resize job terminal", description: "Resize a running PTY job. Terminal applications receive the new dimensions; pipe jobs cannot be resized.",
     parameters: resizeParameters,
     prepareArguments: argumentAliases(resizeParameters),
+    renderShell: "self",
     async execute(_id, params) { const job = service.resize(params.id, params.columns, params.rows); return result(job.id, { cursor: job.outputEnd, track: false }); },
     renderCall: (args, theme, context) => jobHeading(`Resize terminal · ${safeLabel(args.id)} · ${args.columns}×${args.rows}`, args, theme, context), renderResult,
   });
@@ -303,6 +296,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_stop", label: "Stop background job", description: "Stop a managed job and its process group. Sends TERM, then KILL after three seconds if necessary. Safe to repeat for a finished job.",
     parameters: stopParameters,
     prepareArguments: argumentAliases(stopParameters),
+    renderShell: "self",
     async execute(_id, params) { const job = findJob(params.id); if (service.list().some((job) => job.id === params.id)) service.stop(params.id); return result(params.id, { cursor: job.outputEnd, track: false, hint: false }); },
     renderCall: (args, theme, context) => jobHeading(`Stop job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
