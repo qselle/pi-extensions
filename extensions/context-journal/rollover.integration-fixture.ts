@@ -51,12 +51,14 @@ try {
   await notes.execute("checkpoint", { action: "write", key: "next", text: "review implementation evidence" }, undefined, undefined, runner.createToolContext("checkpoint", undefined));
   await command.handler("reset", runner.createCommandContext());
   const entries = manager.getBranch();
-  const compaction = entries.at(-1) as any;
+  const compaction = entries.findLast((entry) => entry.type === "compaction") as any;
   assert.equal(compaction.type, "compaction");
   assert.equal(compaction.fromHook, true);
   assert.equal(compaction.details.noSummary, true);
   const fresh = manager.buildSessionContext().messages;
-  assert.equal(fresh.length, 2);
+  // The plan extension may restate a hidden plan with one checkpoint after compaction.
+  const withoutPlanAnchor = (messages: any[]) => messages.filter((message) => message.customType !== "plan-context");
+  assert.equal(withoutPlanAnchor(fresh).length, 2);
   assert.equal(fresh[0]!.role, "system");
   assert(JSON.stringify(fresh[0]).includes("Persistent system constraint"));
   assert(!JSON.stringify(fresh).includes("older evidence"));
@@ -85,7 +87,7 @@ try {
   assert(historyMatches(entries, "older evidence").matches.length > 0);
   assert((await readFile(manager.getSessionFile()!, "utf8")).startsWith(before));
   const reopened = SessionManager.open(manager.getSessionFile()!);
-  assert.equal(reopened.buildSessionContext().messages.length, 2);
+  assert.equal(withoutPlanAnchor(reopened.buildSessionContext().messages).length, 2);
   assert(JSON.stringify(reopened.buildSessionContext().messages[0]).includes("Keep this project rule"));
   manager.appendMessage({ role: "user", content: "Continue now", timestamp: Date.now() });
   assert(JSON.stringify(manager.buildSessionContext().messages).includes("Continue now"));
