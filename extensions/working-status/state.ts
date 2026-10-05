@@ -11,6 +11,12 @@ export class WorkingState {
     this.startedAt = now;
   }
 
+  /** Continue the same run after a retry or continuation: elapsed time keeps its anchor. */
+  resume(): void {
+    this.phase = "Waiting for model";
+    this.tools.clear();
+  }
+
   reset(): void {
     this.startedAt = undefined;
     this.phase = "Waiting for model";
@@ -27,6 +33,11 @@ export class WorkingState {
     const phase = names.length ? `Running ${shown.join(", ")}${remaining ? ` +${remaining}` : ""}` : this.phase;
     return `${phase} · ${elapsed(now - this.startedAt)}`;
   }
+}
+
+/** Pi retries rate limits and server errors automatically. */
+export function isRetryStatus(status: number): boolean {
+  return status === 429 || status >= 500;
 }
 
 export function elapsed(milliseconds: number): string {

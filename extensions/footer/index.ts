@@ -7,7 +7,7 @@ import {
 	modelLabel,
 } from "./format.ts";
 import { renderFooter } from "./render.ts";
-import { UsageTotalsCache } from "./usage.ts";
+import { pricingEstimator, UsageTotalsCache } from "./usage.ts";
 import { GitStatusTracker, gitStatusLabel, parseGitStatus } from "./git.ts";
 import { SUBAGENT_USAGE_EVENT } from "../subagents/usage.ts";
 
@@ -35,6 +35,8 @@ interface StoredBadge {
 
 const TITLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const TITLE_INTERVAL_MS = 160;
+/** Pi rewrites the title after session_start, reload, and renames; restore ours once afterwards. */
+export const TITLE_RESYNC_MS = 500;
 
 function currentEffort(pi: ExtensionAPI): string | undefined {
 	try {
@@ -88,6 +90,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	let titleTimer: ReturnType<typeof setInterval> | undefined;
 	let titleFrame = 0;
 	let lastTerminalTitle: string | undefined;
+	let titleResyncTimer: ReturnType<typeof setTimeout> | undefined;
 	const totals = new UsageTotalsCache();
 	const badges = new Map<string, StoredBadge>();
 	const titleOverrides = new Map<string, string>();
@@ -118,6 +121,27 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		if (title === lastTerminalTitle) return;
 		ctx.ui.setTitle(title);
 		lastTerminalTitle = title;
+	};
+
+	/** Re-apply even when unchanged: the host may have overwritten the terminal title. */
+	const forceTerminalTitle = () => {
+		lastTerminalTitle = undefined;
+		syncTerminalTitle();
+	};
+
+	const cancelTitleResync = () => {
+		if (!titleResyncTimer) return;
+		clearTimeout(titleResyncTimer);
+		titleResyncTimer = undefined;
+	};
+
+	const scheduleTitleResync = () => {
+		cancelTitleResync();
+		titleResyncTimer = setTimeout(() => {
+			titleResyncTimer = undefined;
+			forceTerminalTitle();
+		}, TITLE_RESYNC_MS);
+		titleResyncTimer.unref?.();
 	};
 
 	const stopTitleTimer = () => {
@@ -168,6 +192,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		subscribeEvents();
 		git.reset();
 		stopTitleTimer();
+		cancelTitleResync();
 		activeCtx = undefined;
 		tuiRef = undefined;
 		sessionOpen = true;
@@ -178,6 +203,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		lastTerminalTitle = undefined;
 		if (agentActive) startTitleTimer();
 		else syncTerminalTitle();
+		scheduleTitleResync();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			tuiRef = tui;
@@ -204,7 +230,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 						gitConflicts: !!git.value?.conflicts,
 						usage,
 						contextWindow: current.model?.contextWindow,
-						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId()),
+						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId(),
+							current.modelRegistry ? pricingEstimator((provider, model) => current.modelRegistry.find(provider, model)) : undefined),
 						directory: formatCwd(current.cwd, homedir()),
 						branch: footerData?.getGitBranch?.(),
 						statuses: footerData?.getExtensionStatuses?.(),
@@ -230,7 +257,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 	pi.on("session_info_changed", (_event, ctx) => {
 		if (!sessionOpen || ctx.mode !== "tui") return;
 		activeCtx = ctx;
-		syncTerminalTitle();
+		forceTerminalTitle();
+		scheduleTitleResync();
 		refresh();
 	});
 
@@ -264,6 +292,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		eventUnsubscribers = [];
 		git.reset();
 		stopTitleTimer();
+		cancelTitleResync();
 		agentActive = false;
 		titleFrame = 0;
 		if (ctx.mode === "tui") {

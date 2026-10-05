@@ -3,9 +3,9 @@
 Adds the current phase and elapsed run time to Pi's native working indicator.
 
 ```text
-Thinking · 8s
-Running bash: bun, read src/index.ts ×2 · 1m 12s
-Writing · 1m 18s
+Thinking · 8s · esc to interrupt
+Running bash: bun, read src/index.ts ×2 · 1m 12s · esc to interrupt
+Writing · 1m 18s · esc to interrupt
 ```
 
 ## Usage
@@ -14,7 +14,17 @@ Enable the extension through `pi config`, then reload. Waiting, thinking, writin
 host events. Concurrent tools remain visible until each completes; up to two
 distinct activity labels appear with an overflow count. Repeated activities show
 their active call count (`×2`), and the overflow counts remaining calls. Time measures the whole run
-using a monotonic clock, not the current model request.
+using a monotonic clock, not the current model request: it starts at the first
+`agent_start` and keeps counting through automatic retries, compaction recovery,
+and continuations until `agent_settled`.
+
+`Retrying` appears when the provider answers with HTTP 429 or 5xx, or when
+overflow compaction finishes and Pi retries the turn. It lasts until the next
+request starts.
+
+The interrupt key from Pi's keybindings (`app.interrupt`, `esc` by default) is
+appended in the dim theme color, as in Pi's own working row. It is omitted when
+the action has no key.
 
 Native read/edit/write calls show the last two path components, bounded to 32
 characters and stripped of terminal controls. Bash calls show only a recognized

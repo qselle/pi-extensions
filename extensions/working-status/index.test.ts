@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { getKeybindings, KeybindingsManager, setKeybindings } from "@earendil-works/pi-tui";
 import workingStatusExtension from "./index.ts";
 
-function harness(mode = "tui") {
+function harness(mode = "tui", theme?: unknown) {
   const handlers = new Map<string, Function>();
   const commands = new Map<string, any>();
   const entries: any[] = [];
@@ -10,6 +11,7 @@ function harness(mode = "tui") {
   const messages: Array<string | undefined> = [];
   const thinkingLabels: Array<string | undefined> = [];
   const ctx = { mode, isIdle: () => true, sessionManager: { getBranch: () => entries }, ui: {
+    theme,
     setWorkingMessage: (s?: string) => messages.push(s),
     setHiddenThinkingLabel: (s?: string) => thinkingLabels.push(s),
     setWorkingIndicator: (options?: unknown) => indicators.push(options),
@@ -127,4 +129,61 @@ test("thinking presentation remains owned by the host throughout the lifecycle",
   h.fire("session_tree");
   h.fire("session_shutdown");
   expect(h.thinkingLabels).toEqual([]);
+});
+
+test("elapsed time spans repeated agent_start events until the run settles", () => {
+  let now = 1_000;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const h = harness();
+  try {
+    h.fire("agent_start");
+    h.fire("tool_execution_start", { toolCallId: "a", toolName: "bash" });
+    now += 5_000;
+    // Retry, compaction recovery, or a continuation restarts the agent loop.
+    h.fire("agent_start");
+    expect(h.messages.at(-1)).toBe("Waiting for model · 5s");
+    now += 70_000;
+    h.fire("before_provider_request");
+    expect(h.messages.at(-1)).toBe("Waiting for model · 1m 15s");
+    h.fire("agent_settled");
+    h.fire("agent_start");
+    expect(h.messages.at(-1)).toBe("Waiting for model · 0s");
+  } finally {
+    h.fire("session_shutdown");
+    clock.mockRestore();
+  }
+});
+
+test("rate limits, server errors, and recovery compaction show Retrying", () => {
+  const h = harness();
+  try {
+    h.fire("agent_start");
+    h.fire("after_provider_response", { status: 200, headers: {} });
+    expect(h.messages.at(-1)).toBe("Waiting for model · 0s");
+    h.fire("after_provider_response", { status: 503, headers: {} });
+    expect(h.messages.at(-1)).toBe("Retrying · 0s");
+    h.fire("before_provider_request");
+    h.fire("after_provider_response", { status: 429, headers: {} });
+    expect(h.messages.at(-1)).toBe("Retrying · 0s");
+    h.fire("session_before_compact");
+    h.fire("session_compact", { willRetry: true });
+    expect(h.messages.at(-1)).toBe("Retrying · 0s");
+    h.fire("session_compact", { willRetry: false });
+    expect(h.messages.at(-1)).toBe("Working · 0s");
+  } finally { h.fire("session_shutdown"); }
+});
+
+test("the working row keeps a dimmed interrupt-key hint", () => {
+  const previous = getKeybindings();
+  setKeybindings(new KeybindingsManager({ "app.interrupt": { defaultKeys: "escape", description: "Interrupt" } } as any));
+  const h = harness("tui", { fg: (color: string, text: string) => `<${color}>${text}</${color}>` });
+  try {
+    h.fire("agent_start");
+    expect(h.messages.at(-1)).toBe("Waiting for model · 0s<dim> · escape to interrupt</dim>");
+    h.fire("agent_settled");
+    expect(h.messages.at(-1)).toBeUndefined();
+  } finally {
+    h.fire("session_shutdown");
+    setKeybindings(previous);
+  }
 });

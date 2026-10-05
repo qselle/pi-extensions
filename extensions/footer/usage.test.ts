@@ -222,3 +222,36 @@ test("reload and branch navigation use persisted child deltas without retaining 
   expect(cache.get(() => saved.slice(0, 2), "first")).toEqual(original);
   expect(new UsageTotalsCache().get(() => JSON.parse(JSON.stringify(saved)), "later")).toEqual(complete);
 });
+
+test("prices zero-cost records from the model's configured rates and keeps missing costs unknown", async () => {
+  const { pricingEstimator } = await import("./usage.ts");
+  const { renderFooter } = await import("./render.ts");
+  const priced = { id: "m", provider: "p", cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } as any;
+  const free = { id: "free", provider: "p", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as any;
+  const estimate = pricingEstimator((provider, model) => provider === "p" ? { m: priced, free }[model] : undefined);
+  const reply = (model: string, cost: number | undefined) => ({ type: "message", message: { role: "assistant", provider: "p", model,
+    usage: { input: 100_000, output: 10_000, cacheRead: 0, cacheWrite: 0, cost: cost === undefined ? undefined : { total: cost } } } });
+
+  // 100K input at $3/M plus 10K output at $15/M.
+  const totals = sumUsage([reply("m", 0)], estimate);
+  expect(totals.cost).toBeCloseTo(0.45, 10);
+  expect(totals.estimated).toBe(1);
+  const theme = { fg: (_color: string, text: string) => text } as any;
+  const view = { session: "s", model: "m", badges: [], usage: undefined, totals, directory: "" };
+  expect(renderFooter(view, 200, theme)[0]).toContain("≈$0.45");
+
+  // Recorded costs, free and unknown models, and absent costs are not repriced.
+  expect(sumUsage([reply("m", 0.2)], estimate)).toMatchObject({ cost: 0.2 });
+  expect(sumUsage([reply("m", 0.2)], estimate).estimated).toBeUndefined();
+  expect(sumUsage([reply("free", 0)], estimate)).toMatchObject({ cost: 0 });
+  expect(sumUsage([reply("other", 0)], estimate)).toMatchObject({ cost: 0 });
+  const missing = sumUsage([reply("m", undefined)], estimate);
+  expect(missing.missing?.cost).toBe(1);
+  expect(renderFooter({ ...view, totals: missing }, 200, theme)[0]).toContain("$?");
+  const noTokens = { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } };
+  expect(sumUsage([noTokens], estimate).estimated).toBeUndefined();
+
+  // Child-agent records carry their own provider and model.
+  const child = { type: "custom", customType: "subagent-usage", data: { ...usageRecord(reply("m", 0).message, { id: "a", name: "worker" })! } };
+  expect(sumUsage([child], estimate).cost).toBeCloseTo(0.45, 10);
+});
