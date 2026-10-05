@@ -152,6 +152,56 @@ try {
     assert(JSON.stringify(read.content).includes("exact"));
   }
 
+  // 5. Bash headlines carry status and elapsed time, natively and when managed.
+  {
+    const headline = (id: string, args: Record<string, unknown>, result: Record<string, unknown>, width = 100) => {
+      const view = card("bash", id, args);
+      view.updateResult(result as never);
+      return plain(view.render(width)[1]!);
+    };
+    const bash = tools.get("bash")!;
+    const failed = await bash.execute("exit-2", { command: "echo nope; exit 2", purpose: "Fail on purpose" }, undefined, undefined, context as never);
+    assert.equal((failed.details as any).exitCode, 2);
+    assert(Number.isInteger((failed.details as any).durationMs));
+    const failedRow = headline("exit-2", { command: "exit 2", purpose: "Fail on purpose" }, { ...failed, isError: true });
+    assert(failedRow.startsWith("• Command failed · Fail on purpose · ✗ exit 2"), failedRow);
+    const ok = await bash.execute("exit-0", { command: "true" }, undefined, undefined, context as never);
+    assert.equal(headline("exit-0", { command: "true" }, { ...ok, isError: false }), "• Ran command · ✓");
+
+    const timed = headline("timed", { command: "sleep 3" }, { content: [], details: { exitCode: 0, durationMs: 3000 }, isError: false });
+    assert.equal(timed, "• Ran command · ✓ in 3s");
+    const nativeSaved = headline("saved", { command: "x" }, { content: [{ type: "text", text: "out\n\nCommand exited with code 2" }], details: { durationMs: 3000 }, isError: true });
+    assert.equal(nativeSaved, "• Command failed · ✗ exit 2 in 3s", "older results parse the exit status");
+    const timeout = headline("timeout", { command: "x" }, { content: [{ type: "text", text: "Command timed out after 5 seconds" }], details: {}, isError: true });
+    assert.equal(timeout, "• Command failed · ✗ timed out");
+
+    const managed = (status: string, details: object, header = `✓ Shell command · ${status} · 3s · exit 0`) =>
+      ({ content: [{ type: "text", text: `${header}\nJob: abc · cursor: 4\n\ndone` }], details: { managed: true, id: "abc", status, ...details }, isError: false });
+    assert.equal(headline("m-ok", { command: "x" }, managed("completed", { exitCode: 0, durationMs: 4000 })), "• Ran command · ✓ in 4s");
+    assert.equal(headline("m-span", { command: "x" }, managed("completed", { exitCode: 0, startedAt: 1_000, endedAt: 66_000 })), "• Ran command · ✓ in 1m 5s");
+    assert.equal(headline("m-text", { command: "x" }, managed("completed", { exitCode: 0 })), "• Ran command · ✓ in 3s", "saved managed summaries supply elapsed time");
+    const managedBody = card("bash", "m-body", { command: "x" });
+    managedBody.updateResult(managed("completed", { exitCode: 0 }) as never);
+    assert.equal(text(managedBody.render(100)).split("3s").length, 2, "elapsed time is not repeated in the body");
+    const thrown = { content: [{ type: "text", text: "× Shell command · failed · 3s · exit 1\nJob: abc · cursor: 4\n\nboom" }], details: {}, isError: true };
+    assert.equal(headline("m-fail", { command: "x" }, thrown), "• Command failed · ✗ exit 1 in 3s");
+    assert.equal(headline("m-yield", { command: "x" }, managed("running", { exitCode: null }, "● Shell command · running · 1s")), "• Ran command · running");
+
+    const narrow = headline("narrow", { command: "x", purpose: "Check every renderer test in the repository" }, { content: [], details: { exitCode: 2, durationMs: 3000 }, isError: true }, 40);
+    assert(narrow.endsWith("✗ exit 2 in 3s") && narrow.includes("…"), narrow);
+
+    // Live elapsed time comes from Pi's own repaints of a running card.
+    handlers.get("tool_execution_start")!({ toolName: "bash", toolCallId: "live", args: { command: "sleep 9" } }, context);
+    const live = card("bash", "live", { command: "sleep 9" });
+    live.markExecutionStarted();
+    assert.equal(plain(live.render(80)[1]!), "• Running command");
+    const now = Date.now;
+    try {
+      Date.now = () => now() + 5_000;
+      assert.equal(plain(live.render(80)[1]!), "• Running command · 5s");
+    } finally { Date.now = now; }
+  }
+
   await handlers.get("session_shutdown")!({}, context);
   console.log("tool-render cards verified");
 } finally { await rm(root, { recursive: true, force: true }); }

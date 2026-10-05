@@ -48,6 +48,7 @@ import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts,
 import { commandPanel } from "./command-panel.ts";
 import { baseRevision, fit, Lines } from "./lines.ts";
 import { executeWriteWithDiff } from "./write-diff.ts";
+import { bashOutcome, formatElapsed, type BashOutcome } from "./bash-status.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -110,8 +111,7 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 		const quietSuccess = !isError && details.status === "completed" && details.exitCode === 0 && !details.signal
 			&& !details.more && !details.lost && header.length === 2;
 		if (quietSuccess) {
-			const duration = header[0]?.match(/ · completed · ([^·]+) · exit 0$/)?.[1]?.trim();
-			header = duration && duration !== "0s" ? [duration] : [];
+			header = []; // status and elapsed time are on the headline
 		} else {
 			// The job ID remains actionable; output cursors are only useful expanded.
 			header = header.map((line) => line.replace(/^(Job: \S+) · cursor: \d+/, "$1"));
@@ -288,6 +288,40 @@ function bindExploration(ctx: any): void {
 	bindLeaderRerender(ctx?.toolCallId, () => { try { ctx.invalidate(); } catch { /* detached view */ } });
 }
 
+/** Start and end times of live shell calls; saved results carry their own duration. */
+const bashTimes = new Map<string, { start: number; end?: number }>();
+const MAX_BASH_TIMES = 256;
+
+function noteBashTime(id: unknown, phase: "start" | "end"): void {
+	if (typeof id !== "string") return;
+	if (phase === "end") {
+		const entry = bashTimes.get(id);
+		if (entry) entry.end = Date.now();
+		return;
+	}
+	if (bashTimes.size >= MAX_BASH_TIMES) bashTimes.delete(bashTimes.keys().next().value!);
+	bashTimes.set(id, { start: Date.now() });
+}
+
+/**
+ * `✓ in 3s`, `✗ exit 2 in 3s` or a live `3s` while running. Running cards are
+ * rebuilt on every frame Pi paints, so no timer of our own drives the clock.
+ */
+function bashStatus(theme: Theme, outcome: BashOutcome | undefined, running: boolean, id: string | undefined): string {
+	const times = id ? bashTimes.get(id) : undefined;
+	if (running) {
+		const start = times?.start ?? outcome?.startedAt;
+		const elapsed = start !== undefined ? formatElapsed(Date.now() - start) : "";
+		return elapsed ? theme.fg("dim", ` · ${elapsed}`) : "";
+	}
+	if (!outcome) return "";
+	if (outcome.state === "running") return theme.fg("dim", " · ") + theme.fg("accent", "running");
+	const elapsed = outcome.elapsed ?? (times?.end !== undefined ? formatElapsed(times.end - times.start) : "");
+	const mark = outcome.state === "ok" ? theme.fg("success", "✓")
+		: theme.fg("error", outcome.reason ? `✗ ${outcome.reason}` : "✗");
+	return theme.fg("dim", " · ") + mark + (elapsed ? theme.fg("dim", ` in ${elapsed}`) : "");
+}
+
 /** Highlight before wrapping so strings and heredocs retain their shell context. */
 function highlightCommand(command: string, theme: Theme): string {
 	let colored = command;
@@ -330,11 +364,18 @@ function makeRenderCall(name: ToolName) {
 			const verbText = actionVerb(name, ctx);
 			const verb = theme.bold(theme.fg("text", verbText));
 			if (name === "bash") {
-				const title = ctx?.isError ? "Command failed"
+				// The result renderer records the outcome in shared row state.
+				const outcome = ctx?.state?.bashOutcome as BashOutcome | undefined;
+				const running = !!(ctx?.executionStarted && ctx?.isPartial);
+				const failed = !!ctx?.isError || (!running && outcome?.state === "failed");
+				const title = failed ? "Command failed"
 					: ctx?.isPartial && !ctx?.executionStarted ? "Command" : `${verbText} command`;
 				const purpose = commandPurpose(purposeArgument(a));
-				const header = theme.fg(ctx?.isError ? "error" : "muted", `${BULLET} ${title}`)
+				const left = theme.fg(failed ? "error" : "muted", `${BULLET} ${title}`)
 					+ (purpose ? theme.fg("dim", " · ") + theme.fg("text", purpose) : "");
+				const status = bashStatus(theme, outcome, running, ctx?.toolCallId);
+				// Clip the caption, never the status.
+				const header = status ? fit(left, Math.max(1, width - visibleWidth(status))) + status : left;
 				if (!command.trim()) return [header];
 				return [header, ...commandPanel(highlighted(), width, theme, !!ctx?.expanded)];
 			}
@@ -377,6 +418,9 @@ function makeRenderResult(name: ToolName) {
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
 			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision });
 		}
+		// Pi creates the call component first and renders both later, so the
+		// call headline can show the outcome recorded here.
+		if (name === "bash" && ctx?.state) ctx.state.bashOutcome = bashOutcome(result, !!ctx.isError);
 		const diff = memo(() => {
 			const details = result?.details;
 			const patch = typeof details?.patch === "string" ? details.patch : undefined;
@@ -409,6 +453,16 @@ function makeRenderResult(name: ToolName) {
 		};
 		return new Lines(build, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial });
 	};
+}
+
+/** Record exit code and duration with the result, so saved history keeps the headline status. */
+async function executeTimedBash(definition: ToolDefinition<any>, ...[id, args, signal, update, context]: Parameters<ToolDefinition<any>["execute"]>) {
+	const started = performance.now();
+	const result = await definition.execute(id, args, signal, update, context);
+	const exitCode = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
+	const details = result.details !== null && typeof result.details === "object" ? result.details : {};
+	return { ...result, details: { ...details, durationMs: Math.round(performance.now() - started),
+		...(Number.isSafeInteger(exitCode) ? { exitCode } : {}) } };
 }
 
 const configPath = () => join(getAgentDir(), "tool-render.json");
@@ -469,6 +523,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 						execute: (id, args, signal, update, context) => {
 							const toolArgs = withoutPurpose(args as Record<string, unknown>);
 							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
+							if (name === "bash") return executeTimedBash(definition, id, toolArgs, signal, update, context);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},
 					};
@@ -510,10 +565,12 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 			if (ctx?.mode === "tui") await initializeSyntax();
 		});
 		pi.on("tool_execution_start", (event: any) => {
+			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "start");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) noteStart(event.toolCallId, event.toolName, event.args);
 			else closeGroup();
 		});
 		pi.on("tool_execution_end", (event: any) => {
+			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "end");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) {
 				const count = event.isError
 					? `failed: ${labelText(firstLine(resultText(event.result).text)).slice(0, 240) || "unknown error"}`
@@ -530,6 +587,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		pi.on("session_shutdown", () => {
 			unsubscribeStyle?.();
 			resetExploration();
+			bashTimes.clear();
 			disposeSyntax();
 		});
 	}

@@ -149,7 +149,7 @@ try {
 
   const failedCard = new ToolExecutionComponent("bash", "native-failed", { command: "false" }, undefined, bash, ui, root);
   failedCard.updateResult({ content: [{ type: "text", text: "Command exited with code 1" }], isError: true });
-  assert(cardText(failedCard).includes("• Command failed\n"));
+  assert(cardText(failedCard).includes("• Command failed · ✗ exit 1\n"));
   assert(!cardText(failedCard).includes("failed command"));
   assert(cardText(failedCard).includes("Command exited with code 1"));
 
