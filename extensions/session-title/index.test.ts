@@ -31,6 +31,7 @@ function setup(options: {
   config?: SessionTitleConfig;
   results?: TitleResult[];
   name?: string;
+  env?: NodeJS.ProcessEnv;
   request?: (args: any) => Promise<TitleResult>;
 } = {}) {
   const pi = new MockPi();
@@ -40,6 +41,7 @@ function setup(options: {
   let index = 0;
   sessionTitleExtension(pi as any, {
     config: options.config ?? config(),
+    env: options.env ?? {},
     request: (async (args: any) => {
       calls.push(args);
       if (options.request) return options.request(args);
@@ -236,6 +238,17 @@ describe("titling once", () => {
     await flushDetachedRequest();
     expect(h.calls).toHaveLength(1);
     expect(h.pi.name).toBe("Generated Title");
+  });
+
+  test("never titles automatically in a child agent process", async () => {
+    const h = setup({ env: { PI_SUBAGENT_CHILD: "1" } });
+    await firstTurn(h);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the Pi footer" }, h.ctx);
+    await flushDetachedRequest();
+    expect(h.calls).toHaveLength(0);
+    expect(h.pi.name).toBeUndefined();
+    await h.pi.commands.get("title").handler("status", h.ctx);
+    expect(h.notifications.at(-1)!.message).toContain("automatic: off (child agent)");
   });
 
   test("does nothing when disabled", async () => {

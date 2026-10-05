@@ -37,6 +37,8 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
 
 export interface SessionTitleOptions {
   config?: SessionTitleConfig;
+  /** Defaults to process.env; child agents (PI_SUBAGENT_CHILD=1) never title automatically. */
+  env?: NodeJS.ProcessEnv;
   request?: typeof requestTitle;
   tabLink?: Omit<TabLinkOptions, "enabled">;
 }
@@ -44,7 +46,9 @@ export interface SessionTitleOptions {
 export default function sessionTitleExtension(pi: ExtensionAPI, options: SessionTitleOptions = {}): void {
   const config = options.config ?? loadConfig();
   const run = options.request ?? requestTitle;
-  const tabLink = registerTabLink(pi, { ...options.tabLink, enabled: config.tabLink });
+  const env = options.env ?? process.env;
+  const child = env.PI_SUBAGENT_CHILD === "1";
+  const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config.tabLink });
 
   let prompts: string[] = [];
   /** True once the session has a name, from any source. Titling stops for good. */
@@ -138,7 +142,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     // The extraction helper is only a substantive-request check here; its text
     // is never shown. Titling runs beside the main request and is not awaited.
     if (pi.getSessionName()) named = true;
-    if (config.enabled && !named && !autoAttempted && provisionalTitle(prompt)) {
+    if (config.enabled && !child && !named && !autoAttempted && provisionalTitle(prompt)) {
       generateAutomatically(ctx, prompt);
     }
     return undefined;
@@ -197,7 +201,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
         ctx.ui.notify("Usage: /title [status|now|set <text>|tab]", "error");
         return;
       }
-      ctx.ui.notify(`${statusText(config, pi.getSessionName(), prompts.length, last, autoAttempted)}\n${tabLink.status()}`, "info");
+      ctx.ui.notify(`${statusText(config, pi.getSessionName(), prompts.length, last, autoAttempted, child)}\n${tabLink.status()}`, "info");
     },
   });
 
@@ -244,8 +248,11 @@ export function statusText(
   promptCount: number,
   last: TitleResult | undefined,
   autoAttempted = Boolean(last),
+  child = false,
 ): string {
-  const automatic = !config.enabled
+  const automatic = child
+    ? "off (child agent)"
+    : !config.enabled
     ? "off"
     : title
       ? "done (named)"

@@ -18,6 +18,7 @@ Names a session from its user prompts without changing a title you set manually.
 1. The first meaningful request starts one bounded title request alongside the main agent request.
 2. The active session model generates a specific two-to-four-word noun phrase with thinking disabled.
 3. Once generation has been attempted, the extension does not retry or rename automatically. Existing and manually assigned titles always win; `/title now` remains an explicit override.
+4. Child agent processes (`PI_SUBAGENT_CHILD=1`) never title automatically, so they make no title request; `/title now` still works there.
 
 Automatic titling never blocks the main turn. While it is pending, the shared footer shows `[naming…]`; an explicit `/title now` on a named session shows `[renaming…]`. The badge disappears on success, failure, cancellation, or shutdown.
 
