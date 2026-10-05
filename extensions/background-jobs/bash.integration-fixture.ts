@@ -106,7 +106,7 @@ try {
       await new Promise(resolve => setTimeout(resolve, 150));
       assert.equal(updates.length, count, "partial updates must stop after the tool resolves");
       await assert.rejects(bash.execute("fail", { command: "echo failed-command; exit 7", yield_ms: 3000 }, undefined, undefined, ctx), /failed-command/);
-      const running = await bash.execute("yield", { command: "cat", yield_ms: 0 }, undefined, undefined, ctx);
+      const running = await bash.execute("yield", { command: "cat", yield_ms: 0, stdin: true }, undefined, undefined, ctx);
       assert(["starting", "running"].includes(running.details.status));
       const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
       const shell = 'if true; then printf "%s\\n" "$PWD"; fi';

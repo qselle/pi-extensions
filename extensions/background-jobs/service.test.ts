@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { JobService, isActive } from "./service.ts";
+import { JobService, isActive, LOG_CAPACITY, MAX_ACTIVE_JOBS, SHUTDOWN_SLACK_MS } from "./service.ts";
 import { join } from "node:path";
 
-const input = (code: string, timeoutMs?: number) => ({ name: "test", command: "test command", executable: process.execPath, args: ["-e", code], cwd: process.cwd(), timeoutMs });
+const input = (code: string, timeoutMs?: number, stdin?: boolean) => ({ name: "test", command: "test command", executable: process.execPath, args: ["-e", code], cwd: process.cwd(), timeoutMs, stdin });
 
 async function until(check: () => boolean, limit = 3000): Promise<void> {
   const deadline = Date.now() + limit;
@@ -15,13 +15,13 @@ async function until(check: () => boolean, limit = 3000): Promise<void> {
 test("quick commands complete with bounded cursor output and exit codes", async () => {
   const service = new JobService(100);
   try {
-    const job = service.start(input("process.stdout.write('x'.repeat(100000)); process.exitCode = 7"));
+    const job = service.start(input("process.stdout.write('x'.repeat(200000)); process.exitCode = 7"));
     const done = await service.wait(job.id, 3000);
     expect(done.status).toBe("failed");
     expect(done.code).toBe(7);
-    expect(done.outputEnd).toBe(100000);
+    expect(done.outputEnd).toBe(200000);
     const first = service.output(job.id, 0);
-    expect(first.lost).toBe(36000);
+    expect(first.lost).toBe(200000 - LOG_CAPACITY);
     expect(first.text).toHaveLength(12000);
     expect(service.output(job.id, first.cursor).lost).toBe(0);
     expect(service.stop(job.id).status).toBe("failed");
@@ -31,7 +31,7 @@ test("quick commands complete with bounded cursor output and exit codes", async 
 test("stdin writes and EOF work without shell interpolation", async () => {
   const service = new JobService(100);
   try {
-    const job = service.start(input("process.stdin.pipe(process.stdout)"));
+    const job = service.start(input("process.stdin.pipe(process.stdout)", undefined, true));
     await service.write(job.id, "literal $(echo nope)\n🐈", true);
     expect((await service.wait(job.id, 3000)).status).toBe("completed");
     expect(service.output(job.id, 0).text).toBe("literal $(echo nope)\n🐈");
@@ -83,11 +83,12 @@ test("redacts known secrets before metadata or split colored output reaches obse
   } finally { await service.shutdown(); }
 });
 
-test("capacity is reserved synchronously and shutdown waits for active jobs", async () => {
+test("sixteen jobs run concurrently; capacity is reserved synchronously and shutdown waits for active jobs", async () => {
   const service = new JobService(100);
   try {
-    for (let i = 0; i < 4; i++) service.start(input("setInterval(() => {}, 1000)"));
-    expect(() => service.start(input(""))).toThrow("Four jobs");
+    for (let i = 0; i < MAX_ACTIVE_JOBS; i++) service.start(input("setInterval(() => {}, 1000)"));
+    expect(service.list().filter((job) => isActive(job.status))).toHaveLength(16);
+    expect(() => service.start(input(""))).toThrow("16 jobs are already active");
     await service.shutdown();
     expect(service.list().every((job) => job.status === "stopped")).toBe(true);
     expect(() => service.start(input(""))).toThrow("closed");
@@ -132,11 +133,98 @@ test("a secret sent through stdin remains redacted after its source vault is cle
   let secrets: string[] = [];
   const service = new JobService(100, () => secrets);
   try {
-    const job = service.start(input("let text = ''; process.stdin.on('data', part => text += part); process.stdin.on('end', () => setTimeout(() => process.stdout.write(text), 100))"));
+    const job = service.start(input("let text = ''; process.stdin.on('data', part => text += part); process.stdin.on('end', () => setTimeout(() => process.stdout.write(text), 100))", undefined, true));
     secrets = ["later-secret-value"];
     await service.write(job.id, secrets[0]!, true);
     secrets = [];
     await service.wait(job.id, 3000);
     expect(service.output(job.id, 0).text).toBe("[redacted]");
+  } finally { await service.shutdown(); }
+});
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test.skipIf(process.platform === "win32")("pipe jobs start with stdin at EOF unless input is requested", async () => {
+  const service = new JobService(100);
+  try {
+    const started = Date.now();
+    const closed = service.start({ name: "cat", command: "cat", executable: "/bin/sh", args: ["-c", "cat"], cwd: process.cwd() });
+    const done = await service.wait(closed.id, 3000);
+    expect(done.status).toBe("completed");
+    expect(done.code).toBe(0);
+    expect(Date.now() - started).toBeLessThan(1500);
+    await expect(service.write(closed.id, "late")).rejects.toThrow("stdin: true");
+    const open = service.start({ name: "cat", command: "cat", executable: "/bin/sh", args: ["-c", "cat"], cwd: process.cwd(), stdin: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(isActive(service.get(open.id).status)).toBe(true);
+    await service.write(open.id, "piped", true);
+    expect((await service.wait(open.id, 3000)).status).toBe("completed");
+    expect(service.output(open.id, 0).text).toBe("piped");
+  } finally { await service.shutdown(); }
+});
+
+test.skipIf(process.platform === "win32")("a daemon that escapes the process group but keeps the pipes open does not hold the job", async () => {
+  const service = new JobService(100);
+  let pid = 0;
+  try {
+    const started = Date.now();
+    const job = service.start(input(`const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+      console.log(child.pid); child.unref();`));
+    const done = await service.wait(job.id, 5000);
+    pid = Number(service.output(job.id, 0).text.trim());
+    expect(done.status).toBe("completed");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(alive(pid)).toBe(true);
+  } finally {
+    if (pid > 0) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    await service.shutdown();
+  }
+});
+
+test.skipIf(process.platform === "win32")("shutdown with a TERM-ignoring leader and an escaped daemon stays within its bound", async () => {
+  const grace = 300;
+  const service = new JobService(grace);
+  let pid = 0;
+  try {
+    const job = service.start(input(`process.on('SIGTERM', () => {});
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+      console.log(child.pid); child.unref(); setInterval(() => {}, 1000);`));
+    await until(() => Boolean(service.output(job.id).text.trim()));
+    pid = Number(service.output(job.id, 0).text.trim());
+    const started = Date.now();
+    await service.shutdown();
+    expect(Date.now() - started).toBeLessThan(grace + SHUTDOWN_SLACK_MS);
+    expect(service.get(job.id).status).toBe("stopped");
+  } finally {
+    if (pid > 0) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    await service.shutdown();
+  }
+});
+
+test.skipIf(process.platform === "win32")("shutdown abandons a job whose exit is never observed after grace plus slack", async () => {
+  const grace = 100;
+  const service = new JobService(grace);
+  try {
+    const job = service.start(input("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"));
+    await until(() => service.get(job.id).status === "running");
+    // Simulate a lost exit notification: nothing will settle the job on its own.
+    (service as unknown as { settle: () => void }).settle = () => {};
+    const started = Date.now();
+    await service.shutdown();
+    const took = Date.now() - started;
+    expect(took).toBeGreaterThanOrEqual(grace + SHUTDOWN_SLACK_MS - 50);
+    expect(took).toBeLessThan(grace + SHUTDOWN_SLACK_MS + 1000);
+    expect(service.get(job.id).status).toBe("stopped");
+  } finally { await service.shutdown(); }
+});
+
+test("waits accept up to five minutes", async () => {
+  const service = new JobService(100);
+  try {
+    const job = service.start(input(""));
+    expect((await service.wait(job.id, 300_000)).status).toBe("completed");
+    await expect(service.wait(job.id, 300_001)).rejects.toThrow("0–300000");
   } finally { await service.shutdown(); }
 });

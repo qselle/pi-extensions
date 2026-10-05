@@ -4,7 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { registerOverlayCard, type OverlayCardHandle } from "../overlay-stack/index.ts";
 import { TranscriptView } from "../../lib/transcript/view.ts";
 import { elapsed } from "../working-status/state.ts";
-import { JobService, isActive, type JobSnapshot } from "./service.ts";
+import { JobService, isActive, MAX_RETAINED_JOBS, type JobSnapshot } from "./service.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { redactText } from "../../lib/redact.ts";
@@ -53,7 +53,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     for (const job of service.list()) jobs.set(job.id, job);
     const active = [...jobs.values()].filter((job) => isActive(job.status));
     const ended = [...jobs.values()].filter((job) => !isActive(job.status)).sort((a, b) => a.startedAt - b.startedAt);
-    return [...active, ...ended.slice(-Math.max(0, 24 - active.length))];
+    return [...active, ...ended.slice(-Math.max(0, MAX_RETAINED_JOBS - active.length))];
   };
   const findJob = (id: string) => {
     const job = service.list().find((job) => job.id === id) ?? history.get(id);
@@ -130,7 +130,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     return renderer(value, options, theme, context);
   };
 
-  const startManaged = async (params: { command: string; name: string; pty?: boolean; columns?: number; rows?: number; yield_ms?: number; timeout_seconds?: number }, signal: AbortSignal | undefined, ctx: ExtensionContext, onUpdate?: (result: any) => void) => {
+  const startManaged = async (params: { command: string; name: string; pty?: boolean; stdin?: boolean; columns?: number; rows?: number; yield_ms?: number; timeout_seconds?: number }, signal: AbortSignal | undefined, ctx: ExtensionContext, onUpdate?: (result: any) => void) => {
       const shell = getShellConfig();
       const env = { ...process.env };
       for (const key of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) delete env[key];
@@ -140,7 +140,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       if (ctx.model) { env.PI_PROVIDER = ctx.model.provider; env.PI_MODEL = ctx.model.id; }
       env.PI_REASONING_LEVEL = pi.getThinkingLevel();
       const jobs = service;
-      const job = jobs.start({ pty: params.pty, columns: params.columns, rows: params.rows, command: params.command, name: params.name, cwd: ctx.cwd, executable: shell.shell, args: [...shell.args, params.command], env, timeoutMs: params.timeout_seconds === undefined ? undefined : params.timeout_seconds * 1000 }, signal);
+      const job = jobs.start({ pty: params.pty, stdin: params.stdin, columns: params.columns, rows: params.rows, command: params.command, name: params.name, cwd: ctx.cwd, executable: shell.shell, args: [...shell.args, params.command], env, timeoutMs: params.timeout_seconds === undefined ? undefined : params.timeout_seconds * 1000 }, signal);
       let refresh: ReturnType<typeof setTimeout> | undefined;
       let stopped = false;
       const publish = () => {
@@ -170,10 +170,10 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   const bashDefinition = (): ToolDefinition<any> => ({
     name: "bash", label: "bash",
     constrainedSampling: { type: "json_schema", strict: "prefer" },
-    description: "Execute a managed shell command in the current working directory. Short commands finish inline; after yield_ms (default 1000, maximum 30000) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Optional timeout is in seconds. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use nohup/disown/setsid.",
+    description: "Execute a managed shell command in the current working directory. Short commands finish inline; after yield_ms (default 1000, maximum 30000) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Optional timeout is in seconds. stdin is at EOF unless stdin=true. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use nohup/disown/setsid.",
     promptSnippet: "Execute shell commands; long commands yield managed job IDs for follow-up.",
     promptGuidelines: ["A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful.", COMMAND_PURPOSE_GUIDELINE],
-    parameters: Type.Object({ purpose: commandPurposeParameter, command: Type.String({ minLength: 1, maxLength: 16000 }), timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 86400 })), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) }),
+    parameters: Type.Object({ purpose: commandPurposeParameter, command: Type.String({ minLength: 1, maxLength: 16000 }), timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 86400 })), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open for job_write. Pipe jobs otherwise start with stdin at EOF; PTYs always accept input." })), pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) }),
     async execute(_id, params: any, signal, update, ctx) {
       const { purpose: _purpose, ...execution } = params;
       const value = await startManaged({ ...execution, name: execution.name ?? "Shell command", timeout_seconds: execution.timeout }, signal, ctx, update);
@@ -202,9 +202,9 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "job_start", label: "Start background job",
-    description: "Start a managed shell command. It may finish during yield_ms or keep running with a job ID. Use job_wait/job_output cursors, job_write for stdin, and job_stop for cleanup. Run the command in the foreground; do not use nohup/disown/setsid. Set pty=true for interactive terminal programs (Node.js required); otherwise uses pipes. PTY output is a sanitized text log, not a screen emulator.",
+    description: "Start a managed shell command. It may finish during yield_ms or keep running with a job ID. Use job_wait/job_output cursors, job_write for input (pipe jobs need stdin=true), and job_stop for cleanup. Run the command in the foreground; do not use nohup/disown/setsid. Set pty=true for interactive terminal programs (Node.js required); otherwise uses pipes. PTY output is a sanitized text log, not a screen emulator.",
     promptSnippet: "Run long-lived commands as managed background jobs with bounded logs and explicit cleanup.",
-    parameters: Type.Object({ purpose: toolPurposeParameter, pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), command: Type.String({ minLength: 1, maxLength: 16000 }), name: Type.String({ minLength: 1, maxLength: 80 }), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
+    parameters: Type.Object({ purpose: toolPurposeParameter, pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), command: Type.String({ minLength: 1, maxLength: 16000 }), name: Type.String({ minLength: 1, maxLength: 80 }), yield_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30000 })), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })), stdin: Type.Optional(Type.Boolean({ description: "Keep stdin open for job_write. Pipe jobs otherwise start with stdin at EOF; PTYs always accept input." })) }),
     async execute(_id, params, signal, update, ctx) {
       const { purpose: _purpose, ...execution } = params;
       return startManaged(execution, signal, ctx, update);
@@ -235,7 +235,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     renderCall: (args, theme) => jobHeading("List background jobs", args, theme), renderResult,
   });
   pi.registerTool({
-    name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
+    name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs need stdin=true at start and support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
     parameters: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()), cursor: Type.Optional(Type.Integer({ minimum: 0 })) }),
     async execute(_id, params, signal) { const jobs = service; await jobs.write(params.id, params.text, params.eof, signal); return result(params.id, params.cursor, jobs); },
     renderCall: (args, theme) => jobHeading(`Write job input · ${safeLabel(args.id)}`, args, theme), renderResult,

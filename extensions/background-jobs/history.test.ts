@@ -25,11 +25,11 @@ describe("job history", () => {
     expect(history.get("job-1")?.endedAt).toBeUndefined();
   });
   test("bounds recent history but resolves old cards from the session", () => {
-    const entries = Array.from({ length: 40 }, (_, index) => entry(job(`job-${index}`, { status: "completed", endedAt: 200 })));
+    const entries = Array.from({ length: 70 }, (_, index) => entry(job(`job-${index}`, { status: "completed", endedAt: 200 })));
     const history = new JobHistory();
     let reads = 0;
     history.load(entries, () => { reads++; return entries; });
-    expect(history.list()).toHaveLength(24);
+    expect(history.list()).toHaveLength(50);
     expect(history.get("job-0")?.status).toBe("completed");
     expect(reads).toBe(1);
     history.freeze();
@@ -39,8 +39,8 @@ describe("job history", () => {
   test("recent retention never evicts an active process for finished jobs", () => {
     const history = new JobHistory();
     history.observe(job("active"));
-    for (let index = 0; index < 40; index++) history.observe(job(`job-${index}`, { status: "completed", endedAt: 200 }));
-    expect(history.list()).toHaveLength(24);
+    for (let index = 0; index < 70; index++) history.observe(job(`job-${index}`, { status: "completed", endedAt: 200 }));
+    expect(history.list()).toHaveLength(50);
     expect(history.get("active")?.status).toBe("running");
   });
   test("rejects corrupt records and strips terminal controls", () => {
