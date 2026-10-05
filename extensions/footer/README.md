@@ -24,6 +24,7 @@ The metric labels are:
 | `in 1.2K out 521` | Fresh input and output tokens |
 | `cache R 8.4K W 400 hit 84%` | Cache tokens read (`R`), written (`W`), and cache-hit percentage |
 | `$0.21` | Cumulative recorded cost |
+| `≈$0.21` | Includes cost priced from the model's rates (see below) |
 
 Cache metrics share one label, with spaces separating each counter from its value.
 The hit rate is cache reads divided by fresh input plus cache reads and writes.
@@ -46,7 +47,10 @@ rate of `0%` remains visible when prompt tokens were reported without cache read
 Missing usage fields show `?` (`$?` for cost); partial totals show a yellow `≥` lower
 bound. The cache-hit rate is unknown whenever a prompt component is incomplete.
 These are recorded cumulative figures, not estimates of provider billing or missing
-usage. Detailed per-run accounting remains available through `turn-stats`.
+usage. One exception: when a provider records tokens with a cost of exactly zero,
+the footer prices that response from the model's configured rates in Pi's model
+registry and marks the total `≈`. Responses from unknown or free models keep the
+recorded zero, and absent costs still show `$?`. Detailed per-run accounting remains available through `turn-stats`.
 
 Extension statuses share the same row, sorted by key. They disappear before usage
 metrics when space is limited. Control sequences and newlines are stripped from

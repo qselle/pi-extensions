@@ -7,7 +7,7 @@ import {
 	modelLabel,
 } from "./format.ts";
 import { renderFooter } from "./render.ts";
-import { UsageTotalsCache } from "./usage.ts";
+import { pricingEstimator, UsageTotalsCache } from "./usage.ts";
 import { GitStatusTracker, gitStatusLabel, parseGitStatus } from "./git.ts";
 import { SUBAGENT_USAGE_EVENT } from "../subagents/usage.ts";
 
@@ -230,7 +230,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 						gitConflicts: !!git.value?.conflicts,
 						usage,
 						contextWindow: current.model?.contextWindow,
-						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId()),
+						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId(),
+							current.modelRegistry ? pricingEstimator((provider, model) => current.modelRegistry.find(provider, model)) : undefined),
 						directory: formatCwd(current.cwd, homedir()),
 						branch: footerData?.getGitBranch?.(),
 						statuses: footerData?.getExtensionStatuses?.(),

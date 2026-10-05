@@ -16,6 +16,8 @@ export interface UsageTotals {
 	responses?: number;
 	/** Records with an absent or invalid value; omitted metadata means complete. */
 	missing?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite" | "cost", number>>;
+	/** Records whose zero recorded cost was replaced by the model's configured pricing. */
+	estimated?: number;
 }
 
 const trimZeros = (s: string): string => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
