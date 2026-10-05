@@ -87,6 +87,7 @@ Idle warming costs appear on the next
 footer render without waiting for another assistant response.
 
 The terminal title shows the session and project. A low-frequency Braille spinner is active only while Pi is working. Attention UI such as `questionnaire` temporarily owns the title and the footer restores the appropriate active or idle title afterward.
+Pi writes its own title after session start, reload, and renames; the footer re-applies its title immediately on renames and once 500 ms after each session start. No timer runs while idle.
 
 ### Extension badges
 
