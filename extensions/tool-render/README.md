@@ -129,6 +129,6 @@ Long or multiline shell commands wrap into a bounded block; expand it for more l
 - Pi reports a one-time startup warning for each intentionally overridden built-in tool.
 - Pi owns inline image previews, including compact and restored `read` cards.
   Previews follow its image visibility preference and terminal capabilities;
-  this renderer does not add a duplicate image. Pi 0.87 does not expose a
+  this renderer does not add a duplicate image. Pi 1.0 does not expose a
   per-result switch for lazy previews on expansion. Embedded image content,
   session exports, and image-history retrieval remain unchanged.

@@ -33,7 +33,7 @@ Keyboard hints shrink with the panel; hidden bindings remain available.
 
 ## Dependencies and limitations
 
-- Pi 0.87.0 public session, event, Markdown, and TUI APIs; no runtime packages.
+- Pi 1.0 public session, event, Markdown, and TUI APIs; no runtime packages.
 - Shares keyboard-hint formatting with `history-search`; that extension need not
   be enabled. Interactive TUI only; cross-platform.
 - All-branches mode is chronological storage order, not a session-tree graph.

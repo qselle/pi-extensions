@@ -27,7 +27,7 @@ The report is a non-context transcript entry. It stores labels and counts, not c
 ## Dependencies and limitations
 
 - Uses Pi's public extension, session, tool, context, and token-estimation APIs.
-- Pi 0.87's canonical session projection is used for conversation attribution:
+- Pi's canonical session projection is used for conversation attribution:
   omitted messages no longer count, replacements count their current content, and
   navigating before an edit restores the original contribution. Provider usage
   remains a historical measurement from the saved response.
