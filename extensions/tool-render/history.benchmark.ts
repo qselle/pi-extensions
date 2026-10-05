@@ -1,6 +1,8 @@
 /** Reproduce native saved-history rendering costs; timings are informational. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTheme, SessionManager, ToolExecutionComponent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -85,6 +87,35 @@ try {
     });
     await handlers.get("session_shutdown")!({}, context);
   }
+
+  // Highlighted history: settled shell and edit cards under the Shiki-backed
+  // theme. Each repaint re-renders every card, as the TUI does every frame.
+  const themeSource = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "modes/interactive/theme/dark.json");
+  await mkdir(join(directory, "themes"), { recursive: true });
+  await writeFile(join(directory, "themes", "gruvbox-dark.json"), JSON.stringify({ ...JSON.parse(await readFile(themeSource, "utf8")), name: "gruvbox-dark" }));
+  initTheme("gruvbox-dark", false);
+  const highlightedContext = { cwd: directory, mode: "tui", sessionManager: SessionManager.inMemory(directory) };
+  await handlers.get("session_start")!({}, highlightedContext);
+  const commandCards = Array.from({ length: 800 }, (_, index) => {
+    const id = index % 4 === 3 ? `edit-${index}` : `bash-${index}`;
+    const name = id.startsWith("edit") ? "edit" : "bash";
+    const args = name === "bash"
+      ? { command: `cd packages/app-${index} && bun test --filter "render ${index}" | tee "/tmp/out-${index}.log"\nprintf '%s\\n' "$PWD"`, purpose: "Check the renderer tests" }
+      : { path: `src/module-${index}.ts`, edits: [{ oldText: "a - b", newText: "a + b" }] };
+    const patch = `--- a\n+++ b\n@@ -1,3 +1,3 @@\n export function add${index}(a: number, b: number) {\n-  return a - b;\n+  return a + b;\n }`;
+    const card = new ToolExecutionComponent(name, id, args, undefined, tools.get(name), ui, directory);
+    card.updateResult({ role: "toolResult", toolCallId: id, toolName: name, isError: false, timestamp: index,
+      content: [{ type: "text", text: name === "bash" ? `ok ${index}\n12 pass\n0 fail` : "Edited" }], details: name === "edit" ? { patch } : undefined } as never);
+    return card;
+  });
+  const paintCommands = (width: number) => commandCards.reduce((rows, card) => rows + card.render(width).length, 0);
+  const firstPaint = measure(() => paintCommands(120));
+  const commandRepaint = measure(() => { for (let index = 0; index < 20; index++) paintCommands(120); });
+  const commandResize = measure(() => { for (let index = 0; index < 3; index++) for (const width of [40, 80, 120, 180]) paintCommands(width); });
+  reports.push({ calls: commandCards.length, scenario: "highlighted bash/edit cards", firstPaintMs: firstPaint.milliseconds, rows: firstPaint.value,
+    repeatedPaints: { count: 20, totalMs: commandRepaint.milliseconds, averageMs: +(commandRepaint.milliseconds / 20).toFixed(2) },
+    resizePaints: { count: 12, totalMs: commandResize.milliseconds, averageMs: +(commandResize.milliseconds / 12).toFixed(2) } } as never);
+  await handlers.get("session_shutdown")!({}, highlightedContext);
   console.log(JSON.stringify({ runtime: process.versions.bun ? `Bun ${process.versions.bun}` : `Node ${process.version}`, platform: `${process.platform}/${process.arch}`, reports,
     notes: ["1000 calls reopened from native session JSONL; no model or external command execution.",
       "Memory deltas include cards/session/render allocations and GC variability, not retained-memory claims.",
