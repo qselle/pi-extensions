@@ -99,13 +99,16 @@ try {
       assert(!Object.hasOwn(launches.at(-1)!, "purpose"), "purpose must not reach the process executor");
       assert.equal(argumentsWithPurpose.purpose, "Inspect the active session directory", "execution must not mutate tool arguments");
       const updates: string[] = [];
-      const streamed = await bash.execute("stream", { command: "printf ready; sleep 0.35; printf done", yield_ms: 3000 }, undefined, (value: any) => updates.push(value.content[0].text), ctx);
+      const streamed = await bash.execute("stream", { command: "printf ready; sleep 0.35; printf done", yield_ms: 3000 }, undefined, (value: any) => updates.push(value.content[0].text.split("\n\n").slice(1).join("\n\n")), ctx);
       assert(updates.some(text => text.includes("ready") && !text.includes("done")), "foreground output must arrive before command completion");
       assert(streamed.content[0].text.includes("readydone"));
       const count = updates.length;
       await new Promise(resolve => setTimeout(resolve, 150));
       assert.equal(updates.length, count, "partial updates must stop after the tool resolves");
-      await assert.rejects(bash.execute("fail", { command: "echo failed-command; exit 7", yield_ms: 3000 }, undefined, undefined, ctx), /failed-command/);
+      const failure = await bash.execute("fail", { command: "echo failed-command; exit 7", yield_ms: 3000 }, undefined, undefined, ctx);
+      assert.equal(failure.isError, true, "failed commands are error results");
+      assert(failure.content[0].text.includes("failed-command"));
+      assert.equal(failure.details.exitCode, 7, "error results keep renderer details");
       const running = await bash.execute("yield", { command: "cat", yield_ms: 0, stdin: true }, undefined, undefined, ctx);
       assert(["starting", "running"].includes(running.details.status));
       const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text };
