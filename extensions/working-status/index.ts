@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { WorkingState, toolActivity } from "./state.ts";
+import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { WorkingState, isRetryStatus, toolActivity } from "./state.ts";
 import { indicatorStyle, isWorkingStyle, STYLE_ENTRY, WORKING_STYLES, type WorkingStyle } from "./style.ts";
 
 export default function workingStatusExtension(pi: ExtensionAPI): void {
@@ -8,11 +8,12 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
   let timer: ReturnType<typeof setInterval> | undefined;
   let last: string | undefined;
   let style: WorkingStyle = "pulse";
+  let hint = "";
 
   const refresh = () => {
     const label = state.label(performance.now());
     if (!active || label === last) return;
-    active.ui.setWorkingMessage(label);
+    active.ui.setWorkingMessage(label === undefined ? undefined : label + hint);
     last = label;
   };
   const stop = () => {
@@ -26,15 +27,21 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
     last = undefined;
     state.reset();
   };
+  /** Pi re-emits agent_start for retries, compaction recovery, and continuations; one run lasts until agent_settled. */
   const start = (ctx: ExtensionContext) => {
-    stop();
-    if (ctx.mode !== "tui") return;
+    if (ctx.mode !== "tui") return stop();
+    if (active && state.startedAt !== undefined) state.resume();
+    else {
+      stop();
+      state.start(performance.now());
+      timer = setInterval(refresh, 1000);
+      timer.unref?.();
+    }
     active = ctx;
+    hint = interruptHint(ctx);
     active.ui.setWorkingIndicator(indicatorStyle(style));
-    state.start(performance.now());
+    last = undefined;
     refresh();
-    timer = setInterval(refresh, 1000);
-    timer.unref?.();
   };
 
   const restore = (ctx: ExtensionContext) => {
@@ -70,6 +77,11 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
     state.phase = "Waiting for model";
     refresh();
   });
+  pi.on("after_provider_response", (event) => {
+    if (!isRetryStatus(event.status)) return;
+    state.phase = "Retrying";
+    refresh();
+  });
   pi.on("message_update", (event) => {
     const type = event.assistantMessageEvent.type;
     if (type === "thinking_delta") state.phase = "Thinking";
@@ -91,8 +103,8 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
     state.phase = "Compacting context";
     refresh();
   });
-  pi.on("session_compact", () => {
-    state.phase = "Working";
+  pi.on("session_compact", (event) => {
+    state.phase = event.willRetry ? "Retrying" : "Working";
     refresh();
   });
   pi.on("session_compact_failed", () => {
@@ -101,4 +113,19 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
   });
   pi.on("agent_settled", stop);
   pi.on("session_shutdown", stop);
+}
+
+/** Pi's working row normally names the interrupt key; keep that hint, dimmed, after the phase and time. */
+function interruptHint(ctx: ExtensionContext): string {
+  let key = "";
+  try {
+    key = keyText("app.interrupt");
+  } catch { /* Keybindings are unavailable outside the interactive host. */ }
+  if (!key) return "";
+  const text = ` · ${key} to interrupt`;
+  try {
+    return ctx.ui.theme ? ctx.ui.theme.fg("dim", text) : text;
+  } catch {
+    return text;
+  }
 }
