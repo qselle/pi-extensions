@@ -122,9 +122,11 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 	const body: string[] = header.map((line) => theme.fg(failed ? "error" : "muted", line));
 	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines · ${opts?.expanded ? "preview limit" : expansionHint()}`));
 	const highlighted = !isError && language ? highlightPreview(lines.join("\n"), language, theme) : undefined;
+	// Errors and expanded output wrap; collapsed previews keep one row per line.
+	const wrap = isError || opts?.expanded;
 	for (const [index, l] of lines.entries()) {
 		const colored = highlighted?.[index] ?? theme.fg(isError ? "error" : "toolOutput", l);
-		body.push(...(isError ? wrapTextWithAnsi(colored, Math.max(1, width - 4)) : [colored]));
+		body.push(...(wrap ? wrapRows(colored, width - 4, isError) : [colored]));
 	}
 	return branchBody(theme, body, width);
 }
@@ -165,6 +167,13 @@ function diffView(rows: DiffRow[], path: string, theme: Theme, expanded: boolean
 	};
 }
 
+/** Below this width, wrapping multiplies rows without making text readable. */
+const MIN_WRAP_WIDTH = 12;
+
+function wrapRows(text: string, width: number, always = false): string[] {
+	return always || width >= MIN_WRAP_WIDTH ? wrapTextWithAnsi(text, Math.max(1, width)) : [text];
+}
+
 function diffBody(view: DiffView, theme: Theme, width: number, expanded: boolean): string[] {
 	const { shown, omitted, gutter: gw } = view;
 	if (shown.length === 0) return [];
@@ -172,14 +181,19 @@ function diffBody(view: DiffView, theme: Theme, width: number, expanded: boolean
 	const delBg = theme.getBgAnsi("toolErrorBg");
 	const hl = view.highlighted();
 	const inner = Math.max(1, width - 2); // 2-space left margin sits outside the wash
-	const lines = shown.map((row, i) => {
+	const indent = " ".repeat(gw + 3);
+	const lines = shown.flatMap((row, i) => {
 		const num = theme.fg("dim", String(row.num).padStart(gw));
 		const code = hl[i] ?? row.content;
-		if (row.kind === "ctx") return `  ${fit(`${num}   ${code}`, inner)}`;
-		const marker = theme.fg(row.kind === "add" ? "toolDiffAdded" : "toolDiffRemoved", row.kind === "add" ? "+" : "-");
-		const content = fit(`${num} ${marker} ${code}`, inner);
-		const bg = row.kind === "add" ? addBg : delBg;
-		return `  ${washLine(bg, content, visibleWidth(content), inner)}`;
+		const marker = row.kind === "ctx" ? " "
+			: theme.fg(row.kind === "add" ? "toolDiffAdded" : "toolDiffRemoved", row.kind === "add" ? "+" : "-");
+		// Expanded diffs wrap long lines below the code column instead of clipping.
+		const pieces = expanded ? wrapRows(code, inner - indent.length) : [code];
+		return pieces.map((piece, j) => {
+			const content = fit(`${j === 0 ? `${num} ${marker} ` : indent}${piece}`, inner);
+			if (row.kind === "ctx") return `  ${content}`;
+			return `  ${washLine(row.kind === "add" ? addBg : delBg, content, visibleWidth(content), inner)}`;
+		});
 	});
 	if (omitted > 0) lines.push(`  ${fit(theme.fg("dim", `… +${omitted} lines · ${expanded ? "preview limit" : expansionHint()}`), inner)}`);
 	return lines;

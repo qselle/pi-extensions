@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
 import { initTheme, SessionManager, ToolExecutionComponent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS, type TUI } from "@earendil-works/pi-tui";
+import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 
 const root = await mkdtemp(join(tmpdir(), "pi-tool-render-cards-"));
 process.env.PI_CODING_AGENT_DIR = root;
@@ -200,6 +200,37 @@ try {
       Date.now = () => now() + 5_000;
       assert.equal(plain(live.render(80)[1]!), "• Running command · 5s");
     } finally { Date.now = now; }
+  }
+
+  // 6. Expanded output and diffs wrap long lines instead of clipping them.
+  {
+    const long = Array.from({ length: 40 }, (_, index) => `w${String(index).padStart(3, "0")}`).join(" ");
+    assert.equal(long.length, 199);
+    const output = card("bash", "wrap-out", { command: "cat wide.txt" });
+    output.updateResult({ content: [{ type: "text", text: long }], details: { exitCode: 0 }, isError: false } as never);
+    const collapsed = output.render(80).map(plain);
+    assert(collapsed.some((row) => row.includes("…")), "collapsed previews keep one clipped row");
+    output.setExpanded(true);
+    const expanded = output.render(80).map(plain);
+    const outputRows = expanded.filter((row) => /w\d{3}/.test(row) && !row.includes("cat wide.txt"));
+    assert(outputRows.length >= 3, expanded.join("\n"));
+    assert(!outputRows.some((row) => row.includes("…")));
+    assert.equal(outputRows.join(" ").split(/\s+/).filter(Boolean).filter((word) => /^w\d{3}$/.test(word)).length, 40, "every word survives wrapping");
+
+    const patch = `@@ -1,2 +1,2 @@\n keep\n-old\n+${long}`;
+    const diff = card("edit", "wrap-diff", { path: "wide.txt", edits: [{ oldText: "old", newText: long }] });
+    diff.updateResult({ content: [{ type: "text", text: "ok" }], details: { patch }, isError: false } as never);
+    assert(diff.render(80).map(plain).some((row) => row.includes("…")), "collapsed diffs clip");
+    diff.setExpanded(true);
+    const rows = diff.render(80);
+    const added = rows.map(plain).filter((row) => /w\d{3}/.test(row));
+    assert(added.length >= 3, rows.map(plain).join("\n"));
+    assert(rows.every((row) => visibleWidth(row) <= 80));
+    assert(!added.some((row) => row.includes("…")));
+    assert(added[0]!.trimStart().startsWith("2 + w000"), added[0]);
+    assert(added.slice(1).every((row) => row.startsWith("       w")), "continuations align under the code column");
+    const washed = rows.filter((row) => /w\d{3}/.test(plain(row)));
+    assert(washed.every((row) => row.includes("\x1b[48;")), "continuations keep the added-line background");
   }
 
   await handlers.get("session_shutdown")!({}, context);
