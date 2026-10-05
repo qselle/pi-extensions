@@ -23,6 +23,12 @@ export async function diagnoseTelegram(config: TelegramConfig, options: Telegram
   else add("Bot", "ok", "Token authenticated.");
   if (!validChat) add("Destination", "error", chat.status === "rejected" ? `${safeTelegramError(chat.reason)} Check the chat ID and start a chat with the bot or add it to the group.` : "Telegram did not confirm a valid destination.");
   else add("Destination", chat.value.type === "channel" ? "warning" : "ok", chat.value.type === "channel" ? "Channel found. Channel posts cannot answer Pi questions; use a private chat or group for replies." : `${chat.value.type === "private" ? "Private chat" : "Group"} found. Message delivery has not been tested.`);
+  if (validChat && (chat.value.type === "group" || chat.value.type === "supergroup")) {
+    if (config.answerUserId) add("Answers", "ok", `Only Telegram user ${config.answerUserId} can answer questions.`);
+    else add("Answers", "warning", "Group answers are ignored until answerUserId names the one Telegram user allowed to answer. Run /telegram setup.");
+  } else if (validChat && chat.value.type === "private" && config.answerUserId && config.answerUserId !== config.chatId) {
+    add("Answers", "warning", "answerUserId differs from this private chat's user, so no Telegram answer can be accepted.");
+  }
   if (webhook.status === "rejected") add("Replies", "error", safeTelegramError(webhook.reason));
   else if (typeof webhook.value?.url !== "string") add("Replies", "error", "Telegram did not confirm webhook status.");
   else if (webhook.value.url) add("Replies", "error", "An active webhook blocks Pi reply polling. Use a dedicated bot or remove that webhook in its owning integration.");
@@ -46,7 +52,7 @@ export async function diagnoseTelegram(config: TelegramConfig, options: Telegram
 }
 
 const OVERRIDE_VARIABLES = [
-  "PI_TELEGRAM_BOT_TOKEN", "PI_TELEGRAM_CHAT_ID", "PI_TELEGRAM_THREAD_ID", "PI_TELEGRAM_TOPICS",
+  "PI_TELEGRAM_BOT_TOKEN", "PI_TELEGRAM_CHAT_ID", "PI_TELEGRAM_ANSWER_USER_ID", "PI_TELEGRAM_THREAD_ID", "PI_TELEGRAM_TOPICS",
   "PI_TELEGRAM_GOAL_DETAILS", "PI_TELEGRAM_QUESTION_DELAY_MINUTES",
 ];
 

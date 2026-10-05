@@ -49,3 +49,25 @@ test("rejects invalid setup without exposing the token", async () => {
   expect(notifications.join(" ")).toContain("greater than 0");
   expect(notifications.join(" ")).not.toContain(TOKEN);
 });
+
+test("group setup asks for the one user allowed to answer", async () => {
+  const prompts: string[] = [];
+  const inputs = ["-1001234567890", "424242", "5"];
+  const ctx = {
+    mode: "tui",
+    ui: {
+      custom: async () => TOKEN,
+      input: async (label: string) => { prompts.push(label); return inputs.shift(); },
+      notify: () => undefined,
+    },
+  } as any;
+  expect(await promptTelegramSetup(ctx)).toMatchObject({ chatId: "-1001234567890", answerUserId: "424242" });
+  expect(prompts[1]).toContain("only this user can answer");
+
+  const invalid = ["-1001234567890", "not-a-user", "5"];
+  const notifications: string[] = [];
+  ctx.ui.input = async () => invalid.shift();
+  ctx.ui.notify = (message: string) => notifications.push(message);
+  expect(await promptTelegramSetup(ctx)).toBeUndefined();
+  expect(notifications.join(" ")).toContain("answer user ID");
+});

@@ -79,6 +79,10 @@ Local Pi processes using the same bot and agent directory share a single polling
 
 Every question remembers its original chat, topic and message ID. Replies, validation hints and completion cards stay there even if another session becomes active or a fresh topic is selected. Topic membership alone never turns a message into a Pi instruction: only an exact pending question can accept an answer.
 
+### Who can answer
+
+Answers can approve actions, so only one Telegram user can give them. In a private chat (positive numeric `chatId`) that is the chat's user. In a group or supergroup, `answerUserId` must name that user; other members' replies are ignored, and their button presses get a short "Only the configured Telegram user can answer" notice. Without `answerUserId`, group answers are ignored and `/telegram doctor` warns. `/telegram setup` asks for it when the chat ID is not a private chat. Bots never count.
+
 ## Configuration
 
 `$PI_CODING_AGENT_DIR/telegram.json`:
@@ -94,7 +98,7 @@ Every question remembers its original chat, topic and message ID. Replies, valid
 }
 ```
 
-An optional `threadId` selects one existing topic instead of creating per-session topics. `topics` defaults to `auto` and accepts `auto`, `required`, or `off`. Topic commands override this policy for the current session. `details` accepts `minimal`, `summary`, or `full`. Manual edits require `/reload`.
+`answerUserId` (a positive numeric user ID) is required for answers from a group; see [Who can answer](#who-can-answer). An optional `threadId` selects one existing topic instead of creating per-session topics. `topics` defaults to `auto` and accepts `auto`, `required`, or `off`. Topic commands override this policy for the current session. `details` accepts `minimal`, `summary`, or `full`. Manual edits require `/reload`.
 
 ### Legacy configuration files
 
@@ -102,21 +106,21 @@ Without `PI_TELEGRAM_CONFIG_FILE`, the first existing file wins:
 
 1. `telegram.json`
 2. `telegram-notify.json` (same fields as `telegram.json`)
-3. `telegram-notifications.json`, an older notification format with `botToken`, `chatId`, `delayMinutes` and `enabled`
+3. `telegram-notifications.json`, an older notification format with `botToken`, `chatId`, `delayMinutes`, `enabled` and optional `answerUserId`
 
 The older format maps `delayMinutes` to `questionDelayMinutes` (capped at seven days) and uses `topics: "auto"`. Its unknown fields are ignored. It is checked for ownership, permissions, symlinks and size like `telegram.json`. Legacy files are never rewritten: `/telegram setup`, `on` or `off` saves `telegram.json`, which then takes precedence.
 
-Environment overrides: `PI_TELEGRAM_BOT_TOKEN`, `PI_TELEGRAM_CHAT_ID`, `PI_TELEGRAM_THREAD_ID`, `PI_TELEGRAM_TOPICS`, `PI_TELEGRAM_GOAL_DETAILS`, `PI_TELEGRAM_QUESTION_DELAY_MINUTES`, and `PI_TELEGRAM_CONFIG_FILE`.
+Environment overrides: `PI_TELEGRAM_BOT_TOKEN`, `PI_TELEGRAM_CHAT_ID`, `PI_TELEGRAM_ANSWER_USER_ID`, `PI_TELEGRAM_THREAD_ID`, `PI_TELEGRAM_TOPICS`, `PI_TELEGRAM_GOAL_DETAILS`, `PI_TELEGRAM_QUESTION_DELAY_MINUTES`, and `PI_TELEGRAM_CONFIG_FILE`.
 
 ## Dependencies and limitations
 
-- [`questions`](../questions/) sends non-secret questions after the configured delay and accepts replies only from the exact chat, topic and question message.
+- [`questions`](../questions/) sends non-secret questions after the configured delay and accepts replies only from the configured user in the exact chat, topic and question message.
 - [`goal`](../goal/) sends one best-effort completion notification.
 - [`monitor`](../monitor/) sends actionable result and failure-attention notifications through the `monitor:alert` event.
 - [`goal`](../goal/) and [`schedule`](../schedule/) publish metadata-only warnings through `goal:attention` and `schedule:attention`.
 - One shared `getUpdates` cursor serves pending questions across local Pi processes. Use one bot per machine, including a separate bot for a Linux VM running alongside macOS. Webhooks and unrelated update consumers still conflict.
 - Secret questions send only a redacted notice.
-- The owner-only `$PI_CODING_AGENT_DIR/telegram-inbox` buffer stores up to 256 compact replies/callbacks per bot, with a ten-minute delivery window. Expired records are removed on the next poll; files may remain while Pi is stopped. Bot tokens, attachments and unrelated non-reply messages are not stored there. A suspended consumer can miss replies outside that bounded window.
+- The owner-only `$PI_CODING_AGENT_DIR/telegram-inbox` buffer stores up to 256 compact replies/callbacks per bot, with a ten-minute delivery window. Expired records are removed on the next poll; files may remain while Pi is stopped. Each record keeps the sender's numeric user ID for answer authorization, but no names. Bot tokens, attachments and unrelated non-reply messages are not stored there. A suspended consumer can miss replies outside that bounded window.
 
 The token is stored in plaintext. Do not commit or share the file. Unix config files must be owned by the current user with mode `0600`; symlinks, non-regular files, broad permissions, and oversized files are rejected. Windows relies on ACLs.
 

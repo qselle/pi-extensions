@@ -11,6 +11,7 @@ const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
 const config: TelegramConfig = {
   botToken: TOKEN,
   chatId: "-1001234567890",
+  answerUserId: "777",
   threadId: 42,
   details: "summary",
   questionDelayMinutes: 5,
@@ -62,9 +63,9 @@ test("routes only exact prompt replies through one central polling cursor", asyn
       updatesCalls++;
       if (updatesCalls === 1) return response([{ update_id: 9 }]);
       return response([
-        { update_id: 10, message: { message_id: 70, text: "valid", chat: { id: -999 }, reply_to_message: { message_id: 50 } } },
-        { update_id: 11, message: { message_id: 71, text: "invalid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
-        { update_id: 12, message: { message_id: 72, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
+        { update_id: 10, message: { message_id: 70, from: { id: 777 }, text: "valid", chat: { id: -999 }, reply_to_message: { message_id: 50 } } },
+        { update_id: 11, message: { message_id: 71, from: { id: 777 }, text: "invalid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
+        { update_id: 12, message: { message_id: 72, from: { id: 777 }, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: 50 } } },
       ]);
     }),
   });
@@ -113,8 +114,8 @@ test("shares one long poll across concurrent prompts", async () => {
   const first = await service.openPrompt({ text: "First", parse: parser });
   const second = await service.openPrompt({ text: "Second", parse: parser });
   resolvePoll(response([
-    { update_id: 1, message: { message_id: 201, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: first.messageId } } },
-    { update_id: 2, message: { message_id: 202, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: second.messageId } } },
+    { update_id: 1, message: { message_id: 201, from: { id: 777 }, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: first.messageId } } },
+    { update_id: 2, message: { message_id: 202, from: { id: 777 }, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: second.messageId } } },
   ]));
 
   expect(await first.result).toEqual({ status: "answered", value: "accepted" });
@@ -140,6 +141,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
         {
           update_id: 10,
           callback_query: {
+            from: { id: 777 },
             id: "wrong-chat",
             data: "choice:0",
             message: { message_id: 50, message_thread_id: 42, chat: { id: -999 } },
@@ -148,6 +150,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
         {
           update_id: 11,
           callback_query: {
+            from: { id: 777 },
             id: "wrong-topic",
             data: "choice:0",
             message: { message_id: 50, message_thread_id: 7, chat: { id: -1001234567890 } },
@@ -156,6 +159,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
         {
           update_id: 12,
           callback_query: {
+            from: { id: 777 },
             id: "invalid-choice",
             data: "choice:9",
             message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
@@ -164,6 +168,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
         {
           update_id: 13,
           callback_query: {
+            from: { id: 777 },
             id: "valid-choice",
             data: "choice:1",
             message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
@@ -172,6 +177,7 @@ test("routes exact callback choices, acknowledges stale buttons, and removes con
         {
           update_id: 14,
           callback_query: {
+            from: { id: 777 },
             id: "stale-choice",
             data: "choice:0",
             message: { message_id: 50, message_thread_id: 42, chat: { id: -1001234567890 } },
@@ -229,6 +235,7 @@ test("keeps direct freeform replies available for choice prompts", async () => {
         update_id: 1,
         message: {
           message_id: 86,
+          from: { id: 777 },
           text: "custom destination",
           chat: { id: -1001234567890 },
           message_thread_id: 42,
@@ -267,6 +274,7 @@ test("keeps direct reply cancellation available for choice prompts", async () =>
         update_id: 1,
         message: {
           message_id: 91,
+          from: { id: 777 },
           text: "/cancel",
           chat: { id: -1001234567890 },
           message_thread_id: 42,
@@ -433,6 +441,7 @@ test("edits an interactive card in place when Telegram wins", async () => {
         update_id: 1,
         message: {
           message_id: 312,
+          from: { id: 777 },
           text: "valid",
           chat: { id: -1001234567890 },
           message_thread_id: 42,
@@ -582,7 +591,7 @@ test("question replies and corrections stay pinned to their original session top
   thread = 202;
   const second = await service.openPrompt({ text: "Second question", parse: parser });
   const answer = (id: number, prompt: number, topic: number, text: string) => ({ update_id: id, message: {
-    message_id: 100 + id, text, chat: { id: config.chatId }, message_thread_id: topic, reply_to_message: { message_id: prompt },
+    message_id: 100 + id, from: { id: 777 }, text, chat: { id: config.chatId }, message_thread_id: topic, reply_to_message: { message_id: prompt },
   } });
   release([answer(1, first.messageId, 202, "valid"), answer(2, first.messageId, 101, "invalid"),
     answer(3, second.messageId, 202, "valid"), answer(4, first.messageId, 101, "valid")]);
@@ -593,4 +602,63 @@ test("question replies and corrections stay pinned to their original session top
   const receipts = requests.filter((request) => String(request.body.text).includes("Reply received first"));
   expect(receipts.map((request) => [request.body.reply_parameters.message_id, request.body.message_thread_id])).toEqual([[second.messageId, 202], [first.messageId, 101]]);
   await service.shutdown();
+});
+
+test("accepts answers only from the configured user in a group", async () => {
+  const requests: Array<{ method: string; body: any }> = [];
+  let release!: (updates: any[]) => void;
+  let reads = 0;
+  const batches = [new Promise<any[]>((resolve) => { release = resolve; })];
+  const service = new DefaultTelegramService(config, {
+    inbox: { initialize: async () => {}, read: async (signal) => (reads++ === 0 ? batches[0]! : new Promise<any[]>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))) },
+    emptyPollDelayMs: 0,
+    fetch: async (url, init) => {
+      const method = methodOf(String(url));
+      requests.push({ method, body: JSON.parse(String(init?.body)) });
+      return response(method === "sendMessage" ? { message_id: 600 } : true);
+    },
+  });
+  const prompt = await service.openPrompt<string>({
+    text: "Deploy?",
+    choices: [{ label: "Yes", value: "yes", displayText: "Yes" }],
+    parse: (text) => ({ status: "accepted", value: text, displayText: text }),
+  });
+  const message = { message_id: 600, message_thread_id: 42, chat: { id: -1001234567890 } };
+  release([
+    { update_id: 1, message: { ...message, message_id: 601, from: { id: 888 }, text: "member reply", reply_to_message: { message_id: 600 } } },
+    { update_id: 2, message: { ...message, message_id: 602, text: "anonymous reply", reply_to_message: { message_id: 600 } } },
+    { update_id: 3, callback_query: { id: "member-button", data: "choice:0", from: { id: 888 }, message } },
+    { update_id: 4, message: { ...message, message_id: 603, from: { id: 777 }, text: "owner reply", reply_to_message: { message_id: 600 } } },
+  ]);
+  expect(await prompt.result).toEqual({ status: "answered", value: "owner reply" });
+  await service.drain();
+  expect(requests.filter((request) => request.method === "answerCallbackQuery").map((request) => request.body)).toEqual([
+    { callback_query_id: "member-button", text: "Only the configured Telegram user can answer this question." },
+  ]);
+  expect(requests.some((request) => String(request.body.text).includes("member reply"))).toBe(false);
+  await service.shutdown();
+});
+
+test("private chats accept their own user and groups without answerUserId accept nobody", async () => {
+  const run = async (chatId: string, fromId: number) => {
+    let delivered = false;
+    const service = new DefaultTelegramService({ ...config, chatId, answerUserId: undefined, threadId: undefined }, {
+      inbox: { initialize: async () => {}, read: async (signal) => {
+        if (delivered) return new Promise<any[]>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+        delivered = true;
+        return [{ update_id: 1, message: { message_id: 701, from: { id: fromId }, text: "valid", chat: { id: Number(chatId) }, reply_to_message: { message_id: 700 } } }];
+      } },
+      emptyPollDelayMs: 0,
+      fetch: async (url) => response(methodOf(String(url)) === "sendMessage" ? { message_id: 700 } : true),
+    });
+    const controller = new AbortController();
+    const prompt = await service.openPrompt({ text: "Question", parse: parser }, controller.signal);
+    const outcome = await Promise.race([prompt.result, new Promise((resolve) => setTimeout(() => resolve("pending"), 50))]);
+    controller.abort();
+    await service.shutdown();
+    return outcome;
+  };
+  expect(await run("12345", 12345)).toEqual({ status: "answered", value: "accepted" });
+  expect(await run("12345", 54321)).toBe("pending");
+  expect(await run("-100555", 12345)).toBe("pending");
 });

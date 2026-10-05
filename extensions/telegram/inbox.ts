@@ -153,14 +153,20 @@ function compactReply(update: any): unknown | undefined {
   if (!message || (!update.callback_query && !Number.isSafeInteger(message.reply_to_message?.message_id))) return;
   const compact = {
     message_id: message.message_id, message_thread_id: message.message_thread_id,
-    chat: { id: message.chat?.id, username: message.chat?.username }, from: { is_bot: message.from?.is_bot },
+    chat: { id: message.chat?.id, username: message.chat?.username }, from: compactUser(message.from),
     ...(typeof message.text === "string" ? { text: [...message.text].slice(0, 4096).join("") } : {}),
     ...(message.reply_to_message ? { reply_to_message: { message_id: message.reply_to_message.message_id } } : {}),
   };
   return update.callback_query ? {
     update_id: update.update_id,
-    callback_query: { id: update.callback_query.id, data: update.callback_query.data, from: { is_bot: update.callback_query.from?.is_bot }, message: compact },
+    callback_query: { id: update.callback_query.id, data: update.callback_query.data, from: compactUser(update.callback_query.from), message: compact },
   } : { update_id: update.update_id, message: compact };
+}
+
+/** Only the sender ID survives: it decides who may answer. Names stay out of the inbox. */
+function compactUser(from: any): { id?: number | string; is_bot?: boolean } {
+  const id = from?.id;
+  return { ...(Number.isSafeInteger(id) || typeof id === "string" ? { id } : {}), is_bot: from?.is_bot };
 }
 
 function ownerOnly(stats: { mode: number; uid: number }): boolean {

@@ -1,5 +1,6 @@
 import {
   DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES,
+  telegramAnswerUserId,
   type TelegramConfig,
 } from "./config.ts";
 import { TelegramApiClient, type TelegramApiOptions, type TelegramSendOptions, type TelegramSendResult } from "./api.ts";
@@ -78,16 +79,23 @@ interface TelegramMessage {
   message_thread_id?: number;
   text?: string;
   chat?: { id?: number | string; username?: string };
-  from?: { is_bot?: boolean };
+  from?: TelegramUser;
   reply_to_message?: { message_id?: number };
+}
+
+interface TelegramUser {
+  id?: number | string;
+  is_bot?: boolean;
 }
 
 interface TelegramCallbackQuery {
   id?: string;
   data?: string;
-  from?: { is_bot?: boolean };
+  from?: TelegramUser;
   message?: TelegramMessage;
 }
+
+const UNAUTHORIZED_ANSWER_NOTICE = "Only the configured Telegram user can answer this question.";
 
 interface PendingPrompt<T = unknown> {
   request: TelegramPromptRequest<T>;
@@ -128,6 +136,7 @@ export class DefaultTelegramService implements TelegramService {
   private readonly inbox?: TelegramInbox;
   private readonly pollTimeoutSeconds: number;
   private readonly emptyPollDelayMs: number;
+  private readonly answerUserId?: string;
   private readonly pendingPrompts = new Map<number, PendingPrompt>();
   private readonly recentPrompts = new Map<number, number | null>();
   private readonly passivePrompts = new Map<number, TelegramPromptRequest<unknown>>();
@@ -149,6 +158,8 @@ export class DefaultTelegramService implements TelegramService {
     this.topics = options.topics;
     this.inbox = options.inbox;
     this.questionDelayMs = (config.questionDelayMinutes ?? DEFAULT_TELEGRAM_QUESTION_DELAY_MINUTES) * 60_000;
+    // Answers can approve actions: only one person may give them.
+    this.answerUserId = telegramAnswerUserId(config);
     this.pollTimeoutSeconds = options.pollTimeoutSeconds ?? DEFAULT_POLL_TIMEOUT_SECONDS;
     this.emptyPollDelayMs = options.emptyPollDelayMs ?? 100;
   }
@@ -350,6 +361,10 @@ export class DefaultTelegramService implements TelegramService {
     const owned = pending !== undefined || this.recentPrompts.has(questionMessageId);
     const threadId = pending?.request.threadId ?? this.recentPrompts.get(questionMessageId);
     if (!owned || !matchesThread(threadId, message!)) return;
+    if (!this.isAnswerUser(callback.from)) {
+      this.track(this.api.answerCallbackQuery(callback.id, UNAUTHORIZED_ANSWER_NOTICE));
+      return;
+    }
     if (!pending || !choice) {
       this.track(this.api.answerCallbackQuery(callback.id, "This option is no longer available."));
       return;
@@ -402,7 +417,7 @@ export class DefaultTelegramService implements TelegramService {
   }
 
   private matchesConfiguredTextReply(message: TelegramMessage): boolean {
-    return !message.from?.is_bot
+    return this.isAnswerUser(message.from)
       && typeof message.text === "string"
       && this.matchesConfiguredMessage(message);
   }
@@ -411,6 +426,14 @@ export class DefaultTelegramService implements TelegramService {
     return !callback.from?.is_bot
       && callback.message !== undefined
       && this.matchesConfiguredMessage(callback.message);
+  }
+
+  private isAnswerUser(from: TelegramUser | undefined): boolean {
+    return this.answerUserId !== undefined
+      && from !== undefined
+      && from.is_bot !== true
+      && (typeof from.id === "number" || typeof from.id === "string")
+      && String(from.id) === this.answerUserId;
   }
 
   private matchesConfiguredMessage(message: TelegramMessage): boolean {

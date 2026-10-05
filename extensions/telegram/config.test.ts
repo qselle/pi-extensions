@@ -252,6 +252,24 @@ test("maps the legacy notifications file when no newer config exists", () => {
   }
 });
 
+test("reads one answering user for group chats from files and the environment", () => {
+  const directory = temporaryDirectory();
+  try {
+    const path = join(directory, "telegram.json");
+    writeSecure(path, { botToken: TOKEN, chatId: "-1001234567890", answerUserId: 424242 });
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({ status: "enabled", config: { answerUserId: "424242" } });
+    expect(loadTelegramConfig({ env: { PI_TELEGRAM_ANSWER_USER_ID: "77" }, configFile: path })).toMatchObject({ config: { answerUserId: "77" } });
+    writeSecure(path, { botToken: TOKEN, chatId: "-1001234567890", answerUserId: "-5" });
+    expect(loadTelegramConfig({ env: {}, configFile: path })).toMatchObject({ status: "invalid", message: expect.stringContaining("answerUserId") });
+    const legacy = join(directory, "telegram-notifications.json");
+    writeSecure(legacy, { botToken: TOKEN, chatId: "-1001234567890", answerUserId: "99" });
+    rmSync(path);
+    expect(loadTelegramConfig({ env: { PI_CODING_AGENT_DIR: directory } })).toMatchObject({ config: { answerUserId: "99" } });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("applies the same file safety checks to the legacy notifications file", () => {
   if (process.platform === "win32") return;
   const directory = temporaryDirectory();
