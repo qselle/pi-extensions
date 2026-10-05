@@ -16,7 +16,7 @@ Names a session from its user prompts without changing a title you set manually.
 ```
 
 1. The first meaningful request starts one bounded title request alongside the main agent request.
-2. The active session model generates a specific two-to-four-word noun phrase with thinking disabled.
+2. The configured models, then the active session model, generate a specific two-to-four-word noun phrase with thinking disabled.
 3. Once generation has been attempted, the extension does not retry or rename automatically. Existing and manually assigned titles always win; `/title now` remains an explicit override.
 4. Child agent processes (`PI_SUBAGENT_CHILD=1`) never title automatically, so they make no title request; `/title now` still works there.
 
@@ -63,12 +63,23 @@ independently.
 Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 
 ```json
-{ "enabled": true, "model": "provider/model-id", "tabLink": true }
+{ "enabled": true, "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
 ```
 
-`model` defaults to the active session model. An override falls back to that model if unavailable, unauthenticated, or failing.
+`models` is an ordered preference list of `provider/model-id` entries. Each is
+tried in turn when unavailable, unauthenticated, failing, or returning no usable
+title; the active session model is always the last fallback. Without `models`,
+the single `model` key is still honored as a one-entry list; when both are
+present, `models` wins. With neither, the active session model is used.
 
-The configuration is also used by [`side-chat`](../side-chat/) titles.
+When a title comes from a model after the first configured one, a warning such
+as `Title model fallback: mistral/mistral-medium-3.5 unavailable; used
+openai/gpt-4.1-mini.` appears once per Pi runtime. `/title` shows the model
+order and the latest fallback.
+
+The configuration is also used by [`side-chat`](../side-chat/) titles, which
+currently receive the first preferred model (`model`) with the active-model
+fallback.
 
 `tabLink` defaults to `true`, independently of automatic title generation's
 `enabled` setting. Set it to `false` to disable automatic Herdr linking globally;

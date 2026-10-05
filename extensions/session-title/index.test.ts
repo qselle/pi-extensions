@@ -122,6 +122,21 @@ describe("loadConfig", () => {
     expect(loadConfig(dir)).toEqual({ enabled: true });
   });
 
+  test("reads an ordered models list that takes precedence over model", () => {
+    const dir = mkdtempSync(join(tmpdir(), "title-models-"));
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({
+      model: "openai/gpt-4.1-mini",
+      models: ["mistral/mistral-medium-3.5", "junk", 3, "openai/gpt-4.1-mini", "mistral/mistral-medium-3.5"],
+    }));
+    expect(loadConfig(dir)).toEqual({
+      enabled: true,
+      model: "mistral/mistral-medium-3.5",
+      models: ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"],
+    });
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({ model: "openai/gpt-4.1-mini", models: [] }));
+    expect(loadConfig(dir)).toEqual({ enabled: true, model: "openai/gpt-4.1-mini" });
+  });
+
   test("reads the independent Tab link switch", () => {
     const dir = mkdtempSync(join(tmpdir(), "session-title-config-"));
     writeFileSync(join(dir, "session-title.json"), JSON.stringify({ enabled: false, tabLink: true }));
@@ -249,6 +264,23 @@ describe("titling once", () => {
     expect(h.pi.name).toBeUndefined();
     await h.pi.commands.get("title").handler("status", h.ctx);
     expect(h.notifications.at(-1)!.message).toContain("automatic: off (child agent)");
+  });
+
+  test("passes ordered models and announces a fallback only once", async () => {
+    const fallback = "mistral/mistral-medium-3.5 unavailable; used amazon-bedrock/opus-5";
+    const h = setup({
+      config: config({ model: "mistral/mistral-medium-3.5", models: ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"] }),
+      results: [{ title: "Fallback Title", model: "amazon-bedrock/opus-5", fallback }],
+    });
+    await firstTurn(h);
+    expect(h.calls[0].overrides).toEqual(["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"]);
+    expect(h.calls[0].override).toBe("mistral/mistral-medium-3.5");
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    const notices = h.notifications.filter((notice) => notice.message.startsWith("Title model fallback"));
+    expect(notices).toEqual([{ message: `Title model fallback: ${fallback}.`, level: "warning" }]);
+    await h.pi.commands.get("title").handler("status", h.ctx);
+    expect(h.notifications.at(-1)!.message).toContain("model: mistral/mistral-medium-3.5 → openai/gpt-4.1-mini → active session model");
+    expect(h.notifications.at(-1)!.message).toContain(`last fallback: ${fallback}`);
   });
 
   test("does nothing when disabled", async () => {

@@ -12,8 +12,10 @@ const TITLE_BADGE_ID = "session-title";
 
 export interface SessionTitleConfig {
   enabled: boolean;
-  /** "provider/model" override for the titling request. */
+  /** First preferred "provider/model"; kept for callers that take one override. */
   model?: string;
+  /** Ordered "provider/model" preferences, tried before the active session model. */
+  models?: string[];
   /** Follow Pi names in Herdr when the tab is empty or already linked. */
   tabLink?: boolean;
 }
@@ -25,9 +27,13 @@ export function agentDirectory(): string {
 export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
   try {
     const parsed = JSON.parse(readFileSync(join(directory, CONFIG_FILE), "utf8")) as Record<string, unknown>;
+    const valid = (value: unknown): value is string => typeof value === "string" && value.indexOf("/") > 0;
+    const models = Array.isArray(parsed?.models) ? [...new Set(parsed.models.filter(valid))] : [];
     return {
       enabled: parsed?.enabled !== false,
-      model: typeof parsed?.model === "string" && parsed.model.includes("/") ? parsed.model : undefined,
+      // `models` takes precedence; `model` remains a one-entry shorthand.
+      model: models[0] ?? (valid(parsed?.model) ? parsed.model : undefined),
+      ...(models.length > 0 ? { models } : {}),
       ...(typeof parsed?.tabLink === "boolean" ? { tabLink: parsed.tabLink } : {}),
     };
   } catch {
@@ -59,6 +65,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   let requestGeneration = 0;
   let activeRequest: AbortController | undefined;
   let titleBadge: string | undefined;
+  /** The first fallback is announced once per runtime; /title status keeps the latest. */
+  let fallbackNoticed = false;
 
   const setTitleBadge = (text?: string) => {
     if (text === titleBadge) return;
@@ -107,6 +115,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
         ctx: ctx as never,
         prompt: buildTitlePrompt(sourcePrompts),
         override: config.model,
+        overrides: config.models,
         signal: controller.signal,
       });
     } catch (error) {
@@ -116,6 +125,10 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     activeRequest = undefined;
     setTitleBadge();
     last = result;
+    if (result.fallback && !fallbackNoticed) {
+      fallbackNoticed = true;
+      ctx.ui?.notify(`Title model fallback: ${result.fallback}.`, "warning");
+    }
     if (result.title && (force || !pi.getSessionName())) {
       pi.setSessionName(result.title);
       named = true;
@@ -262,10 +275,11 @@ export function statusText(
   const lines = [
     `title: ${title ?? "(none)"}`,
     `automatic: ${automatic}`,
-    `model: ${config.model ?? "active session model"}`,
+    `model: ${[...(config.models ?? (config.model ? [config.model] : [])), "active session model"].join(" → ")}`,
     `prompts tracked: ${promptCount}`,
   ];
   if (last?.usage) lines.push(`last request: ${last.model ?? "?"} · $${last.usage.cost.toFixed(4)}`);
+  if (last?.fallback) lines.push(`last fallback: ${last.fallback}`);
   if (last?.error) lines.push(`last error: ${last.error}`);
   return lines.join("\n");
 }
