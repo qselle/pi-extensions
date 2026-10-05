@@ -13,13 +13,12 @@ import {
 	type Theme,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { expansionHint } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { disposeSyntax, highlightSyntax, initializeSyntax } from "../../lib/syntax.ts";
 import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
 import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
-import { closeDanglingLink } from "../../lib/links.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -38,10 +37,12 @@ import {
 } from "./render.ts";
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
 import { commandPanel } from "./command-panel.ts";
+import { baseRevision, fit, Lines } from "./lines.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
 	closeGroup,
+	explorationRevision,
 	groupOf,
 	groupState,
 	noteEnd,
@@ -56,27 +57,8 @@ const BULLET = "•";
 const BRANCH = "└";
 const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
 
-/** Truncation can drop an OSC 8 terminator; close it before rendering the next line. */
-const fit = (s: string, width: number): string =>
-	closeDanglingLink(visibleWidth(s) <= width ? s : truncateToWidth(s, width, "…"));
-
-/** Fit each render to the current width and fall back to plain text on errors. */
-class Lines implements Component {
-	constructor(
-		private readonly build: (width: number) => string[],
-		private readonly fallback: string,
-	) {}
-	render(width: number): string[] {
-		if (width <= 0) return [];
-		const w = Math.max(1, width);
-		try {
-			return this.build(w).map((l) => fit(l, w));
-		} catch {
-			return [fit(this.fallback, w)];
-		}
-	}
-	invalidate(): void {}
-}
+/** Grouped rows also depend on sibling calls, which change without recreating the leader. */
+const groupedRevision = (): string => `${baseRevision()}:${explorationRevision()}`;
 
 function bullet(theme: Theme, ctx: any): string {
 	return theme.fg(ctx?.isError ? "error" : ctx?.executionStarted && ctx?.isPartial ? "accent" : "muted", BULLET);
@@ -137,25 +119,48 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 	return branchBody(theme, body, width);
 }
 
-function diffBody(rows: DiffRow[], path: string, theme: Theme, width: number, expanded: boolean): string[] {
-	if (rows.length === 0) return [];
-	const gw = gutterWidth(rows);
+/** Width-independent work runs once per card, not once per width or frame. */
+function memo<T>(compute: () => T): () => T {
+	let done = false;
+	let value: T;
+	return () => {
+		if (!done) {
+			value = compute();
+			done = true;
+		}
+		return value;
+	};
+}
+
+interface DiffView {
+	shown: DiffRow[];
+	omitted: number;
+	gutter: number;
+	highlighted: () => string[];
+}
+
+/** Bound the rows first, so collapsed cards never highlight content they hide. */
+function diffView(rows: DiffRow[], path: string, theme: Theme, expanded: boolean): DiffView {
+	const shown = rows.slice(0, expanded ? 400 : 12);
+	return {
+		shown,
+		omitted: rows.length - shown.length,
+		gutter: gutterWidth(rows),
+		highlighted: memo(() => {
+			const contents = shown.map((r) => r.content);
+			const lang = path ? getLanguageFromPath(path) : undefined;
+			const out = lang ? highlightPreview(contents.join("\n"), lang, theme) : undefined;
+			return out?.length === shown.length ? out : contents;
+		}),
+	};
+}
+
+function diffBody(view: DiffView, theme: Theme, width: number, expanded: boolean): string[] {
+	const { shown, omitted, gutter: gw } = view;
+	if (shown.length === 0) return [];
 	const addBg = theme.getBgAnsi("toolSuccessBg");
 	const delBg = theme.getBgAnsi("toolErrorBg");
-	const lang = path ? getLanguageFromPath(path) : undefined;
-	const contents = rows.map((r) => r.content);
-	let hl: string[] = contents;
-	if (lang) {
-		try {
-			const out = highlightPreview(contents.join("\n"), lang, theme);
-			if (out?.length === rows.length) hl = out;
-		} catch {
-			// keep raw content
-		}
-	}
-	const maxRows = expanded ? 400 : 12;
-	const shown = rows.slice(0, maxRows);
-	const omitted = rows.length - shown.length;
+	const hl = view.highlighted();
 	const inner = Math.max(1, width - 2); // 2-space left margin sits outside the wash
 	const lines = shown.map((row, i) => {
 		const num = theme.fg("dim", String(row.num).padStart(gw));
@@ -288,11 +293,17 @@ function makeRenderCall(name: ToolName) {
 			const state = groupState(ctx?.toolCallId)!;
 			bindExploration(ctx);
 			return explorationBlock(state.rows, state.active, theme, width, ctx?.cwd ?? process.cwd());
-		}, "");
+		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision });
 		// Completed edit/write counts need the result patch; pending writes do not
 		// claim the intended additions have already succeeded.
-		if (name === "edit" || name === "write") return new Lines((width) => ctx?.executionStarted && ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "");
+		if (name === "edit" || name === "write") return new Lines((width) => ctx?.executionStarted && ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "", { volatile: !!ctx?.isPartial });
 		const a = args ?? ctx?.args;
+		// Tabs become fixed display indentation, never terminal cursor movement.
+		// Preserve the actual tool argument, including its shell whitespace.
+		const command = name === "bash"
+			? new PlainOutput().push(String(a?.command ?? "")).replace(/\t/g, "    ").replace(/^\n+|\n+$/g, "")
+			: "";
+		const highlighted = memo(() => highlightCommand(command, theme));
 		const build = (width: number): string[] => {
 			const verbText = actionVerb(name, ctx);
 			const verb = theme.bold(theme.fg("text", verbText));
@@ -302,11 +313,8 @@ function makeRenderCall(name: ToolName) {
 				const purpose = commandPurpose(a?.purpose);
 				const header = theme.fg(ctx?.isError ? "error" : "muted", `${BULLET} ${title}`)
 					+ (purpose ? theme.fg("dim", " · ") + theme.fg("text", purpose) : "");
-				// Tabs become fixed display indentation, never terminal cursor movement.
-				// Preserve the actual tool argument, including its shell whitespace.
-				const command = new PlainOutput().push(String(a?.command ?? "")).replace(/\t/g, "    ").replace(/^\n+|\n+$/g, "");
 				if (!command.trim()) return [header];
-				return [header, ...commandPanel(highlightCommand(command, theme), width, theme, !!ctx?.expanded)];
+				return [header, ...commandPanel(highlighted(), width, theme, !!ctx?.expanded)];
 			}
 			const target = targetFor(name, a);
 			if (!target) return [`${bullet(theme, ctx)} ${verb}`];
@@ -317,7 +325,7 @@ function makeRenderCall(name: ToolName) {
 				: colored;
 			return [`${bullet(theme, ctx)} ${verb} ${targetPart}`];
 		};
-		return new Lines(build, `${verbFor(name)} ${targetFor(name, a)}`.trim());
+		return new Lines(build, `${verbFor(name)} ${targetFor(name, a)}`.trim(), { volatile: !!ctx?.isPartial });
 	};
 }
 
@@ -345,8 +353,9 @@ function makeRenderResult(name: ToolName) {
 				const st = groupState(ctx?.toolCallId)!;
 				bindExploration(ctx);
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
-			}, summarize(name, result, ctx?.args) || "done");
+			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision });
 		}
+		let view: DiffView | undefined;
 		const build = (width: number): string[] => {
 			// edit/write own their headline here (renderCall is empty) so the +/-
 			// count can be read from the result patch.
@@ -361,9 +370,8 @@ function makeRenderResult(name: ToolName) {
 						: contentToAddRows(typeof ctx?.args?.content === "string" ? ctx.args.content : "");
 				const { added, removed } = diffCounts(rows);
 				const head = diffHeadline(name, theme, ctx, width, { added, removed });
-				return rows.length > 0
-					? [head, ...diffBody(rows, String(ctx?.args?.path ?? ""), theme, width, !!opts?.expanded)]
-					: [head];
+				view ??= diffView(rows, String(ctx?.args?.path ?? ""), theme, !!opts?.expanded);
+				return [head, ...diffBody(view, theme, width, !!opts?.expanded)];
 			}
 			if (ctx?.isError) {
 				return bashBody(result, opts, theme, width, true);
@@ -373,7 +381,7 @@ function makeRenderResult(name: ToolName) {
 			const summary = summarize(name, result, ctx?.args);
 			return summary ? branchBody(theme, [theme.fg("muted", summary)], width) : [];
 		};
-		return new Lines(build, summarize(name, result, ctx?.args) || "done");
+		return new Lines(build, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial });
 	};
 }
 
