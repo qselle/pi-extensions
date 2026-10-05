@@ -86,10 +86,23 @@ test("suppresses the entire Telegram hub inside subagent children", () => {
   expect(pi.eventHandlers.size).toBe(0);
 });
 
+test("an explicit parent-process option ignores ambient subagent markers", () => {
+  const previous = process.env.PI_SUBAGENT_CHILD;
+  process.env.PI_SUBAGENT_CHILD = "1";
+  try {
+    const pi = new MockPi();
+    telegramExtension(pi as any, { isSubagentChild: false, env: {}, configFile: false });
+    expect(pi.commands.has("telegram")).toBe(true);
+  } finally {
+    if (previous === undefined) delete process.env.PI_SUBAGENT_CHILD;
+    else process.env.PI_SUBAGENT_CHILD = previous;
+  }
+});
+
 test("keeps missing configuration quiet and reports malformed configuration safely", async () => {
   const disabledPi = new MockPi();
   const disabledCtx = context();
-  telegramExtension(disabledPi as any, { env: {}, configFile: false });
+  telegramExtension(disabledPi as any, { isSubagentChild: false, env: {}, configFile: false });
   await disabledPi.emit("session_start", {}, disabledCtx);
   expect(disabledCtx.notifications).toHaveLength(0);
   expect(disabledPi.activeTools).toEqual(["read", "bash"]);
@@ -98,7 +111,7 @@ test("keeps missing configuration quiet and reports malformed configuration safe
 
   const invalidPi = new MockPi();
   const invalidCtx = context();
-  telegramExtension(invalidPi as any, { env: { PI_TELEGRAM_BOT_TOKEN: TOKEN }, configFile: false });
+  telegramExtension(invalidPi as any, { isSubagentChild: false, env: { PI_TELEGRAM_BOT_TOKEN: TOKEN }, configFile: false });
   await invalidPi.emit("session_start", {}, invalidCtx);
   await invalidPi.commands.get("telegram-test").handler("", invalidCtx);
   expect(invalidCtx.notifications).toHaveLength(2);
@@ -120,6 +133,7 @@ test("sets up, reports, disables, and re-enables Telegram without reload", async
 
   try {
     expect(telegramExtension(pi as any, {
+      isSubagentChild: false,
       env: {},
       configFile: path,
       fetch: (async (_url, init) => {
@@ -175,6 +189,7 @@ test("registers the shared service, delivers goal events, and exposes explicit t
   const ctx = context();
   const bodies: any[] = [];
   const runtime = telegramExtension(pi as any, {
+    isSubagentChild: false,
     env: validEnv,
     configFile: false,
     fetch: (async (_url, init) => {
@@ -204,7 +219,7 @@ test("registers the shared service, delivers goal events, and exposes explicit t
 test("monitor events use the enabled Telegram runtime and stop delivering after shutdown", async () => {
   const messages: string[] = [];
   const pi = new MockPi();
-  const runtime = telegramExtension(pi as any, { service: {
+  const runtime = telegramExtension(pi as any, { isSubagentChild: false, service: {
     send: async (message) => { messages.push(message); return { messageId: 1 }; },
     openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
   } })!;
@@ -222,7 +237,7 @@ test("monitor events use the enabled Telegram runtime and stop delivering after 
 
   const disabled = new MockPi();
   let requests = 0;
-  telegramExtension(disabled as any, { configFile: false, env: {}, fetch: (async () => { requests++; return success(); }) });
+  telegramExtension(disabled as any, { isSubagentChild: false, configFile: false, env: {}, fetch: (async () => { requests++; return success(); }) });
   await disabled.emit("session_start", {}, ctx);
   disabled.events.emit(MONITOR_ALERT_EVENT, alert);
   await disabled.emit("session_shutdown", {}, ctx);
@@ -238,7 +253,7 @@ test("a monitor delivers through Telegram once and an unchanged poll stays silen
   const base = context();
   const ctx = { ...base, cwd: "/tmp/project", mode: "tui", isIdle: () => true, hasPendingMessages: () => false,
     sessionManager: { getBranch: () => entries, getSessionId: () => "session" }, ui: { ...base.ui, setStatus: () => {} } };
-  const runtime = telegramExtension(pi as any, { service: {
+  const runtime = telegramExtension(pi as any, { isSubagentChild: false, service: {
     send: async (message) => { messages.push(message); return { messageId: messages.length }; },
     openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
   } })!;
@@ -267,7 +282,7 @@ test("a monitor delivers through Telegram once and an unchanged poll stays silen
 test("startup attention waits for its destination and late events cannot cross sessions", async () => {
   const messages: string[] = [];
   const pi = new MockPi();
-  const runtime = telegramExtension(pi as any, { service: {
+  const runtime = telegramExtension(pi as any, { isSubagentChild: false, service: {
     send: async (text) => { messages.push(text); return { messageId: messages.length }; },
     openPrompt: async () => { throw new Error("unused"); }, drain: async () => {}, shutdown: async () => {},
   } })!;
@@ -295,6 +310,7 @@ test("loads dedicated config once per extension lifecycle", async () => {
   const create = (bodies: any[]) => {
     const pi = new MockPi();
     const runtime = telegramExtension(pi as any, {
+      isSubagentChild: false,
       env: { PI_TELEGRAM_CONFIG_FILE: path },
       fetch: (async (_url, init) => {
         bodies.push(JSON.parse(String(init?.body)));
@@ -335,6 +351,7 @@ test("waits for pending goal delivery during session shutdown", async () => {
   const ctx = context();
   let resolveResponse!: (response: Response) => void;
   const runtime = telegramExtension(pi as any, {
+    isSubagentChild: false,
     env: validEnv,
     configFile: false,
     fetch: (async () => new Promise<Response>((resolve) => { resolveResponse = resolve; })),
@@ -357,7 +374,7 @@ test("explicit command and tool send formatted notifications through the shared 
   const pi = new MockPi();
   const ctx = context();
   const bodies: any[] = [];
-  telegramExtension(pi as any, { env: { ...validEnv, PI_TELEGRAM_THREAD_ID: "42" }, configFile: false, fetch: async (_url, init) => {
+  telegramExtension(pi as any, { isSubagentChild: false, env: { ...validEnv, PI_TELEGRAM_THREAD_ID: "42" }, configFile: false, fetch: async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
     return success();
   } });
@@ -380,7 +397,7 @@ test("disabled integration and invalid direct messages never contact Telegram", 
   let calls = 0;
   const pi = new MockPi();
   const ctx = context();
-  telegramExtension(pi as any, { env: {}, configFile: false, fetch: async () => { calls++; return success(); } });
+  telegramExtension(pi as any, { isSubagentChild: false, env: {}, configFile: false, fetch: async () => { calls++; return success(); } });
   await pi.commands.get("telegram").handler("doctor", ctx);
   await pi.commands.get("telegram").handler("send Hello", ctx);
   const result = await pi.tools.get("notify_user").execute("id", { message: "Hello" }, undefined, undefined, ctx);
@@ -390,7 +407,7 @@ test("disabled integration and invalid direct messages never contact Telegram", 
   await pi.emit("session_shutdown", {}, ctx);
 
   const enabledPi = new MockPi();
-  telegramExtension(enabledPi as any, { env: validEnv, configFile: false, fetch: async () => { calls++; return success(); } });
+  telegramExtension(enabledPi as any, { isSubagentChild: false, env: validEnv, configFile: false, fetch: async () => { calls++; return success(); } });
   await enabledPi.commands.get("telegram").handler("send", ctx);
   await enabledPi.commands.get("telegram").handler(`send ${"a".repeat(4097)}`, ctx);
   expect(ctx.notifications.at(-1)?.message).toContain("4096");
@@ -401,7 +418,7 @@ test("disabled integration and invalid direct messages never contact Telegram", 
 test("session startup respects a manually narrowed active tool list", async () => {
   const pi = new MockPi();
   const ctx = context();
-  telegramExtension(pi as any, { env: validEnv, configFile: false });
+  telegramExtension(pi as any, { isSubagentChild: false, env: validEnv, configFile: false });
   pi.activeTools = ["read"];
   await pi.emit("session_start", {}, ctx);
   expect(pi.activeTools).toEqual(["read"]);
@@ -413,7 +430,7 @@ test("tool failures are sanitized and unconfirmed delivery is never retried auto
     const pi = new MockPi();
     const ctx = context();
     let calls = 0;
-    telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async () => {
+    telegramExtension(pi as any, { isSubagentChild: false, env: validEnv, configFile: false, fetch: async () => {
       calls++;
       if (failure === "network") throw new Error(`secret ${TOKEN}`);
       return failure === "unconfirmed" ? Response.json({ ok: true, result: {} }) : Response.json({ ok: false, description: TOKEN }, { status: 403 });
@@ -435,7 +452,7 @@ test("cancelling an in-flight notification warns about unconfirmed delivery", as
   let started!: () => void;
   const pending = new Promise<void>((resolve) => { started = resolve; });
   let calls = 0;
-  telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async (_url, init) => {
+  telegramExtension(pi as any, { isSubagentChild: false, env: validEnv, configFile: false, fetch: async (_url, init) => {
     calls++;
     started();
     return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
@@ -455,7 +472,7 @@ test("doctor command performs only read-only checks and leaves the bot untouched
   const pi = new MockPi();
   const ctx = context();
   const calls: string[] = [];
-  telegramExtension(pi as any, { env: validEnv, configFile: false, fetch: async (url) => {
+  telegramExtension(pi as any, { isSubagentChild: false, env: validEnv, configFile: false, fetch: async (url) => {
     const method = String(url).split("/").at(-1)!;
     calls.push(method);
     const result = method === "getMe" ? { id: 123456789, is_bot: true, has_topics_enabled: true }
