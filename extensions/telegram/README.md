@@ -59,7 +59,7 @@ Every automatic attention event is bound to its source session. Late events from
 
 ### Read-only diagnostics
 
-`/telegram doctor` checks authentication, destination access, webhook conflicts and topic support. For forum groups it also checks the bot's permission to manage topics. It uses the current session's topic policy, including `/telegram topic off` or `required`. An active webhook prevents the reply poller from working even when outgoing messages succeed; diagnostics reports that conflict without changing the webhook or revealing its URL.
+`/telegram doctor` names the configuration file in use (or environment-only configuration), then checks authentication, destination access, webhook conflicts and topic support. For forum groups it also checks the bot's permission to manage topics. It uses the current session's topic policy, including `/telegram topic off` or `required`. An active webhook prevents the reply poller from working even when outgoing messages succeed; diagnostics reports that conflict without changing the webhook or revealing its URL.
 
 Diagnostics sends no messages, creates no topics and consumes no updates. It does not prove message delivery, the existence of a configured fixed topic, or the absence of competing pollers on another machine. Use `/telegram test` when you want an actual delivery test. Diagnostics requires enabled configuration and does not run automatically at startup.
 
@@ -94,7 +94,17 @@ Every question remembers its original chat, topic and message ID. Replies, valid
 }
 ```
 
-An optional `threadId` selects one existing topic instead of creating per-session topics. `topics` defaults to `auto` and accepts `auto`, `required`, or `off`. Topic commands override this policy for the current session. `details` accepts `minimal`, `summary`, or `full`. Manual edits require `/reload`. The legacy `telegram-notify.json` file is read only when `telegram.json` is absent.
+An optional `threadId` selects one existing topic instead of creating per-session topics. `topics` defaults to `auto` and accepts `auto`, `required`, or `off`. Topic commands override this policy for the current session. `details` accepts `minimal`, `summary`, or `full`. Manual edits require `/reload`.
+
+### Legacy configuration files
+
+Without `PI_TELEGRAM_CONFIG_FILE`, the first existing file wins:
+
+1. `telegram.json`
+2. `telegram-notify.json` (same fields as `telegram.json`)
+3. `telegram-notifications.json`, an older notification format with `botToken`, `chatId`, `delayMinutes` and `enabled`
+
+The older format maps `delayMinutes` to `questionDelayMinutes` (capped at seven days) and uses `topics: "auto"`. Its unknown fields are ignored. It is checked for ownership, permissions, symlinks and size like `telegram.json`. Legacy files are never rewritten: `/telegram setup`, `on` or `off` saves `telegram.json`, which then takes precedence.
 
 Environment overrides: `PI_TELEGRAM_BOT_TOKEN`, `PI_TELEGRAM_CHAT_ID`, `PI_TELEGRAM_THREAD_ID`, `PI_TELEGRAM_TOPICS`, `PI_TELEGRAM_GOAL_DETAILS`, `PI_TELEGRAM_QUESTION_DELAY_MINUTES`, and `PI_TELEGRAM_CONFIG_FILE`.
 

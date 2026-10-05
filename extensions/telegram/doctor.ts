@@ -1,5 +1,5 @@
 import { safeTelegramError, TelegramApiClient, type TelegramApiOptions } from "./api.ts";
-import type { TelegramConfig } from "./config.ts";
+import type { TelegramConfig, TelegramConfigSource } from "./config.ts";
 
 export interface TelegramDiagnostic {
   name: string;
@@ -43,6 +43,22 @@ export async function diagnoseTelegram(config: TelegramConfig, options: Telegram
     }
   }
   return checks;
+}
+
+const OVERRIDE_VARIABLES = [
+  "PI_TELEGRAM_BOT_TOKEN", "PI_TELEGRAM_CHAT_ID", "PI_TELEGRAM_THREAD_ID", "PI_TELEGRAM_TOPICS",
+  "PI_TELEGRAM_GOAL_DETAILS", "PI_TELEGRAM_QUESTION_DELAY_MINUTES",
+];
+
+/** Names the configuration file in use without reading or exposing its values. */
+export function describeTelegramConfigSource(
+  source: TelegramConfigSource,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): TelegramDiagnostic {
+  const overrides = OVERRIDE_VARIABLES.some((name) => env[name]?.trim()) ? " Environment variables override some fields." : "";
+  if (source.kind === "environment") return { name: "Config", status: "ok", message: "Environment variables only." };
+  const legacy = source.format === "legacy" ? " Legacy notification format; /telegram setup, on, or off saves telegram.json." : "";
+  return { name: "Config", status: "ok", message: `${source.path}.${legacy}${overrides}` };
 }
 
 export function formatTelegramDiagnostics(checks: readonly TelegramDiagnostic[]): string {

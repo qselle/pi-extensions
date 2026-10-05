@@ -15,6 +15,7 @@ import {
   MAX_TELEGRAM_CONFIG_BYTES,
   defaultTelegramConfigPath,
   loadTelegramConfig,
+  loadTelegramConfigWithSource,
   readTelegramConfig,
   saveTelegramConfig,
 } from "./config.ts";
@@ -204,6 +205,75 @@ test("loads the legacy telegram-notify config when the new default is absent", (
         questionDelayMinutes: 5,
       },
     });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("maps the legacy notifications file when no newer config exists", () => {
+  const directory = temporaryDirectory();
+  const legacy = join(directory, "telegram-notifications.json");
+  try {
+    writeSecure(legacy, { botToken: TOKEN, chatId: "555555555", delayMinutes: 7, enabled: true, futureField: { nested: true } });
+    expect(loadTelegramConfigWithSource({ env: { PI_CODING_AGENT_DIR: directory } })).toEqual({
+      result: {
+        status: "enabled",
+        config: {
+          botToken: TOKEN,
+          chatId: "555555555",
+          threadId: undefined,
+          topics: "auto",
+          details: "summary",
+          questionDelayMinutes: 7,
+        },
+      },
+      source: { kind: "file", path: legacy, format: "legacy" },
+    });
+
+    writeSecure(legacy, { botToken: TOKEN, chatId: 555555555, enabled: false });
+    expect(loadTelegramConfig({ env: { PI_CODING_AGENT_DIR: directory } })).toMatchObject({
+      status: "disabled",
+      config: { chatId: "555555555", questionDelayMinutes: 5 },
+    });
+
+    writeSecure(legacy, { botToken: TOKEN, chatId: "555555555", delayMinutes: "soon" });
+    expect(loadTelegramConfig({ env: { PI_CODING_AGENT_DIR: directory } })).toMatchObject({
+      status: "invalid",
+      message: expect.stringContaining("delayMinutes must be a finite number"),
+    });
+
+    writeSecure(join(directory, "telegram-notify.json"), { botToken: TOKEN, chatId: "444444444" });
+    expect(loadTelegramConfigWithSource({ env: { PI_CODING_AGENT_DIR: directory } }).source)
+      .toEqual({ kind: "file", path: join(directory, "telegram-notify.json"), format: "current" });
+    writeSecure(join(directory, "telegram.json"), { botToken: TOKEN, chatId: "333333333" });
+    expect(loadTelegramConfig({ env: { PI_CODING_AGENT_DIR: directory } })).toMatchObject({ config: { chatId: "333333333" } });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("applies the same file safety checks to the legacy notifications file", () => {
+  if (process.platform === "win32") return;
+  const directory = temporaryDirectory();
+  const legacy = join(directory, "telegram-notifications.json");
+  const env = { PI_CODING_AGENT_DIR: directory };
+  try {
+    writeSecure(legacy, { botToken: TOKEN, chatId: "555555555" });
+    chmodSync(legacy, 0o644);
+    expect(loadTelegramConfig({ env })).toMatchObject({ status: "invalid", message: expect.stringContaining("chmod 600") });
+
+    rmSync(legacy);
+    const target = join(directory, "target.json");
+    writeSecure(target, { botToken: TOKEN, chatId: "555555555" });
+    symlinkSync(target, legacy);
+    expect(loadTelegramConfig({ env })).toMatchObject({ status: "invalid", message: expect.stringContaining("symbolic link") });
+
+    rmSync(legacy);
+    writeFileSync(legacy, "x".repeat(MAX_TELEGRAM_CONFIG_BYTES + 1), { mode: 0o600 });
+    expect(loadTelegramConfig({ env })).toMatchObject({ status: "invalid", message: expect.stringContaining("at most") });
+
+    expect(loadTelegramConfig({ env: { PI_TELEGRAM_CONFIG_FILE: join(directory, "telegram.json") } }))
+      .toMatchObject({ status: "invalid", message: expect.stringContaining("does not exist") });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

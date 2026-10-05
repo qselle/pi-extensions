@@ -10,14 +10,15 @@ import { safeTelegramError, TelegramApiClient, TelegramApiError } from "./api.ts
 import { SessionTopics, TOPIC_ENTRY } from "./topics.ts";
 import { BotInbox } from "./inbox.ts";
 import {
-  loadTelegramConfig,
+  loadTelegramConfigWithSource,
   saveTelegramConfig,
   type TelegramConfig,
   type TelegramConfigResult,
+  type TelegramConfigSource,
 } from "./config.ts";
 import { TelegramNotifier } from "./notifier.ts";
 import { promptTelegramSetup } from "./setup.ts";
-import { diagnoseTelegram, formatTelegramDiagnostics } from "./doctor.ts";
+import { describeTelegramConfigSource, diagnoseTelegram, formatTelegramDiagnostics } from "./doctor.ts";
 import { formatTelegramMessage, TelegramMessageError } from "./format.ts";
 import {
   DefaultTelegramService,
@@ -49,9 +50,11 @@ export default function telegramExtension(
   if (child) return undefined;
 
   const injectedService = Boolean(options.service);
-  let configuration: TelegramConfigResult | undefined = injectedService
+  const loaded = injectedService
     ? undefined
-    : loadTelegramConfig({ env: options.env, configFile: options.configFile });
+    : loadTelegramConfigWithSource({ env: options.env, configFile: options.configFile });
+  let configuration: TelegramConfigResult | undefined = loaded?.result;
+  let configurationSource: TelegramConfigSource = loaded?.source ?? { kind: "environment" };
   let service: TelegramService | undefined;
   let notifier: TelegramNotifier | undefined;
   let registration: { unregister(): void } | undefined;
@@ -119,12 +122,14 @@ export default function telegramExtension(
     if (config) installRuntime(makeService(config), config);
     syncToolAvailability(true);
   };
-  const persist = options.writeConfig ?? (async (config: TelegramConfig & { enabled: boolean }) => {
-    await saveTelegramConfig(config, {
+  const persist = async (config: TelegramConfig & { enabled: boolean }) => {
+    if (options.writeConfig) return options.writeConfig(config);
+    const path = await saveTelegramConfig(config, {
       env: options.env,
       configFile: options.configFile,
     });
-  });
+    configurationSource = { kind: "file", path, format: "current" };
+  };
 
   const stopGoalListener = pi.events.on(GOAL_COMPLETED_EVENT, (event) => notifier?.handle(event));
   const routeAttention = (source: AttentionSource, value: unknown) => {
@@ -213,7 +218,10 @@ export default function telegramExtension(
         return;
       }
       bindTopics(ctx);
-      const checks = await diagnoseTelegram({ ...configuration.config, topics: topics?.mode() ?? configuration.config.topics }, options);
+      const checks = [
+        describeTelegramConfigSource(configurationSource, options.env ?? process.env),
+        ...await diagnoseTelegram({ ...configuration.config, topics: topics?.mode() ?? configuration.config.topics }, options),
+      ];
       ctx.ui.notify(formatTelegramDiagnostics(checks), checks.some((check) => check.status === "error") ? "error" : checks.some((check) => check.status === "warning") ? "warning" : "info");
       return;
     }

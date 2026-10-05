@@ -468,6 +468,32 @@ test("cancelling an in-flight notification warns about unconfirmed delivery", as
   await pi.emit("session_shutdown", {}, ctx);
 });
 
+test("doctor reports a legacy notifications file used from the agent directory", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-telegram-legacy-"));
+  const legacy = join(directory, "telegram-notifications.json");
+  writeFileSync(legacy, JSON.stringify({ botToken: TOKEN, chatId: "123456789", delayMinutes: 5, enabled: true }), { mode: 0o600 });
+  chmodSync(legacy, 0o600);
+  const pi = new MockPi();
+  const ctx = context();
+  try {
+    telegramExtension(pi as any, { isSubagentChild: false, env: { PI_CODING_AGENT_DIR: directory }, fetch: async (url) => {
+      const method = String(url).split("/").at(-1)!;
+      const result = method === "getMe" ? { id: 123456789, is_bot: true, has_topics_enabled: true }
+        : method === "getChat" ? { type: "private" } : { url: "" };
+      return Response.json({ ok: true, result });
+    } });
+    await pi.commands.get("telegram").handler("status", ctx);
+    expect(ctx.notifications.at(-1)?.message).toContain("Telegram is on (5 minutes question delay)");
+    await pi.commands.get("telegram").handler("doctor", ctx);
+    const report = ctx.notifications.at(-1)?.message ?? "";
+    expect(report).toContain(`✓ Config: ${legacy}. Legacy notification format`);
+    expect(report).not.toContain(TOKEN);
+    await pi.emit("session_shutdown", {}, ctx);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("doctor command performs only read-only checks and leaves the bot untouched", async () => {
   const pi = new MockPi();
   const ctx = context();
