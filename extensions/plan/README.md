@@ -1,17 +1,27 @@
 # plan
 
-Tracks a multi-step plan in one line above the editor, with full details on demand.
+Tracks a multi-step plan in a compact tree card, with full details on demand.
 
 ```text
-Plan 1/3 · ● Verify the implementation                              /plan
+╭ Plan 3/8 ──────────────────────────────────────╮
+│ ✓ Research 2/2                                 │
+│ ● Build 1/3                                    │
+│   ✓ Implement API                              │
+│   ● Wire the tree card                         │
+│     Expand the active group, collapse the      │
+│     others, and keep the current step visible… │
+│   ○ Polish                                     │
+│ ○ Release 0/2                                  │
+│ ○ Announce                                     │
+╰────────────────────────────────────────────────╯
 ```
 
 ## Usage
 
 ```text
 /plan          Open the plan panel
-/plan compact  One progress line above the editor (default)
-/plan card     Small card with the current and next steps
+/plan card     Tree card in the top-right corner (default)
+/plan compact  One progress line above the editor
 /plan hide     Hide the passive display; keep tracking
 /plan status   Print the current plan
 /plan clear    Remove the plan
@@ -90,13 +100,31 @@ Invalid depths are rejected with an error that points to `children`.
 
 ## Display
 
-The default line shows completed/total steps and the current task. Cancelled
-steps are counted separately. Display choices follow the session branch through
-reload and navigation. Finished plans disappear from the passive display.
+The default card shows the whole tree in 50 columns. Groups on the path to the
+current step are expanded; every other group collapses to `name n/m`
+(finalized/total leaves). Up to two rows of the current step's description
+appear under it, ending in `…` when longer. The card uses at most 14 body rows
+and the overlay's height budget; when the tree is taller, rows around the current
+step stay visible (descriptions shrink first) and a `+N more · /plan` row counts
+the hidden ones. Rows are truncated to the card width, and rendered rows are
+reused until the plan, display, or theme changes.
 
-The optional card has at most three body rows: current step, next pending step,
-and a remaining count. It falls back to the progress line in narrow terminals.
-`/overlay hide` hides either presentation.
+The card falls back to the progress line in terminals narrower than 72 columns
+or shorter than 12 rows. `/plan compact` always uses that line: completed/total
+steps and the current task.
+
+```text
+Plan 1/3 · ● Verify the implementation                              /plan
+```
+
+Cancelled steps are counted separately. Display choices follow the session
+branch through reload and navigation. `/overlay hide` hides either
+presentation; `/plan hide` hides only the plan.
+
+A finished plan stays visible, marked `Complete` (or `Closed` when steps were
+cancelled), through the rest of the response that finished it, and hides at the
+next interactive or RPC prompt. Extension-sent input does not hide it. Reload
+and navigation keep it visible until a user message follows it on the branch.
 
 The panel starts with the active group expanded. Use ↑/↓ to move, ←/→ to fold
 or enter groups, Space to toggle a group, and `q` or Escape to close.

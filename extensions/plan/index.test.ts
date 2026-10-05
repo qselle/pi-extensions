@@ -228,7 +228,10 @@ test("coexists with goal context during an automatic goal run", async () => {
   overlay.setViewport(120, 40);
   const rendered = overlay.render(58).join("\n");
   expect(rendered).toContain("Goal ● ACTIVE");
-  expect(rendered).not.toContain("Plan 1/3");
+  expect(rendered).toContain("Plan 1/3");
+  expect(rendered).toContain("● Implement extension");
+  await pi.commands.get("plan").handler("compact", ctx);
+  expect(overlay.render(58).join("\n")).not.toContain("Plan 1/3");
   expect(overlay.renderCompact(120).join("\n")).toContain("Plan 1/3 · ● Implement extension");
 
   await pi.emit("tool_execution_end", {}, ctx);
@@ -305,7 +308,7 @@ test("a late clear confirmation cannot remove a replaced plan", async () => {
   await pi.emit("session_shutdown", {}, ctx);
 });
 
-test("plan display defaults to one line and restores compact, card, and hidden choices per branch", async () => {
+test("plan display defaults to the tree card and restores compact, card, and hidden choices per branch", async () => {
   const { pi, ctx } = harness();
   const overlay = new OverlayStackView(plainTheme);
   overlay.setViewport(120, 80);
@@ -313,6 +316,12 @@ test("plan display defaults to one line and restores compact, card, and hidden c
   try {
     await pi.emit("session_start", {}, ctx);
     await pi.tools.get("update_plan").execute("plan", activePlan);
+    expect(overlay.preferredWidth()).toBe(50);
+    expect(overlay.render(50).join("\n")).toContain("○ Verify integration");
+    expect(overlay.render(50).length).toBe(5);
+    expect(overlay.renderCompact(120)).toEqual([]);
+
+    await command.handler("compact", ctx);
     const initial = [...pi.entries];
     expect(overlay.render(48)).toEqual([]);
     expect(overlay.renderCompact(120)).toHaveLength(1);
@@ -320,9 +329,7 @@ test("plan display defaults to one line and restores compact, card, and hidden c
 
     await command.handler("card", ctx);
     const cardBranch = [...pi.entries];
-    expect(overlay.preferredWidth()).toBe(48);
-    expect(overlay.render(48).join("\n")).toContain("Next  Verify integration");
-    expect(overlay.render(48).length).toBeLessThanOrEqual(5);
+    expect(overlay.render(50).join("\n")).toContain("○ Verify integration");
     expect(overlay.renderCompact(120)).toEqual([]);
 
     await command.handler("hide", ctx);
@@ -343,6 +350,8 @@ test("plan display defaults to one line and restores compact, card, and hidden c
     await command.handler("compact", ctx);
     expect(pi.entries.at(-1)).toMatchObject({ customType: "plan-view", data: { version: 1, view: "compact" } });
     await pi.tools.get("update_plan").execute("finished", { plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })) });
+    expect(overlay.renderCompact(120)[0]).toContain("Plan 3/3 · ✓ Complete");
+    await pi.emit("input", { source: "interactive", text: "next" }, ctx);
     expect(overlay.renderCompact(120)).toEqual([]);
   } finally {
     await pi.emit("session_shutdown", {}, ctx);
@@ -359,10 +368,10 @@ test("malformed display entries keep the default and failed saves do not change 
       pi.entries.push({ type: "custom", customType: "plan-view", data });
     }
     await pi.emit("session_start", {}, ctx);
-    expect(overlay.renderCompact(100)).toHaveLength(1);
+    expect(overlay.render(50).join("\n")).toContain("Plan 1/3");
     pi.appendEntry = () => { throw new Error("save failed"); };
     await expect(pi.commands.get("plan").handler("hide", ctx)).rejects.toThrow("save failed");
-    expect(overlay.renderCompact(100)).toHaveLength(1);
+    expect(overlay.render(50).join("\n")).toContain("Plan 1/3");
   } finally {
     await pi.emit("session_shutdown", {}, ctx);
   }
@@ -409,4 +418,48 @@ test("continuity follows restored branch state and an explicit reset remains app
     expect(pi.entries.at(-1).data.plan.explanation).toContain("documentation project");
     expect(pi.entries[0].data.plan.items[0].step).toBe("Research behavior");
   } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("a finished plan stays visible until the next user prompt", async () => {
+  const { pi, ctx, notifications } = harness();
+  const overlay = new OverlayStackView(plainTheme);
+  overlay.setViewport(120, 40);
+  const finished = { plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })) };
+  try {
+    await pi.emit("session_start", {}, ctx);
+    await pi.tools.get("update_plan").execute("plan", activePlan);
+    await pi.tools.get("update_plan").execute("done", finished);
+    const card = overlay.render(50).join("\n");
+    expect(card).toContain("Plan 3/3 · Complete");
+    expect(card).toContain("✓ Verify integration");
+    expect(overlay.render(50)).toEqual(overlay.render(50));
+
+    await pi.emit("agent_settled", {}, ctx);
+    await pi.emit("input", { source: "extension", text: "automated" }, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+
+    // Restoring the same branch before any new prompt keeps it visible.
+    await pi.emit("session_tree", {}, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+
+    await pi.emit("input", { source: "interactive", text: "next task" }, ctx);
+    expect(overlay.render(50)).toEqual([]);
+    expect(overlay.renderCompact(120)).toEqual([]);
+    await pi.commands.get("plan").handler("status", ctx);
+    expect(notifications.at(-1)).toContain("✓ Verify integration");
+
+    const prompted = [...pi.entries, { type: "message", message: { role: "user", content: "next task" } }];
+    await pi.emit("session_start", {}, { ...ctx, sessionManager: { getBranch: () => prompted } });
+    expect(overlay.render(50)).toEqual([]);
+
+    // A cancelled finish reads as closed and also hides after the next prompt.
+    await pi.emit("session_start", {}, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+    await pi.tools.get("update_plan").execute("new", { plan: [{ step: "Retired", status: "cancelled" }] });
+    expect(overlay.render(50).join("\n")).toContain("Plan 0/1 · 1 cancelled · Closed");
+    await pi.emit("input", { source: "rpc", text: "next" }, ctx);
+    expect(overlay.render(50)).toEqual([]);
+  } finally {
+    await pi.emit("session_shutdown", {}, ctx);
+  }
 });

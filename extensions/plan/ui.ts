@@ -10,13 +10,17 @@ import {
   currentPlanItem,
   planStats,
   planRows,
-  planLeaves,
   type PlanItem,
   type PlanItemStatus,
   type PlanState,
 } from "./plan.ts";
 
 export type PlanPanelAction = "close" | "clear";
+
+/** Most body rows the passive card uses, so a large plan never fills the terminal. */
+export const MAX_CARD_ROWS = 14;
+/** Rows of the current step's description shown under it in the card. */
+export const MAX_CARD_DESCRIPTION_ROWS = 2;
 
 export class PlanOverlayCard implements Component {
   constructor(
@@ -26,12 +30,11 @@ export class PlanOverlayCard implements Component {
 
   render(width: number): string[] {
     const plan = this.getPlan();
-    const stats = planStats(plan.items);
-    if (stats.unfinished === 0 || width < 24) return [];
+    if (planStats(plan.items).total === 0 || width < 24) return [];
     const innerWidth = Math.max(1, width - 4);
     return frame(
       planOverlayTitle(plan, this.theme),
-      renderPlanOverlayBody(plan, innerWidth, 6, this.theme),
+      renderPlanOverlayBody(plan, innerWidth, MAX_CARD_ROWS, this.theme),
       width,
       this.theme,
       "accent",
@@ -42,20 +45,31 @@ export class PlanOverlayCard implements Component {
 }
 
 export function planOverlayTitle(plan: PlanState, theme: Theme): string {
-  return theme.bold(` Plan ${progressLabel(plan)} `);
+  const stats = planStats(plan.items);
+  return theme.bold(` Plan ${progressLabel(plan)}${stats.total && !stats.unfinished ? ` · ${finishedLabel(plan)}` : ""} `);
 }
 
 export function renderPlanSummary(plan: PlanState, width: number, theme: Theme): string {
-  if (width <= 0 || planStats(plan.items).unfinished === 0) return "";
-  const current = currentPlanItem(plan)!;
+  const stats = planStats(plan.items);
+  if (width <= 0 || stats.total === 0) return "";
   const label = `${theme.fg("muted", `Plan ${progressLabel(plan)}`)}${theme.fg("dim", " · ")}`;
-  const body = `${theme.fg("accent", "●")} ${theme.fg("text", current.step)}`;
+  const current = stats.unfinished ? currentPlanItem(plan)! : undefined;
+  const body = current
+    ? `${styledIcon(current.status, theme)} ${theme.fg("text", current.step)}`
+    : `${theme.fg("success", "✓")} ${theme.fg("text", finishedLabel(plan))}`;
   const hint = width >= 80 ? theme.fg("dim", "/plan") : "";
   const available = Math.max(0, width - (hint ? visibleWidth(hint) + 2 : 0));
   const line = truncateToWidth(label + body, available, "…");
   return line + (hint ? " ".repeat(Math.max(2, width - visibleWidth(line) - visibleWidth(hint))) + hint : "");
 }
 
+interface CardRow { text: string; step: boolean }
+
+/**
+ * The passive card: the whole tree with the current step's groups expanded,
+ * every other group collapsed to `name n/m`, and up to two description rows
+ * under the current step. Rows beyond the height keep the current step in view.
+ */
 export function renderPlanOverlayBody(
   plan: PlanState,
   width: number,
@@ -63,14 +77,75 @@ export function renderPlanOverlayBody(
   theme: Theme,
 ): string[] {
   const stats = planStats(plan.items);
-  if (stats.unfinished === 0 || width <= 0 || maxHeight <= 0) return [];
+  if (stats.total === 0 || width <= 0 || maxHeight <= 0) return [];
 
-  const current = currentPlanItem(plan)!;
-  const next = planLeaves(plan.items).find((item) => item.status === "pending");
-  const body = [itemLine(current, theme, width)];
-  if (next && maxHeight > 1) body.push(truncateToWidth(theme.fg("dim", "Next  ") + theme.fg("muted", next.step), width, "…"));
-  if (stats.unfinished > 2 && maxHeight > 2) body.push(truncateToWidth(theme.fg("dim", `+${stats.unfinished - 2} more · /plan`), width, "…"));
-  return body;
+  const focus = stats.unfinished ? currentPlanItem(plan) : undefined;
+  const expanded = new Set(focus ? ancestorsOf(plan.items, focus) : []);
+  const rows: CardRow[] = [];
+  let focusRow = -1;
+  let focusEnd = -1;
+  const walk = (items: readonly PlanItem[], depth: number) => {
+    for (const item of items) {
+      const indent = "  ".repeat(depth);
+      rows.push({ text: truncateToWidth(indent + cardItemLine(item, theme), width, "…"), step: true });
+      if (item === focus) {
+        focusRow = rows.length - 1;
+        for (const text of descriptionRows(item.description, `${indent}  `, width, theme)) rows.push({ text, step: false });
+        focusEnd = rows.length;
+      }
+      if (item.children && expanded.has(item)) walk(item.children, depth + 1);
+    }
+  };
+  walk(plan.items, 0);
+
+  const limit = Math.min(maxHeight, MAX_CARD_ROWS);
+  if (rows.length <= limit) return rows.map((row) => row.text);
+  if (focusRow < 0) { focusRow = 0; focusEnd = 1; }
+  if (limit === 1) return [rows[focusRow]!.text];
+
+  // Reserve one row for the overflow hint; drop description rows before steps.
+  const visible = limit - 1;
+  const keptDescription = Math.min(focusEnd - focusRow - 1, Math.max(0, visible - 1));
+  const trimmed = [...rows.slice(0, focusRow + 1 + keptDescription), ...rows.slice(focusEnd)];
+  const blockEnd = focusRow + 1 + keptDescription;
+  const start = Math.max(blockEnd - visible, Math.min(Math.max(0, focusRow - 1), trimmed.length - visible));
+  const shown = trimmed.slice(start, start + visible);
+  const hidden = trimmed.filter((row) => row.step).length - shown.filter((row) => row.step).length;
+  return [
+    ...shown.map((row) => row.text),
+    ...(hidden > 0 ? [truncateToWidth(theme.fg("dim", `+${hidden} more · /plan`), width, "…")] : []),
+  ];
+}
+
+function ancestorsOf(items: readonly PlanItem[], target: PlanItem): PlanItem[] {
+  for (const item of items) {
+    if (item === target) return [];
+    if (!item.children) continue;
+    const path = ancestorsOf(item.children, target);
+    if (path.length || item.children.includes(target)) return [item, ...path];
+  }
+  return [];
+}
+
+function cardItemLine(item: PlanItem, theme: Theme): string {
+  const icon = styledIcon(item.status, theme);
+  if (!item.children) return `${icon} ${styledItemContent(item, theme)}`;
+  const stats = planStats(item.children);
+  const name = item.status === "in_progress" ? theme.fg("accent", theme.bold(item.step))
+    : item.status === "pending" ? theme.fg("muted", item.step) : theme.fg("dim", item.step);
+  return `${icon} ${name} ${theme.fg("dim", `${stats.finished}/${stats.total}`)}`;
+}
+
+function descriptionRows(description: string | undefined, indent: string, width: number, theme: Theme): string[] {
+  const available = width - visibleWidth(indent);
+  if (!description || available < 8) return [];
+  const lines = wrapTextWithAnsi(description, available);
+  const shown = lines.slice(0, MAX_CARD_DESCRIPTION_ROWS).map((line) => theme.fg("dim", line));
+  if (lines.length > MAX_CARD_DESCRIPTION_ROWS) {
+    const rest = lines.slice(MAX_CARD_DESCRIPTION_ROWS - 1).join(" ");
+    shown[MAX_CARD_DESCRIPTION_ROWS - 1] = truncateToWidth(theme.fg("dim", rest), available, theme.fg("dim", "…"));
+  }
+  return shown.map((line) => indent + line);
 }
 
 export class PlanPanel implements Component {
@@ -183,6 +258,10 @@ export function renderPlanText(plan: PlanState): string {
     if (item.description) lines.push(`${"  ".repeat(depth + 1)}${item.description}`);
   }
   return lines.join("\n");
+}
+
+function finishedLabel(plan: PlanState): string {
+  return planStats(plan.items).cancelled ? "Closed" : "Complete";
 }
 
 function progressLabel(plan: PlanState): string {

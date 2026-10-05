@@ -1,5 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
 import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
@@ -84,27 +84,46 @@ const planAnchor = createContextAnchor<PlanState>({
 export default function planExtension(pi: ExtensionAPI): void {
   let plan = createPlanState();
   let generation = 0;
-  let view: PlanView = "compact";
+  let view: PlanView = "card";
+  // A finished plan stays on screen through the response that finished it and
+  // hides at the next user prompt.
+  let finishedVisible = false;
+
+  // Rendered rows per size, reused until the displayed state or theme changes.
+  const rendered = new Map<string, string[] | string>();
+  let renderedTheme: Theme | undefined;
+  const cached = <T extends string[] | string>(key: string, theme: Theme, render: () => T): T => {
+    if (theme !== renderedTheme) { rendered.clear(); renderedTheme = theme; }
+    let value = rendered.get(key) as T | undefined;
+    if (value === undefined) rendered.set(key, value = render());
+    return value;
+  };
 
   const overlayCard = registerOverlayCard({
     id: "plan",
     order: 10,
-    width: 48,
+    width: 50,
     minBodyHeight: 1,
     minTerminalWidth: 72,
     minTerminalHeight: 12,
-    visible: () => view !== "hide" && planIsActive(plan),
+    visible: () => view !== "hide" && (planIsActive(plan) || (finishedVisible && plan.items.length > 0)),
     presentation: () => view === "compact" ? "line" : "card",
-    renderSummary: (width, theme) => renderPlanSummary(plan, width, theme),
-    title: (theme) => planOverlayTitle(plan, theme),
-    renderBody: (width, maxHeight, theme) => renderPlanOverlayBody(plan, width, maxHeight, theme),
+    renderSummary: (width, theme) => cached(`line:${width}`, theme, () => renderPlanSummary(plan, width, theme)),
+    title: (theme) => cached("title", theme, () => planOverlayTitle(plan, theme)),
+    renderBody: (width, maxHeight, theme) => cached(`body:${width}:${maxHeight}`, theme, () => renderPlanOverlayBody(plan, width, maxHeight, theme)),
   });
+
+  const refresh = () => {
+    rendered.clear();
+    overlayCard.invalidate();
+  };
 
   const commit = (next: PlanState) => {
     const entry: PlanEntry = { version: next.items.some((item) => item.children) ? 2 : 1, plan: next };
     pi.appendEntry(ENTRY_TYPE, entry);
     plan = next;
-    overlayCard.invalidate();
+    finishedVisible = next.items.length > 0 && !planIsActive(next);
+    refresh();
   };
 
   const syncAnchor = (ctx: AnchorContext) => planAnchor.sync(pi, ctx, plan);
@@ -169,7 +188,7 @@ export default function planExtension(pi: ExtensionAPI): void {
       else if (command === "compact" || command === "card" || command === "hide") {
         pi.appendEntry(VIEW_ENTRY_TYPE, { version: 1, view: command });
         view = command;
-        overlayCard.invalidate();
+        refresh();
         ctx.ui.notify(`Plan display: ${view === "hide" ? "hidden" : view}.`, "info");
       }
       else if (command === "status") ctx.ui.notify(plan.items.length > 0 ? renderPlanText(plan) : "No plan is set.", "info");
@@ -206,8 +225,10 @@ export default function planExtension(pi: ExtensionAPI): void {
   const restore = (ctx: ExtensionContext) => {
     generation++;
     plan = createPlanState();
-    view = "compact";
+    view = "card";
+    let promptedSincePlan = false;
     for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "message" && entry.message.role === "user") promptedSincePlan = true;
       if (entry.type !== "custom") continue;
       if (entry.customType === VIEW_ENTRY_TYPE) {
         const saved = entry.data as { version?: unknown; view?: unknown } | null;
@@ -215,13 +236,20 @@ export default function planExtension(pi: ExtensionAPI): void {
       }
       if (entry.customType !== ENTRY_TYPE) continue;
       const restored = decodePlanEntry(entry.data);
-      if (restored) plan = restored.plan;
+      if (restored) { plan = restored.plan; promptedSincePlan = false; }
     }
-    overlayCard.invalidate();
+    finishedVisible = !promptedSincePlan && plan.items.length > 0 && !planIsActive(plan);
+    refresh();
   };
+
+  pi.on("input", (event) => {
+    if (event.source === "extension" || !finishedVisible) return;
+    finishedVisible = false;
+    refresh();
+  });
 
   pi.on("session_start", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
   pi.on("session_tree", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
-  pi.on("session_compact", (_event, ctx) => { overlayCard.invalidate(); syncAnchor(ctx); });
+  pi.on("session_compact", (_event, ctx) => { refresh(); syncAnchor(ctx); });
   pi.on("session_shutdown", () => { generation++; overlayCard.unregister(); });
 }
