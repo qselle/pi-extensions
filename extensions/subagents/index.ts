@@ -163,11 +163,12 @@ export default function registerSubagents(
       onChange: () => {
         card?.invalidate();
         activeTranscriptRefresh?.();
-        if (activeContext && !restoring) {
-          const agents = coordinator.checkpoint();
-          const signature = JSON.stringify(agents);
-          if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
-        }
+      },
+      onPersist: () => {
+        if (!activeContext || restoring) return;
+        const agents = coordinator.checkpoint();
+        const signature = JSON.stringify(agents);
+        if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
       },
       onCompletion: (agent) => {
         pi.sendMessage({
@@ -313,9 +314,9 @@ export default function registerSubagents(
         return toolResult("list", agents, formatAgents(agents, false));
       }
       if (params.action === "close") {
-        const saved = coordinator.checkpoint().find((row) => row.agent.name.toLowerCase() === params.agent_name?.toLowerCase() || row.agent.id === params.agent_name);
+        const resume = coordinator.savedResume(params.agent_name ?? "");
         const agent = await coordinator.close(params.agent_name ?? "");
-        if (saved?.resume) await removeCheckpoint(ctx, saved.resume);
+        if (resume) await removeCheckpoint(ctx, resume);
         return toolResult("close", [agent], `Closed ${agent.name}.`);
       }
       throw new Error(`Unknown subagents action: ${params.action}`);
@@ -350,15 +351,15 @@ export default function registerSubagents(
       return;
     }
     const loadSaved = async (target: AgentSnapshot) => {
-      const saved = coordinator.checkpoint().find((row) => row.agent.id === target.id);
-      if (!saved?.resume || isActive(target)) return;
+      const resume = isActive(target) ? undefined : coordinator.savedResume(target.id);
+      if (!resume) return;
       try {
-        const file = await checkpointFile(ctx, saved.resume);
+        const file = await checkpointFile(ctx, resume);
         if (revision !== viewRevision) return;
         const current = coordinator.list().find((child) => child.id === target.id);
         if (!current || isActive(current) || current.runId !== target.runId) return;
         const session = SessionManager.open(file);
-        const entries = (saved.resume.leafId ? session.getBranch(saved.resume.leafId) : []).slice(saved.resume.initialEntryCount);
+        const entries = (resume.leafId ? session.getBranch(resume.leafId) : []).slice(resume.initialEntryCount);
         const first = entries.findIndex((entry: any) => entry.type === "message" && entry.message?.role === "user");
         if (first >= 0) entries.splice(first, 1);
         coordinator.restoreTranscript(target.name, entries);

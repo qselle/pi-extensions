@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  PROGRESS_CHECKPOINT_MS,
   SubagentCoordinator,
   type AgentRuntime,
   type SpawnRequest,
@@ -394,6 +395,67 @@ test("keeps a bounded transcript snapshot after child cleanup", async () => {
   expect(retained.agent.status).toBe("closed");
   expect(retained.entries).toHaveLength(500);
   expect((retained.entries.at(-1) as any).index).toBe(519);
+});
+
+test("child activity does not persist state or reread the child file between lifecycle transitions", async () => {
+  let now = 1_000;
+  let persisted = 0, fileReads = 0;
+  let client!: FakeClient;
+  const coordinator: SubagentCoordinator = new SubagentCoordinator({
+    now: () => now,
+    createRuntime: async () => {
+      client = new FakeClient();
+      return { client, cleanup: async () => {}, checkpoint: () => {
+        fileReads++;
+        return { directory: "pi-subagent-context-test", file: "child.jsonl", initialEntryCount: 0, leafId: `leaf-${fileReads}` };
+      } };
+    },
+    hooks: { onPersist: () => { persisted++; coordinator.checkpoint(); } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Busy"));
+  expect({ persisted, fileReads }).toEqual({ persisted: 1, fileReads: 1 });
+
+  for (let index = 0; index < 50; index++) {
+    now += 100;
+    client.emit({ type: "tool_execution_start", toolName: "bash", args: { command: `step ${index}` } });
+    client.emit({ type: "tool_execution_end", toolName: "bash", isError: false, result: {} });
+    if (index % 5 === 0) client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `progress ${index}` }] } });
+  }
+  expect(persisted, "110 child events add no state entry").toBe(1);
+  expect(fileReads, "child events do not reread the session file").toBe(1);
+  expect(coordinator.list()[0]!.activity.at(-1)).toBe("bash: step 49");
+  coordinator.checkpoint();
+  coordinator.checkpoint();
+  expect(fileReads, "one read per batch of new child entries").toBe(2);
+
+  now += 100;
+  client.emit({ type: "agent_settled" });
+  expect(persisted).toBe(2);
+  expect(fileReads).toBe(3);
+  expect(coordinator.checkpoint()[0]!.resume?.leafId).toBe("leaf-3");
+  expect(fileReads, "a settled child is not reread").toBe(3);
+  await coordinator.shutdown();
+});
+
+test("long runs persist progress at a bounded interval", async () => {
+  let now = 0;
+  let persisted = 0;
+  let client!: FakeClient;
+  const coordinator = new SubagentCoordinator({
+    now: () => now,
+    createRuntime: async () => { client = new FakeClient(); return { client, cleanup: async () => {} }; },
+    hooks: { onPersist: () => { persisted++; } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Long"));
+  expect(persisted).toBe(1);
+  for (let index = 0; index < 30; index++) {
+    now += 10_000;
+    client.emit({ type: "tool_execution_start", toolName: "read" });
+  }
+  expect(persisted).toBe(1 + Math.floor(300_000 / PROGRESS_CHECKPOINT_MS));
+  await coordinator.shutdown();
 });
 
 test("an oversized agent_end record leaves the child running and its final output intact", async () => {

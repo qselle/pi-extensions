@@ -7,6 +7,8 @@ export const MAX_AGENT_NAME_CHARS = 64;
 export const MAX_TASK_CHARS = 16_000;
 export const MAX_MESSAGE_CHARS = 16_000;
 export const MAX_RESULT_BYTES = 24 * 1024;
+/** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
+export const PROGRESS_CHECKPOINT_MS = 60_000;
 
 export type AgentStatus = "starting" | "running" | "completed" | "failed" | "stopped" | "closed";
 export type WaitMode = "any" | "all";
@@ -71,7 +73,10 @@ export interface AgentTranscript {
 export type AgentRuntimeFactory = (request: SpawnRequest, signal?: AbortSignal) => Promise<AgentRuntime>;
 
 export interface CoordinatorHooks {
+  /** Display state changed; called for every child event. */
   onChange?(): void;
+  /** Durable state should be saved: lifecycle transitions and throttled progress. */
+  onPersist?(): void;
   onCompletion?(agent: AgentSnapshot): void | Promise<void>;
   onUsage?(message: unknown, agent: AgentSnapshot): void;
   onReport?(report: ParentReport, agent: AgentSnapshot): void | Promise<void>;
@@ -101,6 +106,8 @@ export interface SavedAgent { agent: AgentSnapshot; resume?: ChildCheckpoint; de
 interface ManagedAgent extends AgentSnapshot {
   checkpoint?: () => ChildCheckpoint;
   resume?: ChildCheckpoint;
+  /** The child may have appended entries since `resume` was read. */
+  leafDirty: boolean;
   inbox: string[];
   resuming?: Promise<void>;
   resumeController?: AbortController;
@@ -128,6 +135,7 @@ export class SubagentCoordinator {
   private reservations = 0;
   private generation = 0;
   private active = false;
+  private lastPersistAt = 0;
   private readonly maxOpenAgents: number;
   private readonly now: () => number;
 
@@ -143,6 +151,7 @@ export class SubagentCoordinator {
     this.usedNames.clear();
     this.reservedNames.clear();
     this.reservations = 0;
+    this.lastPersistAt = this.now();
     this.changed();
   }
 
@@ -182,6 +191,7 @@ export class SubagentCoordinator {
         activity: [],
         usage: emptyUsage(),
         checkpoint: runtime.checkpoint,
+        leafDirty: true,
         inbox: [],
         client: runtime.client,
         cleanup: runtime.cleanup,
@@ -215,6 +225,7 @@ export class SubagentCoordinator {
         signal?.removeEventListener("abort", abortStartup);
       }
       this.changed();
+      this.persist();
       return this.snapshot(agent);
     } catch (error) {
       if (agent) {
@@ -239,6 +250,7 @@ export class SubagentCoordinator {
     if (agent.inbox.length >= 8) throw new Error("At most 8 queued messages per child; send or interrupt to clear them.");
     agent.inbox.push(boundedInput(message, "queued message", MAX_MESSAGE_CHARS));
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
@@ -251,12 +263,23 @@ export class SubagentCoordinator {
     return { ...this.snapshot(agent), reports };
   }
 
-  /** Snapshot references pin a conversation leaf; restoring never starts a process. */
+  /**
+   * Snapshot references pin a conversation leaf; restoring never starts a process.
+   * A child file is reread only when the child produced events since the last read.
+   */
   checkpoint(): SavedAgent[] {
     return this.ordered().filter((agent) => agent.status !== "closed").map((agent) => {
-      try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Keep the last complete file checkpoint. */ }
+      this.refreshResume(agent);
       return { agent: this.snapshot(agent), resume: agent.resume, delivery: agent.delivery, inbox: [...agent.inbox], reports: structuredClone(agent.reportRecords), seenReportIds: [...agent.seenReportIds] };
     });
+  }
+
+  /** The current durable conversation reference for one child, if any. */
+  savedResume(name: string): ChildCheckpoint | undefined {
+    const agent = this.findAgent(name);
+    if (!agent || agent.status === "closed") return undefined;
+    this.refreshResume(agent);
+    return agent.resume;
   }
 
   restore(saved: SavedAgent[]): void {
@@ -266,7 +289,7 @@ export class SubagentCoordinator {
       const agent: ManagedAgent = { ...row.agent, status: isActive(row.agent) ? "stopped" : row.agent.status,
         runId: row.agent.runId ?? crypto.randomUUID(),
         createdAt: row.agent.createdAt ?? row.agent.startedAt,
-        resume: row.resume, inbox: [...row.inbox], cleanup: async () => {}, cleanupDone: true,
+        resume: row.resume, leafDirty: false, inbox: [...row.inbox], cleanup: async () => {}, cleanupDone: true,
         transcriptCache: [], completion, settled: true, waiters: 0, delivery: row.delivery,
         suppressCompletion: false, generation: this.generation, reportRecords: structuredClone(row.reports ?? []),
         seenReportIds: [...(row.seenReportIds ?? [])], reportUpdate: deferred() };
@@ -289,6 +312,7 @@ export class SubagentCoordinator {
     }));
     const saved = this.checkpoint();
     this.changed();
+    this.persist();
     const failures = outcomes.filter((outcome) => outcome.status === "rejected");
     if (failures.length) throw new Error("Unable to stop every child process; retained checkpoints for recovery.");
     return saved;
@@ -297,7 +321,7 @@ export class SubagentCoordinator {
   private async resumeAgent(agent: ManagedAgent, parentContext?: unknown, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     if (agent.client) return;
-    try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Retain the last complete checkpoint. */ }
+    this.refreshResume(agent);
     if (!agent.resume) throw new Error(`No durable conversation is available for ${agent.name}; spawn a new child.`);
     if (agent.resuming) return agent.resuming;
     if (this.openCount() + this.reservations >= this.maxOpenAgents) throw new Error(`At most ${this.maxOpenAgents} subagents may remain open`);
@@ -318,7 +342,7 @@ export class SubagentCoordinator {
         this.assertGeneration(generation);
         if (agent.status === "closed") throw new Error(`Subagent ${agent.name} was closed during resume`);
         agent.client = runtime.client; agent.cleanup = runtime.cleanup; agent.cleanupDone = false;
-        agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript;
+        agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript; agent.leafDirty = true;
         agent.generation = generation; agent.suppressCompletion = false;
         this.attach(agent, runtime.client);
       } catch (error) {
@@ -362,16 +386,20 @@ export class SubagentCoordinator {
     } else {
       await this.startFollowUp(agent, client, text);
     }
+    agent.leafDirty = true;
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
   async interrupt(name: string): Promise<AgentSnapshot> {
     const agent = this.requireAgent(name);
+    const cleared = agent.inbox.length > 0;
     agent.inbox = [];
     agent.resumeController?.abort();
     await agent.resuming?.catch(() => undefined);
     this.changed();
+    if (cleared) this.persist();
     if (agent.status === "closed") throw new Error(`Subagent ${agent.name} is closed`);
     await agent.client?.clearQueue?.();
     if (!agent.client || !isActive(agent)) return this.snapshot(agent);
@@ -379,6 +407,7 @@ export class SubagentCoordinator {
     await agent.client.clearQueue?.();
     pushActivity(agent, "interrupt requested");
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
@@ -525,7 +554,11 @@ export class SubagentCoordinator {
   }
 
   private attach(agent: ManagedAgent, client: AgentClient): void {
-    client.onEvent((event) => { if (agent.client === client) this.handleEvent(agent, event); });
+    client.onEvent((event) => {
+      if (agent.client !== client) return;
+      this.handleEvent(agent, event);
+      if (agent.generation === this.generation && this.active) this.persistProgress();
+    });
     client.onExit((error) => {
       if (agent.client !== client || agent.generation !== this.generation || !this.active) return;
       if (agent.checkpoint) {
@@ -556,6 +589,7 @@ export class SubagentCoordinator {
   private handleEvent(agent: ManagedAgent, event: RpcEvent): void {
     if (agent.status === "closed" || agent.generation !== this.generation || !this.active) return;
     if (agent.settled) return;
+    agent.leafDirty = true;
     if (event.type === "agent_start") {
       agent.status = "running";
       this.changed();
@@ -610,6 +644,9 @@ export class SubagentCoordinator {
           agent.reportUpdate.resolve();
           agent.reportUpdate = deferred();
           queueMicrotask(() => void this.deliverReport(agent, record));
+          this.changed();
+          this.persist();
+          return;
         }
       }
       this.changed();
@@ -644,6 +681,7 @@ export class SubagentCoordinator {
     if (suppress) agent.suppressCompletion = true;
     agent.completion.resolve();
     this.changed();
+    this.persist();
     queueMicrotask(() => void this.deliverCompletion(agent));
   }
 
@@ -681,6 +719,7 @@ export class SubagentCoordinator {
       agent.completion.resolve();
     }
     this.changed();
+    this.persist();
     const operation = (async () => {
       const failures: unknown[] = [];
       await agent.resuming?.catch(() => undefined);
@@ -739,10 +778,23 @@ export class SubagentCoordinator {
   }
 
   private requireAgent(name: string): ManagedAgent {
-    const key = normalizeLookup(name).toLocaleLowerCase();
-    const agent = [...this.agents.values()].find((candidate) => candidate.name.toLocaleLowerCase() === key || candidate.id === name);
+    const agent = this.findAgent(normalizeLookup(name));
     if (!agent) throw new Error(`Subagent not found: ${name}`);
     return agent;
+  }
+
+  private findAgent(name: string): ManagedAgent | undefined {
+    if (typeof name !== "string") return undefined;
+    const key = name.trim().toLocaleLowerCase();
+    return [...this.agents.values()].find((candidate) => candidate.name.toLocaleLowerCase() === key || candidate.id === name);
+  }
+
+  private refreshResume(agent: ManagedAgent): void {
+    if (!agent.checkpoint || !agent.leafDirty && agent.resume) return;
+    try {
+      agent.resume = agent.checkpoint();
+      agent.leafDirty = false;
+    } catch { /* Keep the last complete file checkpoint while the child appends. */ }
   }
 
   private assertGeneration(expected: number): void {
@@ -795,6 +847,16 @@ export class SubagentCoordinator {
 
   private changed(): void {
     this.options.hooks?.onChange?.();
+  }
+
+  private persist(): void {
+    this.lastPersistAt = this.now();
+    this.options.hooks?.onPersist?.();
+  }
+
+  /** Bounds crash loss for long runs without saving state on every child event. */
+  private persistProgress(): void {
+    if (this.now() - this.lastPersistAt >= PROGRESS_CHECKPOINT_MS) this.persist();
   }
 }
 
