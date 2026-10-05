@@ -1,5 +1,5 @@
 import type { ContextMode, ChildCheckpoint } from "./context.ts";
-import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { RPC_RECORD_SKIPPED, type AgentClient, type RpcEvent } from "./rpc.ts";
 import { decodeParentReport, MAX_RETAINED_REPORTS, MAX_SEEN_REPORT_IDS, REPORT_TOOL_NAME, type ParentReport, type SavedReport } from "./report.ts";
 
 export const DEFAULT_MAX_OPEN_AGENTS = 6;
@@ -620,6 +620,16 @@ export class SubagentCoordinator {
       this.changed();
       return;
     }
+    if (event.type === RPC_RECORD_SKIPPED) {
+      const size = mebibytes(event.bytes), limit = mebibytes(event.limitBytes);
+      const kind = typeof event.recordType === "string" ? event.recordType : "unknown";
+      pushActivity(agent, `skipped oversized ${kind} RPC record (${size})`);
+      if (kind === "message_end" && event.role === "assistant") {
+        agent.output = `[The latest assistant message was omitted because its RPC record (${size}) exceeded the ${limit} limit. The child session file keeps the full message.]`;
+      }
+      this.changed();
+      return;
+    }
     if (event.type === "agent_settled") {
       this.finish(agent, agent.error ? "failed" : "completed", agent.error);
     }
@@ -892,6 +902,10 @@ function pushActivity(agent: ManagedAgent, text: string): void {
 
 function slug(name: string): string {
   return name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 18) || "agent";
+}
+
+function mebibytes(value: unknown): string {
+  return `${(positive(value) / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function positive(value: unknown): number {

@@ -4,7 +4,7 @@ import {
   type AgentRuntime,
   type SpawnRequest,
 } from "./coordinator.ts";
-import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { RPC_RECORD_SKIPPED, type AgentClient, type RpcEvent } from "./rpc.ts";
 import { restoreAgents, SUBAGENT_STATE } from "./persistence.ts";
 import { REPORT_MESSAGE_TYPE } from "./report.ts";
 
@@ -394,6 +394,28 @@ test("keeps a bounded transcript snapshot after child cleanup", async () => {
   expect(retained.agent.status).toBe("closed");
   expect(retained.entries).toHaveLength(500);
   expect((retained.entries.at(-1) as any).index).toBe(519);
+});
+
+test("an oversized agent_end record leaves the child running and its final output intact", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Long run"));
+  const client = clients.get("Long run")!;
+  client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Final answer" }], stopReason: "stop" } });
+  client.emit({ type: RPC_RECORD_SKIPPED, recordType: "agent_end", bytes: 3 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+  expect(coordinator.list()[0]!.status).toBe("running");
+  client.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  const [agent] = coordinator.list();
+  expect(agent).toMatchObject({ status: "completed", output: "Final answer" });
+  expect(agent!.activity.at(-1)).toBe("skipped oversized agent_end RPC record (3.0 MiB)");
+  expect(completions).toEqual(["Long run"]);
+
+  await coordinator.send("Long run", "Return a huge answer");
+  client.emit({ type: RPC_RECORD_SKIPPED, recordType: "message_end", role: "assistant", bytes: 5 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+  client.emit({ type: "agent_settled" });
+  expect(coordinator.list()[0]!.output).toContain("omitted because its RPC record (5.0 MiB) exceeded the 2.0 MiB limit");
+  expect(coordinator.list()[0]!.status).toBe("completed");
+  await coordinator.shutdown();
 });
 
 test("converts unexpected process exits into bounded failed completions", async () => {
