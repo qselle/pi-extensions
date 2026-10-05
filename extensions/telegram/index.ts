@@ -2,7 +2,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { join } from "node:path";
 import { Type } from "typebox";
 import { PlainOutput } from "../../lib/output.ts";
-import { toolHeadline, toolText } from "../../lib/tool-ui.ts";
+import { toolHeadline } from "../../lib/tool-ui.ts";
 import { GOAL_ATTENTION_EVENT, GOAL_COMPLETED_EVENT, isGoalAttentionEvent } from "../goal/events.ts";
 import { MONITOR_ALERT_EVENT, isMonitorAlertEvent } from "../monitor/events.ts";
 import { SCHEDULE_ATTENTION_EVENT, isScheduleAttentionEvent } from "../schedule/events.ts";
@@ -20,6 +20,7 @@ import { TelegramNotifier } from "./notifier.ts";
 import { promptTelegramSetup } from "./setup.ts";
 import { describeTelegramConfigSource, diagnoseTelegram, formatTelegramDiagnostics } from "./doctor.ts";
 import { formatTelegramMessage, TelegramMessageError } from "./format.ts";
+import { notificationResult } from "./render.ts";
 import {
   DefaultTelegramService,
   registerTelegramService,
@@ -189,8 +190,19 @@ export default function telegramExtension(
       }
     },
     renderShell: "self",
-    renderCall: (args, theme, context) => toolHeadline(context?.isError ? "Telegram failed" : context?.isPartial ? "Notifying" : "Telegram", new PlainOutput().push(typeof args.message === "string" ? args.message : "").replace(/\s+/gu, " ").slice(0, 100), theme, context?.isError),
-    renderResult: (result, _options, theme) => toolText(theme.fg((result.details as { sent?: boolean })?.sent ? "muted" : "error", result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")), true),
+    // A one-line preview while sending; the settled result shows the full message below.
+    renderCall: (args, theme, context) => toolHeadline(
+      context?.isError ? "Telegram failed" : context?.isPartial ? "Notifying" : "Telegram",
+      context?.isPartial ? new PlainOutput().push(typeof args.message === "string" ? args.message : "").replace(/\s+/gu, " ").slice(0, 100) : "",
+      theme,
+      context?.isError,
+    ),
+    renderResult: (result, options, theme, context) => {
+      const sent = (result.details as { sent?: boolean })?.sent === true;
+      const text = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      const message = typeof context?.args?.message === "string" ? context.args.message : "";
+      return notificationResult(message, sent ? undefined : text, theme, options.expanded);
+    },
   });
 
   const handleTelegramCommand = async (rawAction: string, ctx: ExtensionContext) => {

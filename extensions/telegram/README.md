@@ -31,7 +31,7 @@ Setup masks the token, validates the values, sends a test message, and saves an 
 
 ### Direct messages
 
-Use `/telegram send **Build complete** — the report is ready.` to send a message yourself. The `notify_user` tool lets Pi send notifications you request or have already authorized, such as a completion update. The tool accepts a `message` string and always uses your configured recipient and the current session topic. It is active only while Telegram is enabled; setup and on/off update its availability without a reload.
+Use `/telegram send **Build complete** — the report is ready.` to send a message yourself. The `notify_user` tool lets Pi send notifications you request or have already authorized, such as a completion update. The tool accepts a `message` string and always uses your configured recipient and the current session topic. It is active only while Telegram is enabled; setup and on/off update its availability without a reload. In the transcript, the tool row shows the Markdown source that was sent, with terminal controls removed: up to 12 wrapped lines collapsed and 400 expanded. Delivery errors appear below it.
 
 Direct messages support headings, bold, italic, strikethrough, inline and fenced code, links, lists, task lists, and quotes. Tables retain their Markdown columns in a code block. Raw HTML is escaped, terminal controls are removed, and only HTTP, HTTPS and mailto links without embedded credentials become clickable. Images show their alt text rather than uploading or fetching media. Link previews stay disabled.
 
