@@ -61,8 +61,8 @@ export function replacePlan(
   now = Date.now(),
   reset = false,
 ): PlanState {
-  const normalized = validatePlanItems(items);
   const rationale = validateExplanation(explanation);
+  const normalized = validatePlanItems(items, { allowIdle: explainsIdlePlan(rationale) });
   if (reset && !rationale) throw new Error("Resetting a plan requires an explanation of the user-requested objective change.");
   if (!reset && planIsActive(current)) preserveCompletedMilestones(current.items, normalized);
   return {
@@ -72,24 +72,35 @@ export function replacePlan(
   };
 }
 
-function completedMilestones(items: readonly PlanItem[], parent: string[] = []): Map<string, string> {
-  const completed = new Map<string, string>();
-  for (const item of items) {
+interface Milestone { name: string; path: string; label: string }
+
+function completedMilestones(items: readonly PlanItem[], parent: string[] = []): Milestone[] {
+  return items.flatMap((item) => {
     const path = [...parent, item.step];
-    if (item.children) {
-      for (const [key, label] of completedMilestones(item.children, path)) completed.set(key, label);
-    } else if (item.status === "completed") {
-      completed.set(JSON.stringify(path.map((step) => step.toLowerCase())), path.join(" › "));
-    }
-  }
-  return completed;
+    if (item.children) return completedMilestones(item.children, path);
+    if (item.status !== "completed") return [];
+    return [{ name: item.step.toLowerCase(), path: JSON.stringify(path.map((step) => step.toLowerCase())), label: path.join(" › ") }];
+  });
 }
 
+/**
+ * Completed leaves are matched by name, so finished work may move between
+ * groups. A name repeated in several groups must stay completed as many times;
+ * group paths only decide which repeat to report as missing.
+ */
 function preserveCompletedMilestones(previous: readonly PlanItem[], next: readonly PlanItem[]): void {
   const retained = completedMilestones(next);
-  const missing = [...completedMilestones(previous)].filter(([key]) => !retained.has(key)).map(([, label]) => label);
+  const retainedPaths = new Set(retained.map((milestone) => milestone.path));
+  const missing: string[] = [];
+  const byName = Map.groupBy(completedMilestones(previous), (milestone) => milestone.name);
+  for (const [name, earlier] of byName) {
+    const shortfall = earlier.length - retained.filter((milestone) => milestone.name === name).length;
+    if (shortfall <= 0) continue;
+    const moved = earlier.filter((milestone) => !retainedPaths.has(milestone.path));
+    missing.push(...[...moved, ...earlier.filter((milestone) => !moved.includes(milestone))].slice(0, shortfall).map((milestone) => milestone.label));
+  }
   if (missing.length) {
-    throw new Error(`Keep completed milestones in the unfinished plan: ${missing.join("; ")}. Preserve their group paths and completed status. Use reset only when the user changes the objective, with an explanation; /plan clear starts over explicitly.`);
+    throw new Error(`Keep completed milestones in the unfinished plan: ${missing.join("; ")}. Keep them completed; they may move between groups. Use reset only when the user changes the objective, with an explanation; /plan clear starts over explicitly.`);
   }
 }
 
@@ -136,7 +147,19 @@ function nestFlatRows(rows: readonly unknown[]): JsonObject[] {
   return roots;
 }
 
-export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
+const IDLE_EXPLANATION = /\b(blocked|deferred|deferring|paused|on hold|waiting|awaiting)\b/i;
+
+/** Whether an explanation says the remaining work is intentionally not in progress. */
+export function explainsIdlePlan(explanation: string | undefined): boolean {
+  return Boolean(explanation && IDLE_EXPLANATION.test(explanation));
+}
+
+export interface PlanValidationOptions {
+  /** Accept unfinished work without an in-progress step (blocked, deferred, or paused). */
+  allowIdle?: boolean;
+}
+
+export function validatePlanItems(items: readonly PlanItemInput[], options: PlanValidationOptions = {}): PlanItem[] {
   let count = 0;
   const normalize = (nodes: readonly PlanItemInput[], depth: number): PlanItem[] => {
     if (!Array.isArray(nodes) || nodes.length > MAX_PLAN_ITEMS) throw new Error(`A plan group can have at most ${MAX_PLAN_ITEMS} steps.`);
@@ -170,7 +193,9 @@ export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
   const normalized = normalize(items, 1);
   const stats = planStats(normalized);
   if (stats.inProgress > 1) throw new Error("Only one plan step may be in progress.");
-  if (stats.unfinished > 0 && stats.inProgress !== 1) throw new Error("An unfinished plan must have exactly one in-progress step.");
+  if (stats.unfinished > 0 && stats.inProgress === 0 && !options.allowIdle) {
+    throw new Error("An unfinished plan must have exactly one in-progress step, unless the explanation says the remaining work is blocked, deferred, or paused.");
+  }
   return normalized;
 }
 
@@ -257,9 +282,10 @@ export function decodePlanState(value: unknown): PlanState | undefined {
   if (typeof raw.updatedAt !== "number" || !Number.isFinite(raw.updatedAt) || raw.updatedAt < 0) return undefined;
 
   try {
+    const explanation = typeof raw.explanation === "string" ? validateExplanation(raw.explanation) : undefined;
     return {
-      items: validatePlanItems(raw.items as PlanItem[]),
-      explanation: typeof raw.explanation === "string" ? validateExplanation(raw.explanation) : undefined,
+      items: validatePlanItems(raw.items as PlanItem[], { allowIdle: explainsIdlePlan(explanation) }),
+      explanation,
       updatedAt: raw.updatedAt,
     };
   } catch {

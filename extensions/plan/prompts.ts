@@ -6,8 +6,8 @@ export const PLAN_PROMPT_GUIDELINES = [
   "Use update_plan for meaningful multi-step implementation or investigation work, including work performed inside an active goal. Skip it for simple one-step tasks.",
   "Prefer 3–5 short, outcome-oriented steps. Add nested steps only when they help track separate work; do not turn routine tool calls into checklist items. Supply an explanation only when the approach changes.",
   "Use an optional step description for useful implementation or verification detail that would make its title too long. Leave it out when the title is sufficient.",
-  "Every update_plan call replaces the complete tactical plan. Groups may contain children up to three levels deep; group status derives from children. Keep exactly one leaf step in_progress while unfinished work remains, and update statuses as evidence is produced.",
-  "Preserve completed leaf milestones and their group paths while the plan is unfinished. Refine future steps without narrowing the plan to only the current phase. Set reset: true with an explanation only when the user's latest request changes the objective; a finalized plan can be replaced by a new plan directly.",
+  "Every update_plan call replaces the complete tactical plan. Groups may contain children up to three levels deep; group status derives from children. Keep exactly one leaf step in_progress while unfinished work remains, and update statuses as evidence is produced. If the remaining work is blocked, deferred, or paused, leave every step pending and say so in the explanation.",
+  "Preserve completed leaf milestones while the plan is unfinished; they may move between groups. Refine future steps without narrowing the plan to only the current phase. Set reset: true with an explanation only when the user's latest request changes the objective; a finalized plan can be replaced by a new plan directly.",
   "A plan tracks execution, not success criteria. When a persistent goal is active, goal checks remain the durable verification contract and the plan should describe the current route through that work.",
 ];
 

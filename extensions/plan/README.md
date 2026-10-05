@@ -21,7 +21,9 @@ Ctrl+Shift+O   Toggle all workflow cards
 
 The `update_plan` agent tool replaces the complete plan tree. Leaf steps are
 `pending`, `in_progress`, `completed`, or `cancelled`. An unfinished plan must have
-exactly one in-progress leaf. Groups use a `children` array and may omit `status`;
+exactly one in-progress leaf, unless its `explanation` says the remaining work is
+blocked, deferred, paused, on hold, or waiting; then every unfinished leaf may be
+pending. Groups use a `children` array and may omit `status`;
 their status and progress are derived from descendants, so a parent cannot claim
 completion over unfinished children. Progress counts leaves, not parent groups.
 Cancelled work remains separate from successful completion in progress totals.
@@ -32,10 +34,11 @@ are saved with the plan, included in tool results and checkpoints, and shown whe
 row is selected in `/plan`. Long descriptions remain complete in `/plan status`
 and expanded tool results; the passive progress line stays compact.
 
-While a plan is unfinished, updates must retain every completed leaf at its
-existing group path with `completed` status. Future work can be refined and
-reordered. Matching ignores case and extra whitespace; identically named steps
-in different groups remain separate milestones. An invalid replacement leaves
+While a plan is unfinished, updates must retain every completed leaf with
+`completed` status. Completed leaves are matched by name, so they may move
+between groups when the plan is regrouped. Future work can be refined and
+reordered. Matching ignores case and extra whitespace; a name completed in
+several groups must stay completed as many times. An invalid replacement leaves
 the current plan and saved history intact.
 
 For a new objective requested by the user, `update_plan` accepts `reset: true`

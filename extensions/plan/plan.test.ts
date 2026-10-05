@@ -151,7 +151,43 @@ test("unfinished plans retain completed milestones when updating or finishing", 
   });
 });
 
-test("completed milestone identity ignores case and whitespace but keeps group context", () => {
+test("completed leaves may move between groups when the plan is regrouped", () => {
+  const current = replacePlan(createPlanState(), [
+    { step: "Inspect", status: "completed" },
+    { step: "Build", children: [{ step: "Implement API", status: "completed" }, { step: "Wire UI", status: "in_progress" }] },
+  ]);
+  const regrouped = replacePlan(current, [
+    { step: "Discovery", children: [{ step: "inspect", status: "completed" }] },
+    { step: "Backend", children: [{ step: "Implement  API", status: "completed" }] },
+    { step: "Frontend", children: [{ step: "Wire UI", status: "in_progress" }, { step: "Polish", status: "pending" }] },
+  ]);
+  expect(planStats(regrouped.items)).toMatchObject({ completed: 2, inProgress: 1, total: 4 });
+  expect(() => replacePlan(regrouped, [
+    { step: "Frontend", children: [{ step: "Wire UI", status: "in_progress" }] },
+    { step: "Implement API", status: "completed" },
+  ])).toThrow("Discovery › inspect");
+  expect(() => replacePlan(regrouped, [
+    { step: "Inspect", status: "pending" },
+    { step: "Implement API", status: "completed" },
+    { step: "Wire UI", status: "in_progress" },
+  ])).toThrow("they may move between groups");
+});
+
+test("unfinished plans may idle only when the explanation says work is blocked, deferred, or paused", () => {
+  const idle = [{ step: "Done", status: "completed" as const }, { step: "Release", status: "pending" as const }];
+  expect(() => replacePlan(createPlanState(), idle)).toThrow("exactly one in-progress");
+  expect(() => replacePlan(createPlanState(), idle, "Release work continues tomorrow")).toThrow("blocked, deferred, or paused");
+  for (const explanation of ["Blocked on the API key", "Release deferred to next sprint", "Paused until review", "Waiting for user approval"]) {
+    const plan = replacePlan(createPlanState(), idle, explanation);
+    expect(planIsActive(plan)).toBe(true);
+    expect(currentPlanItem(plan)?.step).toBe("Release");
+    expect(decodePlanEntry({ version: 1, plan })?.plan).toEqual(plan);
+  }
+  expect(decodePlanEntry({ version: 1, plan: { items: idle, updatedAt: 1 } })).toBeUndefined();
+  expect(() => validatePlanItems([{ step: "A", status: "in_progress" }, { step: "B", status: "in_progress" }], { allowIdle: true })).toThrow("Only one");
+});
+
+test("completed milestone identity ignores case and whitespace and counts repeated names", () => {
   const current = replacePlan(createPlanState(), [
     { step: "Backend", children: [{ step: "Verify API", status: "completed" }] },
     { step: "Frontend", children: [{ step: "Verify API", status: "completed" }, { step: "Release", status: "in_progress" }] },
