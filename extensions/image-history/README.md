@@ -1,8 +1,9 @@
 # image-history
 
 Image controls for long conversations: defer older model inputs, or keep small
-native previews with deduplicated original files. Both modes are opt-in and
-independent. Existing session entries are never migrated or rewritten.
+native previews with deduplicated original files. Original storage is on by
+default; deferral is opt-in. Both are independent, configurable globally and
+per branch. Existing session entries are never migrated or rewritten.
 
 ## Usage
 
@@ -10,8 +11,8 @@ independent. Existing session entries are never migrated or rewritten.
 /image-history on      Defer images from earlier user turns
 /image-history off     Restore Pi's normal image-context behavior
 /image-history status  Show mode and the last request's deferred-image count
-/image-store on        Store new large originals once, with native previews
-/image-store off       Keep new images embedded; resolve existing originals
+/image-store on        Store new large originals once, with native previews (default)
+/image-store off       Keep new images embedded on this branch; resolve existing originals
 /image-store status    Inspect mode and this branch's stored-image counts
 /image-store list      List the last twelve stored image references
 /image-store view <reference>  Open an original in a separate terminal view
@@ -21,13 +22,32 @@ independent. Existing session entries are never migrated or rewritten.
 /image-store gc /absolute/path/archived-sessions
 ```
 
-The `history_image` tool retrieves an image using the exact reference in a placeholder. It is active only while this mode is enabled. The setting persists as a branch-local custom session entry and restores after reopening or navigation.
+The `history_image` tool retrieves an image using the exact reference in a placeholder. It is active only while this mode is enabled. Each `on`/`off` choice persists as a branch-local custom session entry, restores after reopening or navigation, and overrides the global default.
+
+## Configuration
+
+Optional `$PI_CODING_AGENT_DIR/image-history.json`:
+
+```json
+{ "storage": { "enabled": true }, "deferral": { "enabled": false } }
+```
+
+| Key | Default | Effect when a branch has no `/image-store` or `/image-history` choice |
+|---|---|---|
+| `storage.enabled` | `true` | Store new large originals (as `/image-store on`) |
+| `deferral.enabled` | `false` | Defer older images (as `/image-history on`) |
+
+A branch's latest explicit choice always wins. Missing or malformed files use
+the defaults. The default alone never creates the store: it is created when the
+first storable image (at least 64 KiB) arrives. Where POSIX file ownership is
+unavailable, the storage default stays off silently; an explicit
+`/image-store on` reports the limitation.
 
 All images in the latest user message and subsequent tool results remain available. Earlier user/tool-result images are replaced only when the same image can be recovered from the current branch. Unknown or extension-generated images without a stored source are preserved. Retrieval returns the original image as tool content, making it available again during the current turn.
 
 ### Original storage
 
-With `/image-store on`, newly finalized user/tool images of at least 64 KiB may
+While storage is on, newly finalized user/tool images of at least 64 KiB may
 use a preview of at most 384×384 pixels and 32 KiB. An original is stored only
 when the preview saves at least half its embedded size plus 1 KiB. Images larger
 than 32 MiB, unsupported formats, failed resizes and failed writes stay embedded.
@@ -89,6 +109,35 @@ before retrying. Sessions copied outside the known directories cannot be
 discovered automatically: include their directory before confirming cleanup, or
 make them portable with export. No background cleanup runs.
 
+### Sessions from the earlier sidecar store
+
+Sessions written by the earlier sidecar image store keep tool-result images as
+`[image stored externally]` placeholders, with references in the message's
+`details.__pi_image_store` and bytes under
+`$PI_CODING_AGENT_DIR/image-store/sha256/<2 hex>/<sha256>.<ext>`. When such a
+session is resumed:
+
+- Every model request replaces each placeholder with its image. Attached-image
+  messages (`image-store-context-v1`) get their images appended. This works with
+  storage on or off.
+- In Pi's terminal UI, tool results on the active branch show their images: the
+  loaded entries are restored in memory before display, newest first, up to
+  64 MiB. The session file is not written. Images restored this way can be
+  deferred and retrieved like native ones. A fork or clone written afterwards
+  embeds them. Pi renders the transcript before extensions bind on an in-app
+  `/resume`, so there they appear on the next transcript rebuild (`/tree`, `/reload`)
+  or when reopening Pi with the session.
+- Attached-image transcript rows (`image-store-v1` entries) render the image.
+
+Only references in message `details` are read; free-text `pi-image://` markers
+never load files. Each file must be a regular, non-symlinked file owned by the
+current user, inside non-symlinked directories, at most 32 MiB, matching the
+recorded size and SHA-256. Missing or failed files become an explicit
+"unavailable" note plus one warning. PNG, JPEG, GIF and WebP are supported.
+Verified bytes share a 16 MiB cache cleared on navigation and shutdown.
+`/image-store gc` only manages `originals/`; it never inspects or deletes
+`image-store/sha256/`.
+
 ### Sharing sessions
 
 Pi's built-in exports contain the embedded preview. Use `/image-store export`
@@ -113,7 +162,7 @@ the original detail. Export does not alter the live session or its branch.
 - Inventory stops above 100,000 paths, directory depth 64, a 256 MiB session file
   or a 64 MiB entry. Unusually large sessions must be exported/archived before
   cleanup; files are retained when a complete scan is not possible.
-- Disabled by default. Deferral changes what the model can immediately see; it must retrieve an older image when visual details matter. Text context remains unchanged.
+- Deferral is off by default. It changes what the model can immediately see; it must retrieve an older image when visual details matter. Text context remains unchanged.
 - Pi's per-model `inputLimits.images.resize` controls apply when image input
   is sent, including retrieved tool images. Resizing controls image dimensions;
   this extension separately defers older images and retrieves them on demand.

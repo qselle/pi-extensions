@@ -16,8 +16,9 @@ Names a session from its user prompts without changing a title you set manually.
 ```
 
 1. The first meaningful request starts one bounded title request alongside the main agent request.
-2. The active session model generates a specific two-to-four-word noun phrase with thinking disabled.
+2. The configured models, then the active session model, generate a specific two-to-four-word noun phrase with thinking disabled.
 3. Once generation has been attempted, the extension does not retry or rename automatically. Existing and manually assigned titles always win; `/title now` remains an explicit override.
+4. Child agent processes (`PI_SUBAGENT_CHILD=1`) never title automatically, so they make no title request; `/title now` still works there.
 
 Automatic titling never blocks the main turn. While it is pending, the shared footer shows `[naming…]`; an explicit `/title now` on a named session shows `[renaming…]`. The badge disappears on success, failure, cancellation, or shutdown.
 
@@ -26,7 +27,7 @@ flatten whitespace, and strip terminal controls. Setting a name through `/rename
 or `/title set` cancels any pending title request so a late model response cannot
 replace it. Cancelling the name prompt leaves the current name unchanged.
 
-The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder.
+The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder. Path-like results are rejected too: absolute, home-relative, `file://`, drive, and pasted-clipboard paths (`/tmp/x.png`, `~/Downloads/…`), or a single path token with a file extension (`src/index.ts`). A prompt that is only such a pasted path does not count as the first meaningful request.
 
 ### Tab link for Herdr
 
@@ -36,8 +37,10 @@ It immediately adopts the current Pi name, then follows generated titles,
 `/rename`, `/title set`, and names set by other extensions.
 
 Existing Herdr labels are preserved until you explicitly link them, except for
-an empty label or Herdr's default ordinal (for example, label `1` on tab `…:t1`),
-which can be linked automatically. Other numeric labels remain possible manual
+an empty label, Herdr's default ordinal (for example, label `1` on tab `…:t1`),
+or a label already equal to the current Pi name (for example, set by another
+tool), which are linked automatically. A matching label is adopted without a
+write, including after an earlier pause, and then follows later Pi names. Other numeric labels remain possible manual
 names. If you later rename or clear the label in Herdr, Tab link yields on its
 next check; `/title tab link` explicitly reconnects it. `/title tab auto` resumes
 only a default, empty, or still-owned label.
@@ -60,12 +63,23 @@ independently.
 Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 
 ```json
-{ "enabled": true, "model": "provider/model-id", "tabLink": true }
+{ "enabled": true, "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
 ```
 
-`model` defaults to the active session model. An override falls back to that model if unavailable, unauthenticated, or failing.
+`models` is an ordered preference list of `provider/model-id` entries. Each is
+tried in turn when unavailable, unauthenticated, failing, or returning no usable
+title; the active session model is always the last fallback. Without `models`,
+the single `model` key is still honored as a one-entry list; when both are
+present, `models` wins. With neither, the active session model is used.
 
-The configuration is also used by [`side-chat`](../side-chat/) titles.
+When a title comes from a model after the first configured one, a warning such
+as `Title model fallback: mistral/mistral-medium-3.5 unavailable; used
+openai/gpt-4.1-mini.` appears once per Pi runtime. `/title` shows the model
+order and the latest fallback.
+
+The configuration is also used by [`side-chat`](../side-chat/) titles, which
+currently receive the first preferred model (`model`) with the active-model
+fallback.
 
 `tabLink` defaults to `true`, independently of automatic title generation's
 `enabled` setting. Set it to `false` to disable automatic Herdr linking globally;

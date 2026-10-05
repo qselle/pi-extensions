@@ -19,6 +19,8 @@ export interface TitleResult {
   usage?: TitleUsage;
   model?: string;
   error?: string;
+  /** Set when a configured preferred model was skipped, e.g. "x unavailable; used y". */
+  fallback?: string;
 }
 
 export interface TitleRequestContext {
@@ -35,6 +37,8 @@ export interface RequestTitleOptions {
   prompt: string;
   /** "provider/model" override from config. */
   override?: string;
+  /** Ordered "provider/model" preferences; replaces `override` when non-empty. */
+  overrides?: readonly string[];
   signal?: AbortSignal;
   completion?: TitleCompletion;
 }
@@ -43,28 +47,21 @@ export interface RequestTitleOptions {
 export async function requestTitle(options: RequestTitleOptions): Promise<TitleResult> {
   const { ctx, prompt } = options;
   const run: TitleCompletion = options.completion ?? ((...args) => ctx.modelRegistry.streamSimple(...args).result());
+  const preferred = options.overrides?.length ? options.overrides : options.override ? [options.override] : [];
   const models: any[] = [];
-  let overrideFound = false;
-
-  if (options.override) {
-    const separator = options.override.indexOf("/");
-    if (separator > 0) {
-      const override = ctx.modelRegistry.find(
-        options.override.slice(0, separator),
-        options.override.slice(separator + 1),
-      );
-      if (override) {
-        models.push(override);
-        overrideFound = true;
-      }
-    }
+  const failures: string[] = [];
+  for (const name of preferred) {
+    const separator = name.indexOf("/");
+    const model = separator > 0 ? ctx.modelRegistry.find(name.slice(0, separator), name.slice(separator + 1)) : undefined;
+    if (!model) failures.push(`${name} unavailable`);
+    else if (!models.some((known) => sameModel(known, model as any))) models.push(model);
   }
   const activeModel = ctx.model;
   if (activeModel && !models.some((model) => sameModel(model, activeModel))) models.push(activeModel);
   if (models.length === 0) return { error: "no model available for titling" };
 
-  let lastError = options.override && !overrideFound
-    ? `configured title model unavailable: ${options.override}`
+  let lastError = preferred.length && failures.length === preferred.length
+    ? `configured title model unavailable: ${preferred.join(", ")}`
     : "titling request failed";
 
   for (const model of models) {
@@ -90,21 +87,26 @@ export async function requestTitle(options: RequestTitleOptions): Promise<TitleR
       if (options.signal?.aborted || response?.stopReason === "aborted") return { error: "aborted" };
       if (response?.stopReason === "error") {
         lastError = response.errorMessage || `title request failed for ${model.provider}/${model.id}`;
+        failures.push(`${model.provider}/${model.id} failed`);
         continue;
       }
 
       const title = normalizeGeneratedTitle(responseText(response));
       if (!title) {
         lastError = `model returned no usable title: ${model.provider}/${model.id}`;
+        failures.push(`${model.provider}/${model.id} gave no usable title`);
         continue;
       }
+      const used = `${model.provider}/${model.id}`;
       return {
         title,
         usage: usageOf(response),
-        model: `${model.provider}/${model.id}`,
+        model: used,
+        ...(preferred.length && used !== preferred[0] ? { fallback: `${failures.join("; ")}; used ${used}` } : {}),
       };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+      failures.push(`${model.provider}/${model.id} failed`);
     }
   }
 
