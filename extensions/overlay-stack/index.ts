@@ -26,6 +26,8 @@ export interface OverlayCardDefinition {
   renderSummary?: (width: number, theme: Theme) => string;
   width?: number;
   minBodyHeight?: number;
+  /** Rows the card needs to be useful now; honored when the stack has room, else minBodyHeight applies. */
+  requiredBodyHeight?: () => number;
   minTerminalWidth?: number;
   minTerminalHeight?: number;
 }
@@ -72,6 +74,25 @@ function fitsViewport(card: OverlayCardDefinition, width: number, height: number
   return width >= (card.minTerminalWidth ?? 1) && height >= (card.minTerminalHeight ?? 1);
 }
 
+function minimumBodyHeight(card: OverlayCardDefinition): number {
+  return card.minBodyHeight ?? 1;
+}
+
+function requiredBodyHeight(card: OverlayCardDefinition): number {
+  const minimum = minimumBodyHeight(card);
+  try {
+    const required = card.requiredBodyHeight?.();
+    return typeof required === "number" && Number.isFinite(required) ? Math.max(minimum, Math.floor(required)) : minimum;
+  } catch {
+    return minimum;
+  }
+}
+
+interface SelectedCard {
+  card: OverlayCardDefinition;
+  minimum: number;
+}
+
 function visibleCards(terminalWidth: number, terminalHeight: number, includeCompact = false): OverlayCardDefinition[] {
   return [...registry.cards.values()]
     .map(({ definition }) => definition)
@@ -107,17 +128,17 @@ export class OverlayStackView implements Component {
   }
 
   render(width: number): string[] {
-    const cards = this.selectCards(this.rowBudget());
-    if (cards.length === 0 || width <= 0) return [];
+    const selected = this.selectCards(this.rowBudget());
+    if (selected.length === 0 || width <= 0) return [];
 
     const contentWidth = Math.max(1, width - 4);
-    const shellRows = cards.length * 2 + Math.max(0, cards.length - 1);
+    const shellRows = selected.length * 2 + Math.max(0, selected.length - 1);
     const availableBodyRows = Math.max(0, this.rowBudget() - shellRows);
-    const budgets = bodyBudgets(cards.map((card) => card.minBodyHeight ?? 1), availableBodyRows);
+    const budgets = bodyBudgets(selected.map((item) => item.minimum), availableBodyRows);
     const sections: Array<{ title: string; body: string[]; card: OverlayCardDefinition; budget: number }> = [];
 
-    for (let index = 0; index < cards.length; index++) {
-      const card = cards[index]!;
+    for (let index = 0; index < selected.length; index++) {
+      const card = selected[index]!.card;
       const available = budgets[index]!;
       let body: string[];
       let title: string;
@@ -127,7 +148,7 @@ export class OverlayStackView implements Component {
       } catch {
         continue;
       }
-      const minimum = card.minBodyHeight ?? 1;
+      const minimum = minimumBodyHeight(card);
       while (body.length < minimum) body.push("");
       sections.push({ title, body, card, budget: available });
     }
@@ -164,7 +185,7 @@ export class OverlayStackView implements Component {
   renderCompact(width: number): string[] {
     const limit = Math.min(3, Math.max(0, Math.floor((this.terminalHeight - 6) / 4)));
     if (width <= 0 || !limit) return [];
-    const selected = new Set(this.selectCards(this.rowBudget()));
+    const selected = new Set(this.selectCards(this.rowBudget()).map((item) => item.card));
     const cards = visibleCards(this.terminalWidth, this.terminalHeight, true)
       .filter((card) => !selected.has(card));
     const rows: string[] = [];
@@ -200,65 +221,72 @@ export class OverlayStackView implements Component {
     return Math.max(1, Math.floor(this.terminalHeight * MAX_HEIGHT_RATIO));
   }
 
-  private selectCards(maxRows: number): OverlayCardDefinition[] {
-    const selected: OverlayCardDefinition[] = [];
+  /** Highest-priority cards that fit; a card's required rows apply only when they fit. */
+  private selectCards(maxRows: number): SelectedCard[] {
+    const selected: SelectedCard[] = [];
+    let usedRows = 0;
     for (const card of visibleCards(this.terminalWidth, this.terminalHeight)) {
-      const next = [...selected, card];
-      const shellRows = next.length * 2 + Math.max(0, next.length - 1);
-      const bodyRows = next.reduce((total, item) => total + (item.minBodyHeight ?? 1), 0);
-      if (shellRows + bodyRows <= maxRows) selected.push(card);
+      const shell = selected.length === 0 ? 2 : 3;
+      const required = requiredBodyHeight(card);
+      const minimum = minimumBodyHeight(card);
+      const rows = usedRows + shell + required <= maxRows ? required
+        : usedRows + shell + minimum <= maxRows ? minimum
+          : undefined;
+      if (rows === undefined) continue;
+      selected.push({ card, minimum: rows });
+      usedRows += shell + rows;
     }
     return selected;
   }
 }
 
-class OverlayStackHost implements Component {
-  private readonly view: OverlayStackView;
-  private readonly options: OverlayOptions;
-  private readonly handle: OverlayHandle;
+/**
+ * Owns the overlay entry. Pi refuses to switch TUI modes while any overlay entry
+ * exists, so the entry is removed whenever the stack is hidden or has nothing to
+ * draw and is re-created on demand through the stable TUI reference.
+ */
+export class OverlayStackHost implements Component {
+  private current?: { view: OverlayStackView; handle: OverlayHandle };
   private readonly stopListening: () => void;
   private disposed = false;
   private hidden = false;
+  private readonly compactView: OverlayStackView;
 
-  constructor(private readonly tui: TUI, theme: Theme) {
-    this.view = new OverlayStackView(theme);
-    this.options = {
-      nonCapturing: true,
-      anchor: "top-right",
-      width: DEFAULT_WIDTH,
-      maxHeight: "80%",
-      margin: { top: 1, right: 2 },
-      visible: (columns, rows) => {
-        this.view.setViewport(columns, rows);
-        this.options.width = Math.min(this.view.preferredWidth(), Math.max(28, Math.floor(columns * 0.46)));
-        return this.view.canRender();
-      },
-    };
-    this.handle = tui.showOverlay(this.view, this.options);
+  constructor(private readonly tui: TUI, private readonly theme: Theme, hidden = false) {
+    this.hidden = hidden;
+    this.compactView = new OverlayStackView(theme);
     const listener = () => this.refresh();
     registry.listeners.add(listener);
     this.stopListening = () => registry.listeners.delete(listener);
+    this.reconcile();
+  }
+
+  hasOverlay(): boolean {
+    return this.current !== undefined;
   }
 
   render(width: number): string[] {
+    // Runs every frame: follows terminal resizes and renderer replacement.
+    this.reconcile();
     if (this.hidden || this.disposed) return [];
-    this.view.setViewport(this.tui.terminal?.columns ?? width, this.tui.terminal?.rows ?? 24);
-    return this.view.renderCompact(width);
+    this.compactView.setViewport(this.tui.terminal?.columns ?? width, this.tui.terminal?.rows ?? 24);
+    return this.compactView.renderCompact(width);
   }
 
   invalidate(): void {
-    this.view.invalidate();
+    this.current?.view.invalidate();
   }
 
   setHidden(hidden: boolean): void {
     if (this.hidden === hidden) return;
     this.hidden = hidden;
-    this.handle.setHidden(hidden);
+    this.reconcile();
     this.tui.requestRender();
   }
 
   refresh(): void {
-    this.view.invalidate();
+    this.current?.view.invalidate();
+    this.reconcile();
     if (!this.hidden) this.tui.requestRender();
   }
 
@@ -266,7 +294,43 @@ class OverlayStackHost implements Component {
     if (this.disposed) return;
     this.disposed = true;
     this.stopListening();
-    this.handle.hide();
+    this.removeOverlay();
+  }
+
+  private reconcile(): void {
+    if (this.disposed) return;
+    const columns = this.tui.terminal?.columns ?? 0;
+    const rows = this.tui.terminal?.rows ?? 0;
+    const probe = this.current?.view ?? this.compactView;
+    probe.setViewport(columns, rows);
+    if (this.hidden || !probe.canRender()) {
+      this.removeOverlay();
+      return;
+    }
+    if (this.current) return;
+    // A removed handle cannot be reused; pair each new entry with a fresh view.
+    const view = new OverlayStackView(this.theme);
+    const options: OverlayOptions = {
+      nonCapturing: true,
+      anchor: "top-right",
+      width: DEFAULT_WIDTH,
+      maxHeight: "80%",
+      margin: { top: 1, right: 2 },
+      visible: (columns, rows) => {
+        view.setViewport(columns, rows);
+        options.width = Math.min(view.preferredWidth(), Math.max(28, Math.floor(columns * 0.46)));
+        return view.canRender();
+      },
+    };
+    options.visible!(columns, rows);
+    this.current = { view, handle: this.tui.showOverlay(view, options) };
+  }
+
+  private removeOverlay(): void {
+    const current = this.current;
+    if (!current) return;
+    this.current = undefined;
+    current.handle.hide();
   }
 }
 
@@ -320,8 +384,7 @@ export default function overlayStackExtension(pi: ExtensionAPI): void {
     modalOwners.clear();
     if (ctx.mode !== "tui") return;
     ctx.ui.setWidget(HOST_WIDGET_KEY, (tui, theme) => {
-      host = new OverlayStackHost(tui, theme);
-      syncVisibility();
+      host = new OverlayStackHost(tui, theme, hidden());
       return host;
     });
   });

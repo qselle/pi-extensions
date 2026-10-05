@@ -26,7 +26,7 @@ mock.module("@earendil-works/pi-tui", () => ({
   sliceByColumn: (value: string, start: number, width: number) => value.slice(start, start + width),
 }));
 
-const { default: overlayStackExtension, OverlayStackView, registerOverlayCard } = await import("./index.ts");
+const { default: overlayStackExtension, OverlayStackHost, OverlayStackView, registerOverlayCard } = await import("./index.ts");
 
 const theme = {
   fg: (_color: string, value: string) => value,
@@ -65,6 +65,38 @@ class MockPi {
   }
 }
 
+interface MockEntry { component: any; options: any }
+
+/** Mirrors Pi's stable TUI reference: overlay calls go to the active renderer. */
+class MockTui {
+  renderer: { entries: MockEntry[] } = { entries: [] };
+  terminal: { columns: number; rows: number };
+  constructor(columns: number, rows: number, private readonly onRender: () => void = () => {}) {
+    this.terminal = { columns, rows };
+  }
+  get entries() { return this.renderer.entries; }
+  get hasOverlayEntries() { return this.renderer.entries.length > 0; }
+  /** Pi only switches TUI modes when the current renderer has no overlay entries. */
+  switchRenderer(): boolean {
+    if (this.hasOverlayEntries) return false;
+    this.renderer = { entries: [] };
+    return true;
+  }
+  showOverlay(component: unknown, options: unknown) {
+    const renderer = this.renderer;
+    const entry = { component, options };
+    renderer.entries.push(entry);
+    return {
+      hide: () => {
+        const index = renderer.entries.indexOf(entry);
+        if (index !== -1) renderer.entries.splice(index, 1);
+      },
+      setHidden: () => { throw new Error("hidden entries still block TUI mode switches"); },
+    };
+  }
+  requestRender() { this.onRender(); }
+}
+
 test("composes independent cards in a persistent non-capturing overlay", async () => {
   const goal = registerOverlayCard({
     id: "test-goal",
@@ -85,10 +117,7 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   const pi = new MockPi();
   overlayStackExtension(pi as any);
   let widget: any;
-  let overlay: any;
-  let options: any;
   let renders = 0;
-  const hidden: boolean[] = [];
   const notifications: string[] = [];
   const ctx = {
     mode: "tui",
@@ -102,17 +131,11 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   };
 
   await pi.emit("session_start", { reason: "startup" }, ctx);
-  const tui = {
-    terminal: { columns: 120, rows: 40 },
-    showOverlay(component: unknown, overlayOptions: unknown) {
-      overlay = component;
-      options = overlayOptions;
-      return { setHidden: (value: boolean) => hidden.push(value), hide: () => hidden.push(true) };
-    },
-    requestRender() { renders += 1; },
-  };
+  const tui = new MockTui(120, 40, () => { renders += 1; });
   const host = widget(tui, theme);
 
+  expect(tui.hasOverlayEntries).toBe(true);
+  const { component: overlay, options } = tui.entries[0]!;
   expect(options.anchor).toBe("top-right");
   expect(options.nonCapturing).toBe(true);
   expect(options.visible(120, 40)).toBe(true);
@@ -127,31 +150,34 @@ test("composes independent cards in a persistent non-capturing overlay", async (
   expect(host.render(60).join("\n")).toContain("Durable objective");
 
   pi.shortcuts.get("ctrl+shift+o").handler(ctx);
-  expect(hidden.at(-1)).toBe(true);
+  expect(tui.hasOverlayEntries).toBe(false);
   expect(host.render(60)).toEqual([]);
   pi.shortcuts.get("ctrl+shift+o").handler(ctx);
-  expect(hidden.at(-1)).toBe(false);
+  expect(tui.hasOverlayEntries).toBe(true);
+  expect(tui.entries[0]!.component).not.toBe(overlay);
   expect(host.render(60).join("\n")).toContain("Durable objective");
 
   pi.events.emit("workflow-overlay:modal", { id: "test", open: true });
-  expect(hidden.at(-1)).toBe(true);
+  expect(tui.hasOverlayEntries).toBe(false);
   expect(host.render(60)).toEqual([]);
   pi.events.emit("workflow-overlay:modal", { id: "test", open: false });
-  expect(hidden.at(-1)).toBe(false);
+  expect(tui.hasOverlayEntries).toBe(true);
 
   await pi.commands.get("overlay").handler("hide", ctx);
-  expect(hidden.at(-1)).toBe(true);
+  expect(tui.hasOverlayEntries).toBe(false);
   expect(notifications.at(-1)).toContain("hidden");
   const rendersAfterHide = renders;
   goal.invalidate();
   plan.invalidate();
   expect(renders).toBe(rendersAfterHide);
+  expect(tui.hasOverlayEntries).toBe(false);
   await pi.commands.get("overlay").handler("show", ctx);
-  expect(hidden.at(-1)).toBe(false);
+  expect(tui.hasOverlayEntries).toBe(true);
   expect(renders).toBe(rendersAfterHide + 1);
 
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
   host.dispose();
+  expect(tui.hasOverlayEntries).toBe(false);
   expect(host.render(60)).toEqual([]);
   goal.unregister();
   plan.unregister();
@@ -251,4 +277,76 @@ test("narrow viewports retain active workflow summaries without duplicating fitt
     view.setViewport(60, 8);
     expect(view.renderCompact(60)).toEqual([]);
   } finally { for (const handle of handles) handle.unregister(); }
+});
+
+test("keeps no overlay entry while empty, so TUI mode switches are allowed", () => {
+  const tui = new MockTui(120, 40);
+  const host = new OverlayStackHost(tui as any, theme);
+  let visible = false;
+  const card = registerOverlayCard({
+    id: "lifecycle-card", order: 1, visible: () => visible,
+    title: () => "Jobs", renderBody: () => ["● build"],
+  });
+  try {
+    expect(tui.hasOverlayEntries).toBe(false);
+    expect(tui.switchRenderer()).toBe(true);
+
+    visible = true;
+    card.invalidate();
+    expect(tui.hasOverlayEntries).toBe(true);
+    expect(tui.switchRenderer()).toBe(false);
+
+    // A terminal too short for any card falls back to compact rows without an entry.
+    tui.terminal.rows = 2;
+    host.render(120);
+    expect(tui.hasOverlayEntries).toBe(false);
+    expect(tui.switchRenderer()).toBe(true);
+
+    // After the renderer swap the entry is re-created on the new renderer.
+    tui.terminal.rows = 40;
+    host.render(120);
+    expect(tui.hasOverlayEntries).toBe(true);
+    expect(tui.entries[0]!.component.render(58).join("\n")).toContain("build");
+
+    host.setHidden(true);
+    expect(tui.hasOverlayEntries).toBe(false);
+    host.setHidden(false);
+    expect(tui.hasOverlayEntries).toBe(true);
+
+    visible = false;
+    card.invalidate();
+    expect(tui.hasOverlayEntries).toBe(false);
+  } finally {
+    card.unregister();
+    host.dispose();
+  }
+});
+
+test("requiredBodyHeight keeps a card's rows when they fit and falls back to the minimum", () => {
+  let required = 6;
+  const first = registerOverlayCard({
+    id: "required-first", order: 1, visible: () => true,
+    requiredBodyHeight: () => required,
+    title: () => " Edits ", renderBody: (_width, rows) => Array.from({ length: rows }, (_, i) => `edit${i}`),
+  });
+  const second = registerOverlayCard({
+    id: "required-second", order: 2, visible: () => true,
+    title: () => " Jobs ", renderBody: (_width, rows) => Array.from({ length: rows }, (_, i) => `job${i}`),
+  });
+  try {
+    const view = new OverlayStackView(theme);
+    view.setViewport(100, 15); // 12 rows: 5 frame rows, 7 body rows.
+    const count = (lines: string[], prefix: string) => lines.filter((line) => line.includes(prefix)).length;
+    let lines = view.render(40);
+    expect(count(lines, "edit")).toBe(6);
+    expect(count(lines, "job")).toBe(1);
+
+    required = 30; // Cannot fit: the card stays in the overlay with its minimum share.
+    lines = view.render(40);
+    expect(count(lines, "edit")).toBeGreaterThanOrEqual(1);
+    expect(count(lines, "job")).toBeGreaterThanOrEqual(1);
+  } finally {
+    first.unregister();
+    second.unregister();
+  }
 });
