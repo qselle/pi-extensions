@@ -20,7 +20,8 @@ export function terminalSize(columns = 100, rows = 30): { columns: number; rows:
 export function startProcess(input: StartJob): JobProcess {
   if (!input.pty) return spawn(input.executable, input.args, {
     cwd: input.cwd, env: input.env ?? process.env, shell: false,
-    detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+    // Without an input pipe, commands that read stdin see EOF instead of waiting forever.
+    detached: process.platform !== "win32", stdio: [input.stdin ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true,
   });
   if (process.versions.bun) throw new Error("PTY jobs require Node.js. Launch Pi with Node.js, or omit pty for a pipe job.");
   const { columns, rows } = terminalSize(input.columns, input.rows);

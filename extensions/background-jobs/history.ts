@@ -1,5 +1,5 @@
 import { PlainOutput } from "../../lib/output.ts";
-import { isActive, type JobSnapshot, type JobStatus } from "./service.ts";
+import { isActive, MAX_RETAINED_JOBS, type JobSnapshot, type JobStatus } from "./service.ts";
 
 export const JOB_HISTORY_ENTRY = "background-job-lifecycle";
 const STATUSES = new Set<JobStatus>(["starting", "running", "stopping", "completed", "failed", "stopped", "timed-out", "interrupted"]);
@@ -87,7 +87,7 @@ export class JobHistory {
   }
   private keep(job: JobSnapshot): void {
     this.jobs.set(job.id, job);
-    while (this.jobs.size > 24) {
+    while (this.jobs.size > MAX_RETAINED_JOBS) {
       const oldest = [...this.jobs.values()].find((candidate) => !isActive(candidate.status));
       this.jobs.delete(oldest?.id ?? this.jobs.keys().next().value!);
     }

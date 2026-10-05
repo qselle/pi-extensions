@@ -38,7 +38,7 @@ try {
     const lines = start.renderResult(result, { expanded: false, isPartial: false }, theme).render(width);
     assert(lines.every((line: string) => visibleWidth(line) <= width));
   }
-  const running = await start.execute("second", { name: "Cleanup", command: "cat", yield_ms: 0 }, undefined, undefined, ctx);
+  const running = await start.execute("second", { name: "Cleanup", command: "cat", yield_ms: 0, stdin: true }, undefined, undefined, ctx);
   let invalidations = 0;
   const renderContext = { state: {}, invalidate: () => invalidations++ };
   const options = { expanded: true, isPartial: false };
@@ -54,7 +54,7 @@ try {
   assert(finalCard.includes("completed") && finalCard.includes("hello"));
   assert.equal(tools.get("job_output").renderResult(running, options, theme).render(100).join("\n"), original);
   assert.equal(entries.filter((entry) => entry.data.id === running.details.id).length, 2);
-  const cleanup = await start.execute("cleanup", { name: "Stop on reload", command: "cat", yield_ms: 0 }, undefined, undefined, ctx);
+  const cleanup = await start.execute("cleanup", { name: "Stop on reload", command: "cat", yield_ms: 0, stdin: true }, undefined, undefined, ctx);
   await handlers.get("session_shutdown")!({}, ctx);
   assert.equal(entries.filter((entry) => entry.data.id === cleanup.details.id).at(-1).data.status, "stopped");
   await handlers.get("session_start")!({}, ctx);
