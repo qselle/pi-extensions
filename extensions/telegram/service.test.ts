@@ -523,7 +523,7 @@ test("marks interactive and passive cards closed during shutdown", async () => {
   expect(requests.filter((request) => request.method === "editMessageText")).toHaveLength(2);
 });
 
-test("marks a card closed when Telegram polling fails", async () => {
+test("marks a card closed when Telegram polling fails permanently", async () => {
   const requests: Array<{ method: string; body: any }> = [];
   let updatesCalls = 0;
   const service = new DefaultTelegramService(config, {
@@ -537,7 +537,7 @@ test("marks a card closed when Telegram polling fails", async () => {
       updatesCalls++;
       if (updatesCalls === 1) return response([]);
       return new Response(JSON.stringify({ ok: false }), {
-        status: 500,
+        status: 401,
         headers: { "content-type": "application/json" },
       });
     }),
@@ -661,4 +661,130 @@ test("private chats accept their own user and groups without answerUserId accept
   expect(await run("12345", 12345)).toEqual({ status: "answered", value: "accepted" });
   expect(await run("12345", 54321)).toBe("pending");
   expect(await run("-100555", 12345)).toBe("pending");
+});
+
+function failingPoll(failures: Array<() => Response | Promise<Response>>, reply: (prompt: number) => unknown[]) {
+  const polls: number[] = [];
+  const delays: number[] = [];
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    fetch: (async (url, init) => {
+      const method = methodOf(String(url));
+      const body = JSON.parse(String(init?.body));
+      if (method === "sendMessage") return response({ message_id: 900 });
+      if (method === "editMessageText" || method === "editMessageReplyMarkup") return response(true);
+      if (body.offset === -1) return response([]);
+      polls.push(body.offset);
+      const failure = failures.shift();
+      if (failure) return failure();
+      if (failures.length === 0 && polls.length > 0) return response(reply(900));
+      return response([]);
+    }),
+  });
+  return { service, polls, delays };
+}
+
+const ownerReply = (prompt: number) => [{ update_id: 1, message: {
+  message_id: 901, from: { id: 777 }, text: "valid", chat: { id: -1001234567890 }, message_thread_id: 42, reply_to_message: { message_id: prompt },
+} }];
+const networkFailure = () => { throw new TypeError("fetch failed"); };
+const status = (code: number, parameters?: unknown) => () => new Response(JSON.stringify({ ok: false, ...(parameters ? { parameters } : {}) }), { status: code });
+
+test("pending questions survive transient polling failures with exponential backoff", async () => {
+  const h = failingPoll([networkFailure, networkFailure, networkFailure], ownerReply);
+  const prompt = await h.service.openPrompt({ text: "Question", parse: parser });
+  expect(await prompt.result).toEqual({ status: "answered", value: "accepted" });
+  expect(h.polls).toHaveLength(4);
+  expect(h.delays).toEqual([1_000, 2_000, 4_000]);
+  await h.service.shutdown();
+});
+
+test("conflicts, rate limits and server errors retry while retry_after is honored", async () => {
+  const h = failingPoll([status(409), status(429, { retry_after: 7 }), status(502), status(503)], ownerReply);
+  const prompt = await h.service.openPrompt({ text: "Question", parse: parser });
+  expect(await prompt.result).toEqual({ status: "answered", value: "accepted" });
+  expect(h.delays).toEqual([1_000, 7_000, 4_000, 8_000]);
+  await h.service.shutdown();
+});
+
+test("polling backoff is capped", async () => {
+  const failures = Array.from({ length: 8 }, () => networkFailure);
+  const polls: number[] = [];
+  const delays: number[] = [];
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    pollRetryBaseMs: 100,
+    pollRetryMaxMs: 1_000,
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    fetch: (async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (methodOf(String(url)) === "sendMessage") return response({ message_id: 900 });
+      if (body.offset === -1) return response([]);
+      polls.push(body.offset);
+      const failure = failures.shift();
+      return failure ? failure() : response(ownerReply(900));
+    }),
+  });
+  const prompt = await service.openPrompt({ text: "Question", parse: parser });
+  expect(await prompt.result).toEqual({ status: "answered", value: "accepted" });
+  expect(delays).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000]);
+  await service.shutdown();
+});
+
+test("bad request, credential, permission and missing-resource errors end polling", async () => {
+  for (const code of [400, 401, 403, 404]) {
+    const h = failingPoll([status(code)], ownerReply);
+    const prompt = await h.service.openPrompt({ text: "Question", parse: parser });
+    await expect(prompt.result).rejects.toThrow(`HTTP ${code}`);
+    expect(h.polls).toHaveLength(1);
+    expect(h.delays).toEqual([]);
+    await h.service.shutdown();
+  }
+});
+
+test("a terminal answer during backoff stops further polling", async () => {
+  let polls = 0;
+  let waiting!: () => void;
+  const backoff = new Promise<void>((resolve) => { waiting = resolve; });
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    sleep: () => { waiting(); return new Promise<void>(() => {}); },
+    fetch: (async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const method = methodOf(String(url));
+      if (method === "sendMessage") return response({ message_id: 900 });
+      if (method !== "getUpdates") return response(true);
+      if (body.offset === -1) return response([]);
+      polls++;
+      throw new TypeError("offline");
+    }),
+  });
+  const prompt = await service.openPrompt({ text: "Question", parse: parser });
+  await backoff;
+  await prompt.close({ status: "answered", source: "terminal", displayText: "done" });
+  expect(await prompt.result).toEqual({ status: "unavailable" });
+  await service.shutdown();
+  expect(polls).toBe(1);
+});
+
+test("shared inbox failures retry instead of rejecting the pending question", async () => {
+  const { TelegramApiError } = await import("./api.ts");
+  let reads = 0;
+  const delays: number[] = [];
+  const service = new DefaultTelegramService(config, {
+    emptyPollDelayMs: 0,
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+    inbox: { initialize: async () => {}, read: async () => {
+      reads++;
+      if (reads === 1) throw new TelegramApiError("Telegram reply coordination is unavailable.", "response");
+      if (reads === 2) throw new TelegramApiError("Telegram request timed out.", "timeout");
+      return ownerReply(900);
+    } },
+    fetch: async (url) => response(methodOf(String(url)) === "sendMessage" ? { message_id: 900 } : true),
+  });
+  const prompt = await service.openPrompt({ text: "Question", parse: parser });
+  expect(await prompt.result).toEqual({ status: "answered", value: "accepted" });
+  expect(delays).toEqual([1_000, 2_000]);
+  await service.shutdown();
 });

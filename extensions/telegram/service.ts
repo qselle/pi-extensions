@@ -3,12 +3,24 @@ import {
   telegramAnswerUserId,
   type TelegramConfig,
 } from "./config.ts";
-import { TelegramApiClient, type TelegramApiOptions, type TelegramSendOptions, type TelegramSendResult } from "./api.ts";
+import {
+  abortableSleep,
+  isTransientTelegramError,
+  TelegramApiClient,
+  TelegramApiError,
+  type TelegramApiOptions,
+  type TelegramSendOptions,
+  type TelegramSendResult,
+} from "./api.ts";
 import type { SessionTopics, TopicRoute } from "./topics.ts";
 import type { TelegramInbox } from "./inbox.ts";
 
 const REGISTRY_KEY = Symbol.for("@qselle/pi-extensions.telegram-service.v1");
 const DEFAULT_POLL_TIMEOUT_SECONDS = 20;
+const DEFAULT_POLL_RETRY_BASE_MS = 1_000;
+const DEFAULT_POLL_RETRY_MAX_MS = 30_000;
+/** Upper bound for honoring Telegram's retry_after on reply polling. */
+const MAX_POLL_RETRY_AFTER_MS = 5 * 60_000;
 
 export type TelegramPromptParseResult<T> =
   | { status: "accepted"; value: T; displayText: string }
@@ -66,6 +78,10 @@ export interface TelegramServiceOptions extends TelegramApiOptions {
   inbox?: TelegramInbox;
   pollTimeoutSeconds?: number;
   emptyPollDelayMs?: number;
+  /** First delay after a transient reply-poll failure; doubles per consecutive failure. */
+  pollRetryBaseMs?: number;
+  /** Cap for the exponential reply-poll backoff. */
+  pollRetryMaxMs?: number;
 }
 
 interface TelegramUpdate {
@@ -136,6 +152,9 @@ export class DefaultTelegramService implements TelegramService {
   private readonly inbox?: TelegramInbox;
   private readonly pollTimeoutSeconds: number;
   private readonly emptyPollDelayMs: number;
+  private readonly pollRetryBaseMs: number;
+  private readonly pollRetryMaxMs: number;
+  private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly answerUserId?: string;
   private readonly pendingPrompts = new Map<number, PendingPrompt>();
   private readonly recentPrompts = new Map<number, number | null>();
@@ -162,6 +181,9 @@ export class DefaultTelegramService implements TelegramService {
     this.answerUserId = telegramAnswerUserId(config);
     this.pollTimeoutSeconds = options.pollTimeoutSeconds ?? DEFAULT_POLL_TIMEOUT_SECONDS;
     this.emptyPollDelayMs = options.emptyPollDelayMs ?? 100;
+    this.pollRetryBaseMs = options.pollRetryBaseMs ?? DEFAULT_POLL_RETRY_BASE_MS;
+    this.pollRetryMaxMs = options.pollRetryMaxMs ?? DEFAULT_POLL_RETRY_MAX_MS;
+    this.sleep = options.sleep ?? sleep;
   }
 
   async send(text: string, options: TelegramSendOptions = {}): Promise<TelegramSendResult> {
@@ -308,11 +330,13 @@ export class DefaultTelegramService implements TelegramService {
   }
 
   private async poll(): Promise<void> {
+    let failures = 0;
     while (this.pendingPrompts.size > 0 && !this.stopped) {
       const controller = new AbortController();
       this.pollController = controller;
+      let updates: unknown;
       try {
-        const updates = this.inbox ? await this.inbox.read(controller.signal) : await this.api.call("getUpdates", {
+        updates = this.inbox ? await this.inbox.read(controller.signal) : await this.api.call("getUpdates", {
           offset: this.offset,
           timeout: this.pollTimeoutSeconds,
           allowed_updates: ["message", "callback_query"],
@@ -320,16 +344,33 @@ export class DefaultTelegramService implements TelegramService {
           signal: controller.signal,
           timeoutMs: (this.pollTimeoutSeconds * 1_000) + 5_000,
         });
-        const list = Array.isArray(updates) ? updates as TelegramUpdate[] : [];
-        this.advanceOffset(list);
-        for (const update of list) await this.route(update);
-        if (list.length === 0 && this.emptyPollDelayMs > 0) await sleep(this.emptyPollDelayMs);
       } catch (error) {
-        if (controller.signal.aborted && (this.pendingPrompts.size === 0 || this.stopped)) return;
-        for (const messageId of [...this.pendingPrompts.keys()]) this.rejectPrompt(messageId, error);
-        return;
+        // An intentional abort re-checks the loop condition instead of failing prompts.
+        if (controller.signal.aborted) continue;
+        // Sleep, Wi-Fi changes and server hiccups must not end a pending question.
+        if (!isTransientTelegramError(error)) {
+          for (const messageId of [...this.pendingPrompts.keys()]) this.rejectPrompt(messageId, error);
+          return;
+        }
+        failures++;
+        await abortableSleep(this.retryDelay(failures, error), controller.signal, this.sleep).catch(() => undefined);
+        continue;
       }
+      failures = 0;
+      const list = Array.isArray(updates) ? updates as TelegramUpdate[] : [];
+      this.advanceOffset(list);
+      // One malformed update must not stop routing for the others.
+      for (const update of list) await this.route(update).catch(() => undefined);
+      if (list.length === 0 && this.emptyPollDelayMs > 0) await sleep(this.emptyPollDelayMs);
     }
+  }
+
+  private retryDelay(failures: number, error: unknown): number {
+    const backoff = Math.min(this.pollRetryBaseMs * 2 ** Math.min(failures - 1, 30), this.pollRetryMaxMs);
+    const retryAfter = error instanceof TelegramApiError && error.retryAfter !== undefined
+      ? Math.min(error.retryAfter * 1_000, MAX_POLL_RETRY_AFTER_MS)
+      : 0;
+    return Math.max(backoff, retryAfter);
   }
 
   private advanceOffset(updates: TelegramUpdate[]): void {

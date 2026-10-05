@@ -35,7 +35,7 @@ Use `/telegram send **Build complete** — the report is ready.` to send a messa
 
 Direct messages support headings, bold, italic, strikethrough, inline and fenced code, links, lists, task lists, and quotes. Tables retain their Markdown columns in a code block. Raw HTML is escaped, terminal controls are removed, and only HTTP, HTTPS and mailto links without embedded credentials become clickable. Images show their alt text rather than uploading or fetching media. Link previews stay disabled.
 
-Messages are validated before any request: Markdown source is limited to 16,384 UTF-16 units and the rendered text to 4,096 UTF-16 units (a conservative Telegram limit). Oversized messages must be shortened; content is never silently truncated or split into multiple notifications. An unconfirmed delivery warns you to check the chat before retrying. As with existing sends, only Telegram's explicit short rate limits trigger a bounded retry.
+Messages are validated before any request: Markdown source is limited to 16,384 UTF-16 units and the rendered text to 4,096 UTF-16 units (a conservative Telegram limit). Oversized messages must be shortened; content is never silently truncated or split into multiple notifications. An unconfirmed delivery warns you to check the chat before retrying. Sends are not replayed after failures (only Telegram's explicit rate limits of up to five seconds trigger one bounded retry), so a lost response cannot duplicate a message.
 
 Use `questionnaire` when Pi needs an answer or approval; direct messages do not wait for a reply. Do not include credentials or secrets.
 
@@ -78,6 +78,10 @@ Resuming a session reuses its topic. New sessions and forks receive separate top
 Local Pi processes using the same bot and agent directory share a single polling lease and a durable reply inbox. A second process reads delivered replies instead of opening a competing Telegram long poll. A stopped poll releases ownership; abandoned leases can be recovered after ten seconds.
 
 Every question remembers its original chat, topic and message ID. Replies, validation hints and completion cards stay there even if another session becomes active or a fresh topic is selected. Topic membership alone never turns a message into a Pi instruction: only an exact pending question can accept an answer.
+
+### Polling failures
+
+While a question waits, reply polling survives laptop sleep, Wi-Fi changes and server hiccups. Network errors, timeouts, local inbox errors, `409` conflicts, `429` rate limits and `5xx` responses are retried with exponential backoff: 1 s, doubling to at most 30 s, reset after a successful poll. A `429` waits at least Telegram's `retry_after`, capped at five minutes. Only `400`, `401`, `403` and `404` stop polling and close the pending cards; the terminal prompt keeps working either way. Answering in the terminal ends any backoff. An active webhook or another poller on the same bot causes repeated `409` retries; `/telegram doctor` reports a webhook.
 
 ### Who can answer
 
