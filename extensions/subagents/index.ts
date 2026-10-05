@@ -38,6 +38,7 @@ import {
   type AgentClientFactory,
 } from "./rpc.ts";
 import { resolveRuntimeSelection } from "./runtime-selection.ts";
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS, prepareSubagentArguments, waitTimeout } from "./arguments.ts";
 import { REPORT_MESSAGE_TYPE, REPORT_TOOL_NAME, decodeParentReport, registerChildReporter, renderParentReport } from "./report.ts";
 import { SharedWork } from "./shared-work.ts";
 import { ChildTranscriptBrowser, navigableAgents } from "./transcript.ts";
@@ -58,9 +59,8 @@ import {
 
 const TOOL_NAME = "subagents";
 const COMPLETION_MESSAGE_TYPE = "subagent-completion";
-const DEFAULT_WAIT_MS = 30_000;
-const MAX_WAIT_MS = 5 * 60_000;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
+const WAIT_TIMEOUT_GUIDANCE = "A wait timeout is not a failure: the selected children keep working. Do not interrupt, close, or ask healthy children to stop or finalize because a wait timed out; continue non-overlapping work or wait again.";
 const PAUSED_GUIDANCE = "Paused by a provider quota or rate limit; the conversation is kept. After the limit resets, use send to resume this child instead of spawning a replacement.";
 
 export interface SubagentsExtensionOptions {
@@ -88,7 +88,7 @@ const Parameters = Type.Object({
   agent_names: Type.Optional(Type.Array(Type.String(), { description: "Names to wait for; defaults to running children and unread results" })),
   wait_mode: Type.Optional(WaitModeSchema),
   wake_on: Type.Optional(StringEnum(["any", "final"] as const, { description: "For wait_mode any: final (default) waits for a final; any also wakes for an explicit interim report. Ordinary commentary never wakes wait." })),
-  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS })),
+  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout; default ${DEFAULT_WAIT_MS} (5 minutes), maximum ${MAX_WAIT_MS} (1 hour)` })),
 });
 
 export default function registerSubagents(
@@ -232,9 +232,9 @@ export default function registerSubagents(
     label: "Subagents",
     description: [
       "Coordinate bounded, persistent child agents in isolated Pi sessions.",
-      "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Read retrieves the latest result. Reload/quit stop processes and retain conversations; send explicitly resumes a restored child.",
+      "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Send steers a running child or resumes a settled, paused, or stopped one. Read retrieves the latest result. Settled children stop their process and keep their conversation; reload/quit also stop processes and retain conversations.",
       "Spawn returns immediately; completions are delivered automatically.",
-      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final.",
+      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after 5 minutes by default, at most 1 hour.",
       "Children inherit the current model, thinking level, active tools, working directory, and project instructions.",
       "Spawn may override model and thinking for a clear task-specific reason.",
       "Context defaults to fresh; summary provides a compact handoff and fork copies the active parent conversation.",
@@ -247,11 +247,13 @@ export default function registerSubagents(
       "Use fresh subagent context by default, summary when prior decisions matter, and fork only when the exact active conversation is necessary.",
       "Omit subagent model and thinking overrides by default; set them only when the user requests a model or a concrete task-specific cost, speed, or capability reason justifies it.",
       "Do not duplicate a delegated task. Continue useful non-overlapping work and use subagents wait only when blocked on results.",
+      "A timed-out subagents wait is not a failure. Do not interrupt, close, or ask healthy children to stop or finalize because a wait timed out.",
       "Parallel writing subagents must have disjoint file scopes. Review their changes before integrating them.",
       "Close completed subagents after collecting final results when no follow-up is needed; settled children stop their process but keep a retained conversation slot.",
       "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
     parameters: Parameters,
+    prepareArguments: prepareSubagentArguments,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.action === "spawn") {
         const contextMode = (params.context ?? "fresh") as ContextMode;
@@ -290,8 +292,7 @@ export default function registerSubagents(
         return toolResult("interrupt", [agent], `Interrupt requested for ${agent.name}.`);
       }
       if (params.action === "wait") {
-        const timeout = params.timeout_ms ?? DEFAULT_WAIT_MS;
-        if (timeout > MAX_WAIT_MS) throw new Error(`timeout_ms must be at most ${MAX_WAIT_MS}`);
+        const timeout = waitTimeout(params.timeout_ms);
         const waited = await coordinator.wait(
           params.agent_names,
           timeout,
@@ -300,7 +301,7 @@ export default function registerSubagents(
           params.wake_on ?? "final",
         );
         const visible = waited.agents.filter((agent) => !waited.alreadyReportedIds.includes(agent.id) || agent.reports?.length);
-        const prefix = waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? "Wait timed out.\n" : "";
+        const prefix = waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? `Wait timed out after ${formatDuration(timeout)}. ${WAIT_TIMEOUT_GUIDANCE}\n\n` : "";
         return {
           content: [{ type: "text", text: boundedText(prefix + (visible.length
             ? visible.map((agent) => formatAgent(agent, !waited.alreadyReportedIds.includes(agent.id), true)).join("\n\n---\n\n")
@@ -555,6 +556,11 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean, includeReport
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
   else if (includeOutput && isActive(agent)) lines.push("", "(still running)");
   return lines.join("\n");
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return ms >= 1_000 ? `${Math.round(ms / 100) / 10} s` : `${ms} ms`;
 }
 
 function renderFallbackMessage(text: string, theme: Theme) {

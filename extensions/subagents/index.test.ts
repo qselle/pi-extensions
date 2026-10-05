@@ -3,6 +3,8 @@ import registerSubagents from "./index.ts";
 import type { ChildContext } from "./context.ts";
 import type { AgentClient, AgentClientOptions, RpcEvent } from "./rpc.ts";
 import { SUBAGENT_STATE } from "./persistence.ts";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from "./arguments.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -95,6 +97,77 @@ async function setup() {
     tool.execute("call", tool.prepareArguments ? tool.prepareArguments(args) : args, signal, undefined, ctx);
   return { pi, ctx, tool, call, clients, coordinator, reads: () => checkpointReads };
 }
+
+test("aliases from other agent tool sets map onto the published schema", async () => {
+  const { tool } = await setup();
+  const cases: [Record<string, unknown>, Record<string, unknown>][] = [
+    [{ action: "followup", agent_name: "Scout", message: "Continue" }, { action: "send", agent_name: "Scout", message: "Continue" }],
+    [{ action: "message", agent_id: "Scout", message: "Note" }, { action: "queue", agent_name: "Scout", message: "Note" }],
+    [{ action: "send", name: "Scout", message: "Go" }, { action: "send", name: "Scout", agent_name: "Scout", message: "Go" }],
+    [{ action: "close", agent_names: ["Scout"] }, { action: "close", agent_names: ["Scout"], agent_name: "Scout" }],
+    [{ action: "spawn", name: "Scout", task: "Look", context: "compacted" }, { action: "spawn", name: "Scout", task: "Look", context: "summary" }],
+    [{ action: "spawn", name: "Scout", task: "Look", context: "forked" }, { action: "spawn", name: "Scout", task: "Look", context: "fork" }],
+    [{ action: "wait", agent_ids: ["A", "B"], return_when: "all", wake_on: "final", timeout_ms: 1_200_000 },
+      { action: "wait", agent_names: ["A", "B"], wait_mode: "all", wake_on: "final", timeout_ms: 1_200_000 }],
+    [{ action: "wait", agent_name: "A", return_when: "any", wake_on: "any", timeout_ms: 7_200_000 },
+      { action: "wait", agent_name: "A", agent_names: ["A"], wait_mode: "any", wake_on: "any", timeout_ms: MAX_WAIT_MS }],
+    [{ action: "wait", timeout_ms: -5 }, { action: "wait", timeout_ms: 0 }],
+  ];
+  for (const [input, expected] of cases) {
+    const prepared = tool.prepareArguments(input);
+    expect(prepared).toEqual(expected);
+    expect(validateToolArguments(tool, { type: "toolCall", id: "alias", name: "subagents", arguments: prepared })).toEqual(expected);
+  }
+  expect(tool.parameters.properties.timeout_ms.maximum).toBe(3_600_000);
+});
+
+test("followup steers or resumes and message only queues", async () => {
+  const { call, clients } = await setup();
+  await call({ action: "spawn", name: "Worker", task: "Work" });
+  await call({ action: "followup", agent_name: "Worker", message: "Also check tests" });
+  expect(clients[0]!.steers).toEqual(["Also check tests"]);
+  clients[0]!.finish("done");
+  await Bun.sleep(0);
+  const queued = await call({ action: "message", agent_id: "Worker", message: "Context for later" });
+  expect(queued.details.action).toBe("queue");
+  expect(clients.flatMap((client) => client.prompts)).toHaveLength(1);
+  await call({ action: "followup", agent_name: "Worker", message: "Now continue" });
+  expect(clients.at(-1)!.prompts).toEqual(["Context for later\n\nNow continue"]);
+});
+
+test("wait defaults to five minutes, clamps long timeouts and honours return_when all", async () => {
+  const { call, clients, coordinator } = await setup();
+  await call({ action: "spawn", name: "One", task: "First" });
+  await call({ action: "spawn", name: "Two", task: "Second" });
+  const seen: number[] = [];
+  const original = coordinator.wait.bind(coordinator) as (...args: any[]) => ReturnType<typeof coordinator.wait>;
+  (coordinator as any).wait = (names: string[] | undefined, timeout: number, ...rest: any[]) => { seen.push(timeout); return original(names, timeout, ...rest); };
+
+  let returned = false;
+  const waiting = call({ action: "wait", agent_ids: ["One", "Two"], return_when: "all" }).then((result: any) => { returned = true; return result; });
+  clients[0]!.finish("one done");
+  await Bun.sleep(5);
+  expect(returned, "all waits for every selected final").toBe(false);
+  clients[1]!.finish("two done");
+  const result = await waiting;
+  expect(result.details.agents.map((agent: any) => agent.status)).toEqual(["completed", "completed"]);
+  expect(seen).toEqual([DEFAULT_WAIT_MS]);
+  expect(DEFAULT_WAIT_MS).toBe(300_000);
+
+  (coordinator as any).wait = (names: string[] | undefined, timeout: number, ...rest: any[]) => { seen.push(timeout); return original(names, 0, ...rest); };
+  await call({ action: "wait", timeout_ms: 9_000_000 });
+  expect(seen.at(-1)).toBe(MAX_WAIT_MS);
+});
+
+test("a timed-out wait tells the model not to stop healthy children", async () => {
+  const { call, clients } = await setup();
+  await call({ action: "spawn", name: "Slow", task: "Take a while" });
+  const result = await call({ action: "wait", agent_name: "Slow", timeout_ms: 1 });
+  expect(result.details.timedOut).toBe(true);
+  expect(result.content[0].text).toStartWith("Wait timed out after 1 ms. A wait timeout is not a failure");
+  expect(result.content[0].text).toContain("Do not interrupt, close, or ask healthy children to stop or finalize because a wait timed out");
+  expect(clients[0]!.stops).toBe(0);
+});
 
 test("a rate-limited child pauses, stops its process and resumes the same session on send", async () => {
   const { pi, call, clients } = await setup();
