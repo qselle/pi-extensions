@@ -1,6 +1,6 @@
 /** The first call renders the group; followers render empty until expanded. */
 import { firstLine, labelText, resultText, searchTarget, shortPath, summarize, type ToolName } from "./render.ts";
-import { toolPurpose } from "../../lib/tool-purpose.ts";
+import { purposeArgument, toolPurpose } from "../../lib/tool-purpose.ts";
 
 export const EXPLORATION_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
 
@@ -60,7 +60,7 @@ export function readRange(args: any): string | undefined {
 
 export function activityFor(name: string, args: any): Activity | undefined {
 	const a = args ?? {};
-	const purpose = toolPurpose(a.purpose, [a.path, a.pattern, a.query, a.name]) || undefined;
+	const purpose = toolPurpose(purposeArgument(a), [a.path, a.pattern, a.query, a.name]) || undefined;
 	if (name === "read" && typeof a.path === "string") {
 		const path = shortPath(labelText(a.path));
 		return { verb: "Read", detail: path, path: a.path, filePath: a.path, range: readRange(a), purpose };

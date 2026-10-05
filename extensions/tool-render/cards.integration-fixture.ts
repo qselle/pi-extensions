@@ -128,6 +128,30 @@ try {
     assert(done.includes("Edited src/a.ts (+1 -1)") && !done.includes("edits"), done);
   }
 
+  // 4. Saved `reasoning` captions render like `purpose`; neither reaches execution.
+  {
+    const reasoning = "Check the session settings";
+    for (const [name, args, result] of [
+      ["bash", { command: "true", reasoning }, ""],
+      ["write", { path: "r.txt", content: "r", reasoning }, "ok"],
+      ["read", { path: "r.txt", reasoning }, "r"],
+    ] as const) {
+      const view = card(name, `reasoning-${name}`, args);
+      view.updateResult({ content: [{ type: "text", text: result }], details: undefined, isError: false } as never);
+      assert(text(view.render(120)).includes(reasoning), `${name} shows a reasoning caption`);
+    }
+    const preferred = card("read", "reasoning-both", { path: "r.txt", purpose: "Inspect the defaults", reasoning });
+    preferred.updateResult({ content: [{ type: "text", text: "r" }], details: undefined, isError: false } as never);
+    assert(text(preferred.render(120)).includes("Inspect the defaults") && !text(preferred.render(120)).includes(reasoning));
+    const args = { path: "meta.txt", content: "exact", purpose: "Save metadata", reasoning };
+    const written = await tools.get("write")!.execute("strip", args, undefined, undefined, context as never);
+    assert.equal(await readFile(join(root, "meta.txt"), "utf8"), "exact");
+    assert(!JSON.stringify(written).includes(reasoning));
+    assert.deepEqual(args, { path: "meta.txt", content: "exact", purpose: "Save metadata", reasoning }, "saved arguments are not mutated");
+    const read = await tools.get("read")!.execute("strip-read", { path: "meta.txt", reasoning }, undefined, undefined, context as never);
+    assert(JSON.stringify(read.content).includes("exact"));
+  }
+
   await handlers.get("session_shutdown")!({}, context);
   console.log("tool-render cards verified");
 } finally { await rm(root, { recursive: true, force: true }); }

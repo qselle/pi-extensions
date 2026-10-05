@@ -17,7 +17,16 @@ import { visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/
 import { expansionHint } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { disposeSyntax, highlightSyntax, initializeSyntax } from "../../lib/syntax.ts";
-import { commandPurpose, commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
+import {
+	changePurposeParameter,
+	commandPurpose,
+	commandPurposeParameter,
+	COMMAND_PURPOSE_GUIDELINE,
+	purposeArgument,
+	toolPurpose,
+	toolPurposeParameter,
+	withoutPurpose,
+} from "../../lib/tool-purpose.ts";
 import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -214,7 +223,7 @@ function diffHeadline(
 	const overhead = 3 + verbText.length + (label ? 1 + visibleWidth(label) : 0);
 	const a = ctx?.args;
 	const target = labelText(targetFor(name, a));
-	const purpose = toolPurpose(a?.purpose, [a?.path]);
+	const purpose = toolPurpose(purposeArgument(a), [a?.path]);
 	const caption = purposeSuffix(purpose, Math.floor(Math.max(0, width - overhead) * 0.55), theme);
 	const parts = [bullet(theme, ctx), verb];
 	if (target) {
@@ -266,7 +275,7 @@ function standaloneExploration(name: ToolName, result: any, theme: Theme, ctx: a
 		status: ctx?.isError ? "error" : ctx?.executionStarted && ctx?.isPartial ? "pending" : "done",
 		filePath: PATH_TOOLS.has(name) ? String(args?.path ?? args?.dir ?? ".") : undefined,
 		suffix: ctx?.isError || ctx?.isPartial ? undefined : summarize(name, result, args),
-		purpose: toolPurpose(args?.purpose, [args?.path, args?.pattern, args?.query, args?.name]) };
+		purpose: toolPurpose(purposeArgument(args), [args?.path, args?.pattern, args?.query, args?.name]) };
 	const head = `${bullet(theme, ctx)} ${explorationRow(row, theme, Math.max(1, width - 2), ctx?.cwd ?? process.cwd())}`;
 	if (ctx?.isError) {
 		const msg = new PlainOutput().push(resultText(result).text).trim().slice(0, 1200) || "failed";
@@ -323,7 +332,7 @@ function makeRenderCall(name: ToolName) {
 			if (name === "bash") {
 				const title = ctx?.isError ? "Command failed"
 					: ctx?.isPartial && !ctx?.executionStarted ? "Command" : `${verbText} command`;
-				const purpose = commandPurpose(a?.purpose);
+				const purpose = commandPurpose(purposeArgument(a));
 				const header = theme.fg(ctx?.isError ? "error" : "muted", `${BULLET} ${title}`)
 					+ (purpose ? theme.fg("dim", " · ") + theme.fg("text", purpose) : "");
 				if (!command.trim()) return [header];
@@ -450,12 +459,15 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 					if (name === "bash" && (!includeBash || managedBashOwns(pi, bashStyle))) continue;
 					const definition: ToolDefinition<any> = factories[name](cwd);
 					// Purpose is model-written display metadata. Keep it optional for
-					// historical calls, and never pass it to the native executor.
+					// historical calls, and never pass it (or its saved `reasoning`
+					// alias) to the native executor.
+					const purposeParameter = name === "bash" ? commandPurposeParameter
+						: name === "edit" || name === "write" ? changePurposeParameter : toolPurposeParameter;
 					const purposeMetadata: Partial<ToolDefinition<any>> = {
-						parameters: { ...definition.parameters, properties: { purpose: name === "bash" ? commandPurposeParameter : toolPurposeParameter, ...definition.parameters.properties } },
+						parameters: { ...definition.parameters, properties: { purpose: purposeParameter, ...definition.parameters.properties } },
 						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
 						execute: (id, args, signal, update, context) => {
-							const { purpose: _purpose, ...toolArgs } = args as Record<string, unknown>;
+							const toolArgs = withoutPurpose(args as Record<string, unknown>);
 							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},
