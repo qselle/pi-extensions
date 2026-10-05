@@ -36,8 +36,10 @@ It immediately adopts the current Pi name, then follows generated titles,
 `/rename`, `/title set`, and names set by other extensions.
 
 Existing Herdr labels are preserved until you explicitly link them, except for
-an empty label or Herdr's default ordinal (for example, label `1` on tab `…:t1`),
-which can be linked automatically. Other numeric labels remain possible manual
+an empty label, Herdr's default ordinal (for example, label `1` on tab `…:t1`),
+or a label already equal to the current Pi name (for example, set by another
+tool), which are linked automatically. A matching label is adopted without a
+write, including after an earlier pause, and then follows later Pi names. Other numeric labels remain possible manual
 names. If you later rename or clear the label in Herdr, Tab link yields on its
 next check; `/title tab link` explicitly reconnects it. `/title tab auto` resumes
 only a default, empty, or still-owned label.
