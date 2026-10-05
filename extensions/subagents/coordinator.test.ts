@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import {
   PROGRESS_CHECKPOINT_MS,
   SubagentCoordinator,
+  isProviderLimitError,
+  type AgentSnapshot,
   type AgentRuntime,
   type SpawnRequest,
 } from "./coordinator.ts";
@@ -455,6 +457,92 @@ test("long runs persist progress at a bounded interval", async () => {
     client.emit({ type: "tool_execution_start", toolName: "read" });
   }
   expect(persisted).toBe(1 + Math.floor(300_000 / PROGRESS_CHECKPOINT_MS));
+  await coordinator.shutdown();
+});
+
+function durableHarness(maxOpenAgents = 6) {
+  const clients = new Map<string, FakeClient[]>();
+  const runtimes: string[] = [];
+  const completions: AgentSnapshot[] = [];
+  const coordinator = new SubagentCoordinator({
+    maxOpenAgents,
+    createRuntime: async (spawn) => {
+      runtimes.push(spawn.name);
+      const make = () => { const client = new FakeClient(); clients.set(spawn.name, [...clients.get(spawn.name) ?? [], client]); return client; };
+      return { client: make(), relaunch: make, cleanup: async () => {},
+        checkpoint: () => ({ directory: `pi-subagent-context-${spawn.name}`, file: "child.jsonl", initialEntryCount: 0, leafId: "leaf" }) };
+    },
+    hooks: { onCompletion: (agent) => { completions.push(agent); } },
+  });
+  coordinator.startSession();
+  const latest = (name: string) => clients.get(name)!.at(-1)!;
+  return { coordinator, clients, runtimes, completions, latest };
+}
+
+test("recognizes provider quota, rate-limit and overload errors", () => {
+  for (const message of ["429 Too Many Requests", "HTTP 429", "Rate limit reached for requests", "rate_limit_error",
+    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached"]) {
+    expect(isProviderLimitError(message), message).toBe(true);
+  }
+  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted"]) {
+    expect(isProviderLimitError(message), message).toBe(false);
+  }
+});
+
+test("a provider limit pauses the child, and send resumes the same conversation", async () => {
+  const { coordinator, clients, runtimes, completions, latest } = durableHarness();
+  await coordinator.spawn(request("Quota"));
+  latest("Quota").emit({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "429 Too Many Requests: rate limit reached" } });
+  latest("Quota").emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  expect(coordinator.list()[0]).toMatchObject({ status: "paused", error: "429 Too Many Requests: rate limit reached" });
+  expect(completions.map((agent) => agent.status)).toEqual(["paused"]);
+  const restored = restoreAgents([{ type: "custom", customType: SUBAGENT_STATE, data: { version: 1, agents: coordinator.checkpoint() } }]);
+  expect(restored[0]!.agent.status).toBe("paused");
+
+  const resumed = await coordinator.send("Quota", "Limits reset; continue");
+  expect(resumed.status).toBe("running");
+  expect(resumed.error).toBeUndefined();
+  expect(runtimes, "no replacement conversation").toEqual(["Quota"]);
+  expect(clients.get("Quota")).toHaveLength(2);
+  expect(latest("Quota").promptCalls).toEqual(["Limits reset; continue"]);
+  await coordinator.shutdown();
+});
+
+test("settled durable children hibernate, release capacity and relaunch on follow-up", async () => {
+  const { coordinator, clients, runtimes, latest } = durableHarness(1);
+  await coordinator.spawn(request("First"));
+  const first = latest("First");
+  first.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "first done" }], stopReason: "stop" } });
+  first.emit({ type: "agent_settled" });
+  await waitUntil(() => coordinator.list()[0]!.activity.at(-1) === "hibernated");
+  expect(first.stopCalls).toBe(1);
+
+  await coordinator.spawn(request("Second"));
+  await expect(coordinator.send("First", "Too early"), "one live process at a time").rejects.toThrow("At most 1");
+  latest("Second").emit({ type: "agent_settled" });
+  await flushMicrotasks();
+
+  const followed = await coordinator.send("First", "Continue the review");
+  expect(followed).toMatchObject({ status: "running", output: "" });
+  expect(runtimes).toEqual(["First", "Second"]);
+  expect(clients.get("First")).toHaveLength(2);
+  expect(latest("First")).not.toBe(first);
+  expect(latest("First").startCalls).toBe(1);
+  expect(latest("First").promptCalls).toEqual(["Continue the review"]);
+  first.emit({ type: "agent_settled" });
+  expect(coordinator.list().find((agent) => agent.name === "First")!.status, "the stopped process cannot settle the new run").toBe("running");
+  await coordinator.shutdown();
+});
+
+test("children without a durable conversation keep their process after settling", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Ephemeral"));
+  clients.get("Ephemeral")!.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  expect(clients.get("Ephemeral")!.stopCalls).toBe(0);
+  await coordinator.send("Ephemeral", "More");
+  expect(clients.get("Ephemeral")!.promptCalls.at(-1)).toBe("More");
   await coordinator.shutdown();
 });
 

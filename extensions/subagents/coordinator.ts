@@ -10,7 +10,9 @@ export const MAX_RESULT_BYTES = 24 * 1024;
 /** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
 export const PROGRESS_CHECKPOINT_MS = 60_000;
 
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "stopped" | "closed";
+export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "stopped" | "closed";
+/** Settled statuses that carry a final result for the parent. */
+export const FINAL_STATUSES: readonly AgentStatus[] = ["completed", "paused", "failed"];
 export type WaitMode = "any" | "all";
 export type WaitWake = "any" | "final";
 
@@ -63,6 +65,8 @@ export interface AgentRuntime {
   cleanup(): Promise<void>;
   transcript?(): unknown[];
   checkpoint?(): ChildCheckpoint;
+  /** A fresh client for the same conversation files, used to wake a hibernated child. */
+  relaunch?(): AgentClient;
 }
 
 export interface AgentTranscript {
@@ -112,6 +116,9 @@ interface ManagedAgent extends AgentSnapshot {
   resuming?: Promise<void>;
   resumeController?: AbortController;
   client?: AgentClient;
+  relaunch?: () => AgentClient;
+  /** Stopping the idle process of a settled durable child. */
+  hibernating?: Promise<void>;
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
   transcript?: () => unknown[];
@@ -194,6 +201,7 @@ export class SubagentCoordinator {
         leafDirty: true,
         inbox: [],
         client: runtime.client,
+        relaunch: runtime.relaunch,
         cleanup: runtime.cleanup,
         cleanupDone: false,
         transcript: runtime.transcript,
@@ -304,6 +312,7 @@ export class SubagentCoordinator {
     for (const agent of agents) { agent.suppressCompletion = true; agent.generation = -1; agent.resumeController?.abort(); }
     const outcomes = await Promise.allSettled(agents.map(async (agent) => {
       await agent.resuming?.catch(() => undefined);
+      await agent.hibernating;
       if (agent.client) { await agent.client.stop(); agent.client = undefined; }
       this.captureTranscript(agent);
       if (!agent.checkpoint && !agent.cleanupDone) { await agent.cleanup(); agent.cleanupDone = true; }
@@ -320,6 +329,7 @@ export class SubagentCoordinator {
 
   private async resumeAgent(agent: ManagedAgent, parentContext?: unknown, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    await agent.hibernating;
     if (agent.client) return;
     this.refreshResume(agent);
     if (!agent.resume) throw new Error(`No durable conversation is available for ${agent.name}; spawn a new child.`);
@@ -330,8 +340,12 @@ export class SubagentCoordinator {
     const controller = new AbortController();
     agent.resumeController = controller;
     const resumeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    // A hibernated child continues in its own files; a restored one resumes from a copy.
+    const relaunch = !agent.cleanupDone ? agent.relaunch : undefined;
     const work = (async () => {
-      const runtime = await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume }, resumeSignal);
+      const runtime: AgentRuntime = relaunch
+        ? { client: relaunch(), cleanup: async () => {}, checkpoint: agent.checkpoint, transcript: agent.transcript, relaunch }
+        : await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume }, resumeSignal);
       const abortStartup = () => void runtime.client.stop().catch(() => undefined);
       resumeSignal.addEventListener("abort", abortStartup, { once: true });
       try {
@@ -341,7 +355,8 @@ export class SubagentCoordinator {
         throwIfAborted(resumeSignal);
         this.assertGeneration(generation);
         if (agent.status === "closed") throw new Error(`Subagent ${agent.name} was closed during resume`);
-        agent.client = runtime.client; agent.cleanup = runtime.cleanup; agent.cleanupDone = false;
+        agent.client = runtime.client; agent.relaunch = runtime.relaunch;
+        if (!relaunch) { agent.cleanup = runtime.cleanup; agent.cleanupDone = false; }
         agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript; agent.leafDirty = true;
         agent.generation = generation; agent.suppressCompletion = false;
         this.attach(agent, runtime.client);
@@ -380,8 +395,12 @@ export class SubagentCoordinator {
         await client.steer(text);
         pushActivity(agent, `steered: ${compact(text, 120)}`);
       } catch (error) {
-        if (!isActive(agent) && agent.client === client) await this.startFollowUp(agent, client, text);
-        else throw error;
+        // The child settled first, possibly hibernating: start the follow-up instead.
+        if (isActive(agent)) throw error;
+        if (agent.client !== client) await this.resumeAgent(agent, parentContext, signal);
+        const current = agent.client;
+        if (!current) throw error;
+        await this.startFollowUp(agent, current, text);
       }
     } else {
       await this.startFollowUp(agent, client, text);
@@ -668,11 +687,31 @@ export class SubagentCoordinator {
       return;
     }
     if (event.type === "agent_settled") {
-      this.finish(agent, agent.error ? "failed" : "completed", agent.error);
+      this.finish(agent, !agent.error ? "completed" : isProviderLimitError(agent.error) ? "paused" : "failed", agent.error);
+      this.hibernate(agent);
     }
   }
 
-  private finish(agent: ManagedAgent, status: "completed" | "failed", error?: string, suppress = false): void {
+  /** Stops the idle process of a settled child whose conversation is durable; send relaunches it. */
+  private hibernate(agent: ManagedAgent): void {
+    const client = agent.client;
+    if (!client || !agent.checkpoint || !agent.relaunch || agent.hibernating || isActive(agent) || agent.status === "closed") return;
+    agent.client = undefined;
+    const operation = client.stop().then(
+      () => { pushActivity(agent, "hibernated"); },
+      (error) => {
+        pushActivity(agent, `hibernate failed: ${compact(toError(error).message, 100)}`);
+        // Keep the process reachable so close or suspend can retry stopping it.
+        if (!agent.client && agent.status !== "closed") agent.client = client;
+      },
+    ).finally(() => {
+      if (agent.hibernating === operation) agent.hibernating = undefined;
+      this.changed();
+    });
+    agent.hibernating = operation;
+  }
+
+  private finish(agent: ManagedAgent, status: "completed" | "paused" | "failed", error?: string, suppress = false): void {
     if (agent.settled || agent.status === "closed") return;
     agent.settled = true;
     agent.status = status;
@@ -723,6 +762,7 @@ export class SubagentCoordinator {
     const operation = (async () => {
       const failures: unknown[] = [];
       await agent.resuming?.catch(() => undefined);
+      await agent.hibernating;
       const client = agent.client;
       if (client) {
         try {
@@ -801,8 +841,10 @@ export class SubagentCoordinator {
     if (!this.active || this.generation !== expected) throw new Error("Parent session ended during subagent startup");
   }
 
+  /** Live child processes. Durable children without a process do not consume capacity. */
   private openCount(): number {
-    return [...this.agents.values()].filter((agent) => agent.client || !agent.cleanupDone && agent.status !== "closed").length;
+    return [...this.agents.values()].filter((agent) => agent.client || agent.hibernating
+      || !agent.cleanupDone && !agent.checkpoint && agent.status !== "closed").length;
   }
 
   private ordered(): ManagedAgent[] {
@@ -838,7 +880,7 @@ export class SubagentCoordinator {
       activity: [...agent.activity],
       usage: { ...agent.usage },
       queued: agent.inbox.length,
-      unread: agent.settled && agent.delivery === "none" && ["completed", "failed"].includes(agent.status)
+      unread: agent.settled && agent.delivery === "none" && FINAL_STATUSES.includes(agent.status)
         || agent.reportRecords.some((record) => record.delivery === "none"),
       reports: agent.reportRecords.filter((record) => record.delivery === "none").map((record) => ({ ...record.report })),
       omittedReports: agent.omittedReports ?? 0,
@@ -873,6 +915,22 @@ export function boundedText(text: string, maxBytes: number): string {
 
 export function isActive(agent: Pick<AgentSnapshot, "status">): boolean {
   return agent.status === "starting" || agent.status === "running";
+}
+
+/** Provider quota, rate-limit and overload failures are recoverable once the limit resets. */
+export function isProviderLimitError(message: string): boolean {
+  const text = sanitize(message).toLowerCase().replace(/\s+/g, " ");
+  return [
+    /\brate[ _-]?limit/,
+    /\btoo many requests\b/,
+    /\binsufficient[_ -]?quota\b/,
+    /\bquota\b.{0,80}\b(?:exceeded|exhausted|reached|limit)/,
+    /\b(?:exceeded|exhausted|reached)\b.{0,80}\bquota\b/,
+    /\busage limit\b/,
+    /\b(?:daily|weekly|monthly|billing|spending) limit\b/,
+    /\boverloaded/,
+    /(?:^|\b(?:http|status|code|error)\s*:?\s*)429\b/,
+  ].some((pattern) => pattern.test(text));
 }
 
 function buildChildPrompt(request: SpawnRequest): string {

@@ -61,6 +61,7 @@ const COMPLETION_MESSAGE_TYPE = "subagent-completion";
 const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 5 * 60_000;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
+const PAUSED_GUIDANCE = "Paused by a provider quota or rate limit; the conversation is kept. After the limit resets, use send to resume this child instead of spawning a replacement.";
 
 export interface SubagentsExtensionOptions {
   createClient?: AgentClientFactory;
@@ -138,14 +139,17 @@ export default function registerSubagents(
     const childContext = await createContext(ctx, request.contextMode, summary, request.resume);
     try {
       const invocation = getPiCommand(buildChildArgs(pi, ctx, childContext, request));
-      const client = createClient({
+      const clientOptions = {
         command: invocation.command,
         args: invocation.args,
         cwd: request.cwd,
         env: subagentEnvironment(request.name),
-      });
+      };
+      const client = createClient(clientOptions);
       return {
         client,
+        // Relaunching reopens the same session file, so only durable children hibernate.
+        relaunch: childContext.checkpoint ? () => createClient(clientOptions) : undefined,
         cleanup: childContext.cleanup,
         checkpoint: childContext.checkpoint,
         transcript: () => childTranscriptEntries(childContext, request.task, request.cwd),
@@ -244,7 +248,8 @@ export default function registerSubagents(
       "Omit subagent model and thinking overrides by default; set them only when the user requests a model or a concrete task-specific cost, speed, or capability reason justifies it.",
       "Do not duplicate a delegated task. Continue useful non-overlapping work and use subagents wait only when blocked on results.",
       "Parallel writing subagents must have disjoint file scopes. Review their changes before integrating them.",
-      "Close completed subagents after collecting final results when no follow-up is needed, because open children consume capacity.",
+      "Close completed subagents after collecting final results when no follow-up is needed; settled children stop their process but keep a retained conversation slot.",
+      "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
     parameters: Parameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -347,7 +352,7 @@ export default function registerSubagents(
     }
     if (!agent) return;
     if (ctx.mode !== "tui") {
-      ctx.ui.notify(boundedText(formatAgent(agent, true), 4 * 1024), agent.status === "failed" ? "error" : "info");
+      ctx.ui.notify(boundedText(formatAgent(agent, true), 4 * 1024), agent.status === "failed" ? "error" : agent.status === "paused" ? "warning" : "info");
       return;
     }
     const loadSaved = async (target: AgentSnapshot) => {
@@ -517,6 +522,7 @@ function completionContext(agent: AgentSnapshot): string {
       result: agent.output || null,
       error: agent.error || null,
     }, null, 2),
+    ...agent.status === "paused" ? [PAUSED_GUIDANCE] : [],
   ].join("\n\n"), 24 * 1024);
 }
 
@@ -544,6 +550,7 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean, includeReport
   if (agent.queued) lines.push(`queued: ${agent.queued} message(s); delivered only by send`);
   if (agent.unread) lines.push("unread result available: use read or wait");
   if (agent.status === "stopped") lines.push("stopped after session transition; send explicitly resumes the saved conversation");
+  if (agent.status === "paused") lines.push(PAUSED_GUIDANCE);
   if (agent.error) lines.push(`error: ${agent.error}`);
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
   else if (includeOutput && isActive(agent)) lines.push("", "(still running)");
@@ -564,6 +571,7 @@ function runtimeLabel(agent: AgentSnapshot): string {
 function statusSymbol(agent: AgentSnapshot): string {
   if (agent.status === "starting" || agent.status === "running") return "●";
   if (agent.status === "completed") return "✓";
+  if (agent.status === "paused") return "‖";
   if (agent.status === "failed") return "×";
   return "■";
 }

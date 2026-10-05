@@ -96,6 +96,28 @@ async function setup() {
   return { pi, ctx, tool, call, clients, coordinator, reads: () => checkpointReads };
 }
 
+test("a rate-limited child pauses, stops its process and resumes the same session on send", async () => {
+  const { pi, call, clients } = await setup();
+  await call({ action: "spawn", name: "Limited", task: "Hit a quota" });
+  clients[0]!.emit({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "429 rate limit exceeded" } });
+  clients[0]!.emit({ type: "agent_settled" });
+  await Bun.sleep(0);
+  expect(clients[0]!.stops, "settled child process hibernates").toBe(1);
+  expect(pi.sent).toHaveLength(1);
+  expect(pi.sent[0]!.message.details.status).toBe("paused");
+  expect(pi.sent[0]!.message.content).toContain("use send to resume this child instead of spawning a replacement");
+  const listed = await call({ action: "list" });
+  expect(listed.content[0].text).toContain("Limited · fresh · paused");
+  expect(pi.tools.get("subagents").promptGuidelines.join("\n")).toContain("resume it with subagents send instead of spawning a replacement");
+
+  await call({ action: "send", agent_name: "Limited", message: "Limits reset" });
+  expect(clients).toHaveLength(2);
+  const session = (client: FakeClient) => client.options.args[client.options.args.indexOf("--session") + 1];
+  expect(session(clients[1]!)).toBe(session(clients[0]!));
+  expect(clients[1]!.prompts).toEqual(["Limits reset"]);
+  await pi.emit("session_shutdown", { reason: "quit" }, {});
+});
+
 test("child tool activity appends no subagent state between lifecycle transitions", async () => {
   const { pi, call, clients, reads } = await setup();
   await call({ action: "spawn", name: "Busy", task: "Run many tools" });

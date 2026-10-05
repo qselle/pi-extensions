@@ -94,7 +94,7 @@ export function renderSubagentResult(
 export function renderCompletionMessage(agent: AgentSnapshot, expanded: boolean, theme: Theme): Component {
   const container = new Container();
   container.addChild(new Text(
-    `${theme.fg(agent.status === "failed" ? "error" : "success", agent.status === "failed" ? "×" : "✓")} ${theme.bold(agent.name)} ${theme.fg("muted", agent.status)}`,
+    `${theme.fg(statusColor(agent.status), statusSymbol(agent.status))} ${theme.bold(agent.name)} ${theme.fg("muted", agent.status)}`,
     0,
     0,
   ));
@@ -188,7 +188,7 @@ function agentHeader(agent: AgentSnapshot, theme: Theme): string {
 function resultLines(agent: AgentSnapshot, theme: Theme, indent: string): string[] {
   const { lines, hidden } = collapsedResult(agent.output ?? "");
   if (lines.length === 0) return [];
-  const label = `${indent}${theme.fg(agent.status === "failed" ? "error" : "success", "result ")}`;
+  const label = `${indent}${theme.fg(agent.status === "failed" ? "error" : agent.status === "paused" ? "warning" : "success", "result ")}`;
   const continuation = " ".repeat(visibleWidth(label));
   const rows = lines.map((line) => theme.fg("text", line));
   if (hidden > 0) rows.unshift(theme.fg("dim", hiddenLinesMarker(hidden, expandKeyLabel())));
@@ -207,6 +207,7 @@ function expandKeyLabel(): string {
 function statusSymbol(status: AgentSnapshot["status"]): string {
   if (status === "starting" || status === "running") return "●";
   if (status === "completed") return "✓";
+  if (status === "paused") return "‖";
   if (status === "failed") return "×";
   return "■";
 }
@@ -214,6 +215,7 @@ function statusSymbol(status: AgentSnapshot["status"]): string {
 function statusColor(status: AgentSnapshot["status"]): any {
   if (status === "starting" || status === "running") return "accent";
   if (status === "completed") return "success";
+  if (status === "paused") return "warning";
   if (status === "failed") return "error";
   return "muted";
 }
