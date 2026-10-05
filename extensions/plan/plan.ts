@@ -23,6 +23,12 @@ export interface PlanItemInput {
   children?: PlanItemInput[];
 }
 
+export interface UpdatePlanInput {
+  explanation?: string;
+  reset?: boolean;
+  plan: PlanItemInput[];
+}
+
 export interface PlanState {
   items: PlanItem[];
   explanation?: string;
@@ -55,8 +61,8 @@ export function replacePlan(
   now = Date.now(),
   reset = false,
 ): PlanState {
-  const normalized = validatePlanItems(items);
   const rationale = validateExplanation(explanation);
+  const normalized = validatePlanItems(items, { allowIdle: explainsIdlePlan(rationale) });
   if (reset && !rationale) throw new Error("Resetting a plan requires an explanation of the user-requested objective change.");
   if (!reset && planIsActive(current)) preserveCompletedMilestones(current.items, normalized);
   return {
@@ -66,28 +72,94 @@ export function replacePlan(
   };
 }
 
-function completedMilestones(items: readonly PlanItem[], parent: string[] = []): Map<string, string> {
-  const completed = new Map<string, string>();
-  for (const item of items) {
+interface Milestone { name: string; path: string; label: string }
+
+function completedMilestones(items: readonly PlanItem[], parent: string[] = []): Milestone[] {
+  return items.flatMap((item) => {
     const path = [...parent, item.step];
-    if (item.children) {
-      for (const [key, label] of completedMilestones(item.children, path)) completed.set(key, label);
-    } else if (item.status === "completed") {
-      completed.set(JSON.stringify(path.map((step) => step.toLowerCase())), path.join(" › "));
-    }
-  }
-  return completed;
+    if (item.children) return completedMilestones(item.children, path);
+    if (item.status !== "completed") return [];
+    return [{ name: item.step.toLowerCase(), path: JSON.stringify(path.map((step) => step.toLowerCase())), label: path.join(" › ") }];
+  });
 }
 
+/**
+ * Completed leaves are matched by name, so finished work may move between
+ * groups. A name repeated in several groups must stay completed as many times;
+ * group paths only decide which repeat to report as missing.
+ */
 function preserveCompletedMilestones(previous: readonly PlanItem[], next: readonly PlanItem[]): void {
   const retained = completedMilestones(next);
-  const missing = [...completedMilestones(previous)].filter(([key]) => !retained.has(key)).map(([, label]) => label);
+  const retainedPaths = new Set(retained.map((milestone) => milestone.path));
+  const missing: string[] = [];
+  const byName = Map.groupBy(completedMilestones(previous), (milestone) => milestone.name);
+  for (const [name, earlier] of byName) {
+    const shortfall = earlier.length - retained.filter((milestone) => milestone.name === name).length;
+    if (shortfall <= 0) continue;
+    const moved = earlier.filter((milestone) => !retainedPaths.has(milestone.path));
+    missing.push(...[...moved, ...earlier.filter((milestone) => !moved.includes(milestone))].slice(0, shortfall).map((milestone) => milestone.label));
+  }
   if (missing.length) {
-    throw new Error(`Keep completed milestones in the unfinished plan: ${missing.join("; ")}. Preserve their group paths and completed status. Use reset only when the user changes the objective, with an explanation; /plan clear starts over explicitly.`);
+    throw new Error(`Keep completed milestones in the unfinished plan: ${missing.join("; ")}. Keep them completed; they may move between groups. Use reset only when the user changes the objective, with an explanation; /plan clear starts over explicitly.`);
   }
 }
 
-export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
+type JsonObject = Record<string, unknown>;
+const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * Accept the flat plan shape many models emit before schema validation: rows
+ * ordered parent-first with a `depth` (0 = top level) become nested `children`,
+ * and `reason` becomes `explanation`. Other payloads pass through unchanged.
+ */
+export function prepareUpdatePlanArguments(args: unknown): UpdatePlanInput {
+  if (!isObject(args)) return args as unknown as UpdatePlanInput;
+  let prepared: JsonObject = args;
+  if ("reason" in prepared) {
+    const { reason, ...rest } = prepared;
+    prepared = rest.explanation === undefined && reason !== undefined ? { ...rest, explanation: reason } : rest;
+  }
+  const rows = prepared.plan;
+  if (Array.isArray(rows) && rows.some((row) => isObject(row) && "depth" in row)) prepared = { ...prepared, plan: nestFlatRows(rows) };
+  return prepared as unknown as UpdatePlanInput;
+}
+
+function nestFlatRows(rows: readonly unknown[]): JsonObject[] {
+  const roots: JsonObject[] = [];
+  const ancestors: JsonObject[] = [];
+  rows.forEach((row, index) => {
+    if (!isObject(row)) throw new Error(`Plan step ${index + 1} must be an object with a step.`);
+    const { depth = 0, ...item } = row;
+    if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 0) {
+      throw new Error(`Plan step ${index + 1} has an invalid depth; use a whole number from 0, or nest steps in \`children\`.`);
+    }
+    if (depth > ancestors.length) {
+      throw new Error(`Plan step ${index + 1} skips a level: depth may grow by one from the previous row. List each group before its children, or nest steps in \`children\`.`);
+    }
+    if (depth >= MAX_PLAN_DEPTH) throw new Error(`Plans support at most ${MAX_PLAN_DEPTH} levels (depth 0–${MAX_PLAN_DEPTH - 1}).`);
+    const node: JsonObject = { ...item };
+    ancestors.length = depth;
+    const parent = ancestors.at(-1);
+    if (parent) parent.children = [...Array.isArray(parent.children) ? parent.children : [], node];
+    else roots.push(node);
+    ancestors.push(node);
+  });
+  return roots;
+}
+
+const IDLE_EXPLANATION = /\b(blocked|deferred|deferring|paused|on hold|waiting|awaiting)\b/i;
+
+/** Whether an explanation says the remaining work is intentionally not in progress. */
+export function explainsIdlePlan(explanation: string | undefined): boolean {
+  return Boolean(explanation && IDLE_EXPLANATION.test(explanation));
+}
+
+export interface PlanValidationOptions {
+  /** Accept unfinished work without an in-progress step (blocked, deferred, or paused). */
+  allowIdle?: boolean;
+}
+
+export function validatePlanItems(items: readonly PlanItemInput[], options: PlanValidationOptions = {}): PlanItem[] {
   let count = 0;
   const normalize = (nodes: readonly PlanItemInput[], depth: number): PlanItem[] => {
     if (!Array.isArray(nodes) || nodes.length > MAX_PLAN_ITEMS) throw new Error(`A plan group can have at most ${MAX_PLAN_ITEMS} steps.`);
@@ -113,6 +185,7 @@ export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
         const status: PlanItemStatus = stats.cancelled === stats.total ? "cancelled" : stats.finished === stats.total ? "completed" : stats.inProgress ? "in_progress" : "pending";
         return { step, ...details, status, children };
       }
+      if (item.status === undefined) throw new Error(`Plan step "${step}" needs a status (pending, in_progress, completed, or cancelled). Groups omit status and list their steps in \`children\`.`);
       if (!isPlanItemStatus(item.status)) throw new Error(`Unknown plan status for step ${index + 1}: ${String(item.status)}`);
       return { step, ...details, status: item.status };
     });
@@ -120,7 +193,9 @@ export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
   const normalized = normalize(items, 1);
   const stats = planStats(normalized);
   if (stats.inProgress > 1) throw new Error("Only one plan step may be in progress.");
-  if (stats.unfinished > 0 && stats.inProgress !== 1) throw new Error("An unfinished plan must have exactly one in-progress step.");
+  if (stats.unfinished > 0 && stats.inProgress === 0 && !options.allowIdle) {
+    throw new Error("An unfinished plan must have exactly one in-progress step, unless the explanation says the remaining work is blocked, deferred, or paused.");
+  }
   return normalized;
 }
 
@@ -200,16 +275,17 @@ export function planResponse(plan: PlanState): string {
   });
 }
 
-function decodePlanState(value: unknown): PlanState | undefined {
+export function decodePlanState(value: unknown): PlanState | undefined {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as { items?: unknown; explanation?: unknown; updatedAt?: unknown };
   if (!Array.isArray(raw.items)) return undefined;
   if (typeof raw.updatedAt !== "number" || !Number.isFinite(raw.updatedAt) || raw.updatedAt < 0) return undefined;
 
   try {
+    const explanation = typeof raw.explanation === "string" ? validateExplanation(raw.explanation) : undefined;
     return {
-      items: validatePlanItems(raw.items as PlanItem[]),
-      explanation: typeof raw.explanation === "string" ? validateExplanation(raw.explanation) : undefined,
+      items: validatePlanItems(raw.items as PlanItem[], { allowIdle: explainsIdlePlan(explanation) }),
+      explanation,
       updatedAt: raw.updatedAt,
     };
   } catch {

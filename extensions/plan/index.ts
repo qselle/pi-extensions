@@ -1,7 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type TSchema } from "typebox";
+import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
 import { toolText } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
@@ -11,14 +12,17 @@ import {
   MAX_PLAN_DESCRIPTION_CHARS,
   createPlanState,
   decodePlanEntry,
+  decodePlanState,
   planIsActive,
   planResponse,
+  prepareUpdatePlanArguments,
   replacePlan,
   type PlanEntry,
-  type PlanItemInput,
   type PlanState,
+  type UpdatePlanInput,
 } from "./plan.ts";
 import {
+  PLAN_CLEARED_CONTEXT,
   PLAN_CONTEXT_TYPE,
   PLAN_PROMPT_GUIDELINES,
   buildPlanContext,
@@ -43,7 +47,7 @@ const itemParameters = (depth: number): TSchema => Type.Object({
   description: Type.Optional(Type.String({ maxLength: MAX_PLAN_DESCRIPTION_CHARS, description: "Optional useful context or verification details. Keep the step title concise." })),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed", "cancelled"] as const, { description: "Required for leaf steps. Group status is derived from children." })),
   ...(depth < MAX_PLAN_DEPTH ? { children: Type.Optional(Type.Array(itemParameters(depth + 1), { minItems: 1, maxItems: MAX_PLAN_ITEMS })) } : {}),
-});
+}, { additionalProperties: false });
 const PlanItemParameters = itemParameters(1);
 
 const UpdatePlanParameters = Type.Object({
@@ -51,54 +55,78 @@ const UpdatePlanParameters = Type.Object({
   reset: Type.Optional(Type.Boolean({ description: "Start over only when the user changed the objective. Requires an explanation; otherwise preserve completed milestones in the unfinished plan." })),
   plan: Type.Array(PlanItemParameters, {
     maxItems: MAX_PLAN_ITEMS,
-    description: "The complete current plan, with optional nested children. Up to 3 levels and 40 total nodes. Exactly one leaf step is in progress while work remains. Keep completed milestones at their existing group paths until the plan is finished or explicitly reset.",
+    description: "The complete current plan, with optional nested children. Up to 3 levels and 40 total nodes. Exactly one leaf step is in progress while work remains. Keep completed milestones until the plan is finished or explicitly reset.",
   }),
-});
-
-interface UpdatePlanInput {
-  explanation?: string;
-  reset?: boolean;
-  plan: PlanItemInput[];
-}
+}, { additionalProperties: false });
 
 interface PlanToolDetails {
   plan: PlanState;
 }
 
-interface TransientPlanMessage {
-  role: "custom";
-  customType: string;
-  content: string;
-  display: boolean;
-  details?: unknown;
-  timestamp: number;
-}
+const planAnchorText = (state: PlanState): string => planIsActive(state) ? buildPlanContext(state) : PLAN_CLEARED_CONTEXT;
+
+/**
+ * update_plan results already show the model each plan it writes. A hidden
+ * checkpoint is persisted only when the visible conversation stops showing the
+ * current plan: after compaction, branch navigation, restore, or /plan clear.
+ */
+const planAnchor = createContextAnchor<PlanState>({
+  customType: PLAN_CONTEXT_TYPE,
+  render: planAnchorText,
+  readMessage: (message) => {
+    if (message.role !== "toolResult" || message.toolName !== "update_plan" || message.isError) return undefined;
+    const state = decodePlanState((message.details as Partial<PlanToolDetails> | undefined)?.plan);
+    return state ? planAnchorText(state) : undefined;
+  },
+  emptyText: PLAN_CLEARED_CONTEXT,
+});
 
 export default function planExtension(pi: ExtensionAPI): void {
   let plan = createPlanState();
   let generation = 0;
-  let view: PlanView = "compact";
+  let view: PlanView = "card";
+  // A finished plan stays on screen through the response that finished it and
+  // hides at the next user prompt.
+  let finishedVisible = false;
+
+  // Rendered rows per size, reused until the displayed state or theme changes.
+  const rendered = new Map<string, string[] | string>();
+  let renderedTheme: Theme | undefined;
+  const cached = <T extends string[] | string>(key: string, theme: Theme, render: () => T): T => {
+    if (theme !== renderedTheme) { rendered.clear(); renderedTheme = theme; }
+    let value = rendered.get(key) as T | undefined;
+    if (value === undefined) rendered.set(key, value = render());
+    return value;
+  };
 
   const overlayCard = registerOverlayCard({
     id: "plan",
     order: 10,
-    width: 48,
+    width: 50,
     minBodyHeight: 1,
     minTerminalWidth: 72,
     minTerminalHeight: 12,
-    visible: () => view !== "hide" && planIsActive(plan),
+    visible: () => view !== "hide" && (planIsActive(plan) || (finishedVisible && plan.items.length > 0)),
     presentation: () => view === "compact" ? "line" : "card",
-    renderSummary: (width, theme) => renderPlanSummary(plan, width, theme),
-    title: (theme) => planOverlayTitle(plan, theme),
-    renderBody: (width, maxHeight, theme) => renderPlanOverlayBody(plan, width, maxHeight, theme),
+    renderSummary: (width, theme) => cached(`line:${width}`, theme, () => renderPlanSummary(plan, width, theme)),
+    title: (theme) => cached("title", theme, () => planOverlayTitle(plan, theme)),
+    renderBody: (width, maxHeight, theme) => cached(`body:${width}:${maxHeight}`, theme, () => renderPlanOverlayBody(plan, width, maxHeight, theme)),
   });
+
+  const refresh = () => {
+    rendered.clear();
+    overlayCard.invalidate();
+  };
 
   const commit = (next: PlanState) => {
     const entry: PlanEntry = { version: next.items.some((item) => item.children) ? 2 : 1, plan: next };
     pi.appendEntry(ENTRY_TYPE, entry);
     plan = next;
-    overlayCard.invalidate();
+    finishedVisible = next.items.length > 0 && !planIsActive(next);
+    refresh();
   };
+
+  const syncAnchor = (ctx: AnchorContext) => planAnchor.sync(pi, ctx, plan);
 
   const clearPlan = async (ctx: ExtensionCommandContext) => {
     if (plan.items.length === 0) {
@@ -111,6 +139,7 @@ export default function planExtension(pi: ExtensionAPI): void {
     if (!confirmed || version !== generation) return;
     if (snapshot !== plan) { ctx.ui.notify("Plan changed while confirming. Review the current plan before clearing it.", "warning"); return; }
     commit(createPlanState());
+    syncAnchor(ctx);
     ctx.ui.notify("Plan cleared.", "info");
   };
 
@@ -159,7 +188,7 @@ export default function planExtension(pi: ExtensionAPI): void {
       else if (command === "compact" || command === "card" || command === "hide") {
         pi.appendEntry(VIEW_ENTRY_TYPE, { version: 1, view: command });
         view = command;
-        overlayCard.invalidate();
+        refresh();
         ctx.ui.notify(`Plan display: ${view === "hide" ? "hidden" : view}.`, "info");
       }
       else if (command === "status") ctx.ui.notify(plan.items.length > 0 ? renderPlanText(plan) : "No plan is set.", "info");
@@ -174,6 +203,8 @@ export default function planExtension(pi: ExtensionAPI): void {
     description: "Create or replace the tactical execution plan for meaningful multi-step work.",
     parameters: UpdatePlanParameters,
     promptGuidelines: PLAN_PROMPT_GUIDELINES,
+    prepareArguments: prepareUpdatePlanArguments,
+    executionMode: "sequential",
     async execute(_toolCallId, params: UpdatePlanInput) {
       commit(replacePlan(plan, params.plan, params.explanation, undefined, params.reset));
       return {
@@ -191,32 +222,13 @@ export default function planExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("context", (event) => {
-    const activePlan = planIsActive(plan) ? plan : undefined;
-    const transformed: typeof event.messages = [];
-    for (const message of event.messages) {
-      if ((message as { customType?: string }).customType !== PLAN_CONTEXT_TYPE) transformed.push(message);
-    }
-    if (!activePlan) {
-      return transformed.length === event.messages.length ? undefined : { messages: transformed };
-    }
-
-    transformed.push({
-      role: "custom",
-      customType: PLAN_CONTEXT_TYPE,
-      content: buildPlanContext(activePlan),
-      display: false,
-      details: { transient: true },
-      timestamp: Date.now(),
-    } as unknown as TransientPlanMessage as typeof event.messages[number]);
-    return { messages: transformed };
-  });
-
   const restore = (ctx: ExtensionContext) => {
     generation++;
     plan = createPlanState();
-    view = "compact";
+    view = "card";
+    let promptedSincePlan = false;
     for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "message" && entry.message.role === "user") promptedSincePlan = true;
       if (entry.type !== "custom") continue;
       if (entry.customType === VIEW_ENTRY_TYPE) {
         const saved = entry.data as { version?: unknown; view?: unknown } | null;
@@ -224,13 +236,20 @@ export default function planExtension(pi: ExtensionAPI): void {
       }
       if (entry.customType !== ENTRY_TYPE) continue;
       const restored = decodePlanEntry(entry.data);
-      if (restored) plan = restored.plan;
+      if (restored) { plan = restored.plan; promptedSincePlan = false; }
     }
-    overlayCard.invalidate();
+    finishedVisible = !promptedSincePlan && plan.items.length > 0 && !planIsActive(plan);
+    refresh();
   };
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
-  pi.on("session_compact", () => overlayCard.invalidate());
+  pi.on("input", (event) => {
+    if (event.source === "extension" || !finishedVisible) return;
+    finishedVisible = false;
+    refresh();
+  });
+
+  pi.on("session_start", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
+  pi.on("session_tree", (_event, ctx) => { restore(ctx); syncAnchor(ctx); });
+  pi.on("session_compact", (_event, ctx) => { refresh(); syncAnchor(ctx); });
   pi.on("session_shutdown", () => { generation++; overlayCard.unregister(); });
 }

@@ -131,7 +131,7 @@ const activePlan = {
   ],
 };
 
-test("persists full replacements and injects plan context transiently", async () => {
+test("persists full replacements and leaves provider requests untouched", async () => {
   const { pi, ctx } = harness();
   await pi.emit("session_start", { reason: "startup" }, ctx);
   const update = pi.tools.get("update_plan");
@@ -141,23 +141,16 @@ test("persists full replacements and injects plan context transiently", async ()
   expect(pi.entries.at(-1).data.version).toBe(1);
   expect(pi.entries.at(-1).data.plan.items[1].status).toBe("in_progress");
   expect(result.content[0].text).toContain("Current: Implement extension");
+  expect(result.content[0].text).toContain("- [>] Implement extension");
 
-  const [contextResult] = await pi.emit("context", {
-    messages: [
-      { role: "custom", customType: "plan-context", content: "stale", timestamp: 1 },
-      { role: "user", content: "continue", timestamp: 2 },
-    ],
-  }, ctx);
-  expect(contextResult.messages).toHaveLength(2);
-  expect(contextResult.messages[0].role).toBe("user");
-  expect(contextResult.messages[1].customType).toBe("plan-context");
-  expect(contextResult.messages[1].content).toContain("Implement extension");
-  expect(pi.entries.some((entry) => JSON.stringify(entry).includes("Active execution plan"))).toBe(false);
+  // The tool result carries the plan; nothing is appended to each request.
+  expect(pi.handlers.has("context")).toBe(false);
+  expect(pi.sent).toEqual([]);
 
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
 });
 
-test("completed plans disappear from provider context but remain restorable", async () => {
+test("completed plans remain restorable", async () => {
   const { pi, ctx, notifications } = harness();
   await pi.emit("session_start", { reason: "startup" }, ctx);
   const update = pi.tools.get("update_plan");
@@ -166,11 +159,6 @@ test("completed plans disappear from provider context but remain restorable", as
     explanation: "All work verified",
     plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })),
   }, undefined, undefined, ctx);
-
-  const [contextResult] = await pi.emit("context", {
-    messages: [{ role: "custom", customType: "plan-context", content: "stale", timestamp: 1 }],
-  }, ctx);
-  expect(contextResult.messages).toEqual([]);
 
   await pi.emit("session_tree", {}, ctx);
   await pi.commands.get("plan").handler("status", ctx);
@@ -221,7 +209,8 @@ test("coexists with goal context during an automatic goal run", async () => {
   let event = {
     messages: [
       { role: "user", content: "continue", timestamp: 1 },
-      { role: "custom", ...goalMarker, timestamp: 2 },
+      { role: "toolResult", toolName: "update_plan", content: "Plan updated", timestamp: 2 },
+      { role: "custom", ...goalMarker, timestamp: 3 },
     ],
   };
   for (const handler of pi.handlers.get("context") ?? []) {
@@ -230,16 +219,19 @@ test("coexists with goal context during an automatic goal run", async () => {
   }
 
   const goalContext = event.messages.find((message: any) => message.customType === "goal-context");
-  const planContext = event.messages.find((message: any) => message.customType === "plan-context");
   expect(goalContext?.content).toContain("Ship a multi-step integrated feature");
   expect(goalContext?.content).toContain("If update_plan is available");
-  expect(planContext?.content).toContain("Implement extension");
+  expect(event.messages.find((message: any) => message.customType === "plan-context")).toBeUndefined();
+  expect(event.messages[1]).toMatchObject({ role: "toolResult", toolName: "update_plan" });
 
   const overlay = new OverlayStackView(plainTheme);
   overlay.setViewport(120, 40);
   const rendered = overlay.render(58).join("\n");
   expect(rendered).toContain("Goal ● ACTIVE");
-  expect(rendered).not.toContain("Plan 1/3");
+  expect(rendered).toContain("Plan 1/3");
+  expect(rendered).toContain("● Implement extension");
+  await pi.commands.get("plan").handler("compact", ctx);
+  expect(overlay.render(58).join("\n")).not.toContain("Plan 1/3");
   expect(overlay.renderCompact(120).join("\n")).toContain("Plan 1/3 · ● Implement extension");
 
   await pi.emit("tool_execution_end", {}, ctx);
@@ -287,19 +279,19 @@ test("step descriptions follow selection and expand without making the receipt v
 });
 
 test("nested plans persist as version two and restore branch-local leaf progress", async () => {
-  const { pi, ctx } = harness();
+  const { pi, ctx, notifications } = harness();
   await pi.emit("session_start", {}, ctx);
   await pi.tools.get("update_plan").execute("nested", { plan: [{ step: "Build", children: [{ step: "Implement", status: "completed" }, { step: "Verify", status: "in_progress" }] }] });
   expect(pi.entries.at(-1).data.version).toBe(2);
   expect(pi.entries.at(-1).data.plan.items[0].status).toBe("in_progress");
   const branch = [...pi.entries];
   await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => [] } });
-  const [empty] = await pi.emit("context", { messages: [] }, ctx);
-  expect(empty).toBeUndefined();
+  await pi.commands.get("plan").handler("status", ctx);
+  expect(notifications.at(-1)).toBe("No plan is set.");
   await pi.emit("session_tree", {}, { ...ctx, sessionManager: { getBranch: () => branch } });
-  const [restored] = await pi.emit("context", { messages: [] }, ctx);
-  expect(restored.messages[0].content).toContain("1/2 finalized");
-  expect(restored.messages[0].content).toContain("  - [>] Verify");
+  await pi.commands.get("plan").handler("status", ctx);
+  expect(notifications.at(-1)).toContain("Plan 1/2");
+  expect(notifications.at(-1)).toContain("  ● Verify");
   await pi.emit("session_shutdown", {}, ctx);
 });
 
@@ -316,7 +308,7 @@ test("a late clear confirmation cannot remove a replaced plan", async () => {
   await pi.emit("session_shutdown", {}, ctx);
 });
 
-test("plan display defaults to one line and restores compact, card, and hidden choices per branch", async () => {
+test("plan display defaults to the tree card and restores compact, card, and hidden choices per branch", async () => {
   const { pi, ctx } = harness();
   const overlay = new OverlayStackView(plainTheme);
   overlay.setViewport(120, 80);
@@ -324,6 +316,12 @@ test("plan display defaults to one line and restores compact, card, and hidden c
   try {
     await pi.emit("session_start", {}, ctx);
     await pi.tools.get("update_plan").execute("plan", activePlan);
+    expect(overlay.preferredWidth()).toBe(50);
+    expect(overlay.render(50).join("\n")).toContain("○ Verify integration");
+    expect(overlay.render(50).length).toBe(5);
+    expect(overlay.renderCompact(120)).toEqual([]);
+
+    await command.handler("compact", ctx);
     const initial = [...pi.entries];
     expect(overlay.render(48)).toEqual([]);
     expect(overlay.renderCompact(120)).toHaveLength(1);
@@ -331,17 +329,13 @@ test("plan display defaults to one line and restores compact, card, and hidden c
 
     await command.handler("card", ctx);
     const cardBranch = [...pi.entries];
-    expect(overlay.preferredWidth()).toBe(48);
-    expect(overlay.render(48).join("\n")).toContain("Next  Verify integration");
-    expect(overlay.render(48).length).toBeLessThanOrEqual(5);
+    expect(overlay.render(50).join("\n")).toContain("○ Verify integration");
     expect(overlay.renderCompact(120)).toEqual([]);
 
     await command.handler("hide", ctx);
     const hiddenBranch = [...pi.entries];
     expect(overlay.render(48)).toEqual([]);
     expect(overlay.renderCompact(120)).toEqual([]);
-    const [context] = await pi.emit("context", { messages: [] }, ctx);
-    expect(context.messages[0].content).toContain("Implement extension");
     await command.handler("", ctx);
     expect(pi.entries).toHaveLength(hiddenBranch.length);
 
@@ -356,6 +350,8 @@ test("plan display defaults to one line and restores compact, card, and hidden c
     await command.handler("compact", ctx);
     expect(pi.entries.at(-1)).toMatchObject({ customType: "plan-view", data: { version: 1, view: "compact" } });
     await pi.tools.get("update_plan").execute("finished", { plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })) });
+    expect(overlay.renderCompact(120)[0]).toContain("Plan 3/3 · ✓ Complete");
+    await pi.emit("input", { source: "interactive", text: "next" }, ctx);
     expect(overlay.renderCompact(120)).toEqual([]);
   } finally {
     await pi.emit("session_shutdown", {}, ctx);
@@ -372,10 +368,10 @@ test("malformed display entries keep the default and failed saves do not change 
       pi.entries.push({ type: "custom", customType: "plan-view", data });
     }
     await pi.emit("session_start", {}, ctx);
-    expect(overlay.renderCompact(100)).toHaveLength(1);
+    expect(overlay.render(50).join("\n")).toContain("Plan 1/3");
     pi.appendEntry = () => { throw new Error("save failed"); };
     await expect(pi.commands.get("plan").handler("hide", ctx)).rejects.toThrow("save failed");
-    expect(overlay.renderCompact(100)).toHaveLength(1);
+    expect(overlay.render(50).join("\n")).toContain("Plan 1/3");
   } finally {
     await pi.emit("session_shutdown", {}, ctx);
   }
@@ -422,4 +418,48 @@ test("continuity follows restored branch state and an explicit reset remains app
     expect(pi.entries.at(-1).data.plan.explanation).toContain("documentation project");
     expect(pi.entries[0].data.plan.items[0].step).toBe("Research behavior");
   } finally { await pi.emit("session_shutdown", {}, ctx); }
+});
+
+test("a finished plan stays visible until the next user prompt", async () => {
+  const { pi, ctx, notifications } = harness();
+  const overlay = new OverlayStackView(plainTheme);
+  overlay.setViewport(120, 40);
+  const finished = { plan: activePlan.plan.map((item) => ({ ...item, status: "completed" })) };
+  try {
+    await pi.emit("session_start", {}, ctx);
+    await pi.tools.get("update_plan").execute("plan", activePlan);
+    await pi.tools.get("update_plan").execute("done", finished);
+    const card = overlay.render(50).join("\n");
+    expect(card).toContain("Plan 3/3 · Complete");
+    expect(card).toContain("✓ Verify integration");
+    expect(overlay.render(50)).toEqual(overlay.render(50));
+
+    await pi.emit("agent_settled", {}, ctx);
+    await pi.emit("input", { source: "extension", text: "automated" }, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+
+    // Restoring the same branch before any new prompt keeps it visible.
+    await pi.emit("session_tree", {}, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+
+    await pi.emit("input", { source: "interactive", text: "next task" }, ctx);
+    expect(overlay.render(50)).toEqual([]);
+    expect(overlay.renderCompact(120)).toEqual([]);
+    await pi.commands.get("plan").handler("status", ctx);
+    expect(notifications.at(-1)).toContain("✓ Verify integration");
+
+    const prompted = [...pi.entries, { type: "message", message: { role: "user", content: "next task" } }];
+    await pi.emit("session_start", {}, { ...ctx, sessionManager: { getBranch: () => prompted } });
+    expect(overlay.render(50)).toEqual([]);
+
+    // A cancelled finish reads as closed and also hides after the next prompt.
+    await pi.emit("session_start", {}, ctx);
+    expect(overlay.render(50).join("\n")).toContain("Plan 3/3 · Complete");
+    await pi.tools.get("update_plan").execute("new", { plan: [{ step: "Retired", status: "cancelled" }] });
+    expect(overlay.render(50).join("\n")).toContain("Plan 0/1 · 1 cancelled · Closed");
+    await pi.emit("input", { source: "rpc", text: "next" }, ctx);
+    expect(overlay.render(50)).toEqual([]);
+  } finally {
+    await pi.emit("session_shutdown", {}, ctx);
+  }
 });

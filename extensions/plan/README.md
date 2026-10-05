@@ -1,17 +1,27 @@
 # plan
 
-Tracks a multi-step plan in one line above the editor, with full details on demand.
+Tracks a multi-step plan in a compact tree card, with full details on demand.
 
 ```text
-Plan 1/3 · ● Verify the implementation                              /plan
+╭ Plan 3/8 ──────────────────────────────────────╮
+│ ✓ Research 2/2                                 │
+│ ● Build 1/3                                    │
+│   ✓ Implement API                              │
+│   ● Wire the tree card                         │
+│     Expand the active group, collapse the      │
+│     others, and keep the current step visible… │
+│   ○ Polish                                     │
+│ ○ Release 0/2                                  │
+│ ○ Announce                                     │
+╰────────────────────────────────────────────────╯
 ```
 
 ## Usage
 
 ```text
 /plan          Open the plan panel
-/plan compact  One progress line above the editor (default)
-/plan card     Small card with the current and next steps
+/plan card     Tree card in the top-right corner (default)
+/plan compact  One progress line above the editor
 /plan hide     Hide the passive display; keep tracking
 /plan status   Print the current plan
 /plan clear    Remove the plan
@@ -21,21 +31,24 @@ Ctrl+Shift+O   Toggle all workflow cards
 
 The `update_plan` agent tool replaces the complete plan tree. Leaf steps are
 `pending`, `in_progress`, `completed`, or `cancelled`. An unfinished plan must have
-exactly one in-progress leaf. Groups use a `children` array and may omit `status`;
+exactly one in-progress leaf, unless its `explanation` says the remaining work is
+blocked, deferred, paused, on hold, or waiting; then every unfinished leaf may be
+pending. Groups use a `children` array and may omit `status`;
 their status and progress are derived from descendants, so a parent cannot claim
 completion over unfinished children. Progress counts leaves, not parent groups.
 Cancelled work remains separate from successful completion in progress totals.
 
 Steps and groups accept an optional `description` (up to 600 characters) for
 implementation context or verification details. Keep `step` concise. Descriptions
-are saved with the plan, included in active model context, and shown when their
+are saved with the plan, included in tool results and checkpoints, and shown when their
 row is selected in `/plan`. Long descriptions remain complete in `/plan status`
-and expanded tool results; the passive progress line stays compact.
+and expanded tool results; the card shows at most two rows for the current step.
 
-While a plan is unfinished, updates must retain every completed leaf at its
-existing group path with `completed` status. Future work can be refined and
-reordered. Matching ignores case and extra whitespace; identically named steps
-in different groups remain separate milestones. An invalid replacement leaves
+While a plan is unfinished, updates must retain every completed leaf with
+`completed` status. Completed leaves are matched by name, so they may move
+between groups when the plan is regrouped. Future work can be refined and
+reordered. Matching ignores case and extra whitespace; a name completed in
+several groups must stay completed as many times. An invalid replacement leaves
 the current plan and saved history intact.
 
 For a new objective requested by the user, `update_plan` accepts `reset: true`
@@ -61,20 +74,84 @@ Example tool input:
 }
 ```
 
-The default line shows completed/total steps and the current task. Cancelled
-steps are counted separately. Display choices follow the session branch through
-reload and navigation. Finished plans disappear from the passive display.
+### Flat rows
 
-The optional card has at most three body rows: current step, next pending step,
-and a remaining count. It falls back to the progress line in narrow terminals.
-`/overlay hide` hides either presentation.
+The schema is strict (`additionalProperties: false`) and calls run one at a
+time (`executionMode: "sequential"`). Before validation, a compatibility shim
+accepts the flat shape some models emit:
+
+- rows with `depth` (0 = top level, growing by at most one per row, up to 2)
+  are nested into `children` under the closest preceding shallower row;
+- `reason` becomes `explanation` (an explicit `explanation` wins);
+- parent rows may omit `status`; it is derived from their children.
+
+```json
+{
+  "reason": "Split verification",
+  "plan": [
+    { "step": "Build", "depth": 0 },
+    { "step": "Implement", "status": "completed", "depth": 1 },
+    { "step": "Verify", "status": "in_progress", "depth": 1 }
+  ]
+}
+```
+
+Invalid depths are rejected with an error that points to `children`.
+
+### Display
+
+The default card shows the whole tree in 50 columns. Groups on the path to the
+current step are expanded; every other group collapses to `name n/m`
+(finalized/total leaves). Up to two rows of the current step's description
+appear under it, ending in `…` when longer. The card uses at most 14 body rows
+and the overlay's height budget; when the tree is taller, rows around the current
+step stay visible (descriptions shrink first) and a `+N more · /plan` row counts
+the hidden ones. Rows are truncated to the card width, and rendered rows are
+reused until the plan, display, or theme changes.
+
+The card falls back to the progress line in terminals narrower than 72 columns
+or shorter than 12 rows. `/plan compact` always uses that line: completed/total
+steps and the current task.
+
+```text
+Plan 1/3 · ● Verify the implementation                              /plan
+```
+
+Cancelled steps are counted separately. Display choices follow the session
+branch through reload and navigation. `/overlay hide` hides either
+presentation; `/plan hide` hides only the plan.
+
+A finished plan stays visible, marked `Complete` (or `Closed` when steps were
+cancelled), through the rest of the response that finished it, and hides at the
+next interactive or RPC prompt. Extension-sent input does not hide it. Reload
+and navigation keep it visible until a user message follows it on the branch.
 
 The panel starts with the active group expanded. Use ↑/↓ to move, ←/→ to fold
 or enter groups, Space to toggle a group, and `q` or Escape to close.
 `/plan status` prints the full tree. Explanations and completed steps remain
 available in the panel and expanded tool results.
 
-Plan state follows session branches and is injected only while active. Plans describe the current route through work; they do not replace persistent goal completion checks.
+Plans describe the current route through work; they do not replace persistent goal completion checks.
+
+### Model context
+
+Each `update_plan` result already shows the model the complete plan, so nothing
+is added to individual provider requests. This keeps the conversation prefix
+identical between requests and preserves prompt caching.
+
+A hidden `plan-context` checkpoint is appended to the session only when the
+visible conversation stops showing the current plan:
+
+- after compaction removes the latest `update_plan` result;
+- after `/tree` navigation, resume, or reload when the branch's visible
+  messages show a different plan;
+- after `/plan clear`, as one notice that the earlier plan no longer applies.
+
+The newest visible `update_plan` result or checkpoint is compared with the
+current plan first, so repeated restores never send a duplicate. Finished plans
+are treated like no plan. When idle, the checkpoint is appended without starting
+a turn; during a run it is delivered as steering before the next model request.
+Plan state follows session branches.
 
 ## Dependencies and limitations
 
@@ -84,7 +161,8 @@ Tool results use a single-line receipt. Expand the result or open `/plan` for th
   unique within a group; repeated names in different groups are allowed.
 - Older flat plans remain readable. Fold state is local to the panel; the plan
   tree persists with session branches.
-- Uses Pi's public extension, session, context, and TUI APIs.
+- Uses Pi's public extension, session, and TUI APIs. Checkpoints read
+  `sessionManager.buildSessionProjection()` (Pi 1.0); without it none are sent.
 - Requires [`overlay-stack`](../overlay-stack/).
 - Uses host-provided `typebox` for the tool schema.
 - Persistent TUI and RPC sessions are supported; panels require the TUI.
