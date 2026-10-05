@@ -15,7 +15,20 @@ const FILLER = new Set([
   "do", "does", "did", "how", "what", "why", "when", "should", "let", "lets", "just", "now",
 ]);
 
-/** Bound and normalize model titles; reject empty or generic results. */
+const FILE_EXTENSION = /\.(?:png|jpe?g|gif|webp|bmp|heic|svg|pdf|txt|log|md|json|jsonl|ya?ml|toml|csv|tsv|html?|css|[cm]?[jt]sx?|go|py|rb|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|zsh|fish|zip|tar|gz|tgz)$/i;
+
+/** Absolute, home-relative, file-URL, and pasted-clipboard paths name an input, not a subject. */
+function isAbsoluteOrTemporaryPath(text: string): boolean {
+  return /pi-clipboard-[0-9a-f-]{8,}/i.test(text) || /^(?:file:?\/\/|~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/.test(text);
+}
+
+/** A whole title that is a path, such as `/tmp/x.png` or `src/index.ts`, is rejected. */
+export function isPathLikeTitle(title: string): boolean {
+  const text = title.trim();
+  return isAbsoluteOrTemporaryPath(text) || (!/\s/.test(text) && /[\\/]/.test(text) && FILE_EXTENSION.test(text));
+}
+
+/** Bound and normalize model titles; reject empty, generic, or path-like results. */
 export function normalizeTitle(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   let title = raw
@@ -25,7 +38,7 @@ export function normalizeTitle(raw: unknown): string | undefined {
     .replace(/\s+/g, " ")
     .replace(/[.,;:]+$/, "")
     .trim();
-  if (!title || GENERIC_TITLES.test(title)) return undefined;
+  if (!title || GENERIC_TITLES.test(title) || isPathLikeTitle(title)) return undefined;
 
   const words = title.split(" ").filter(Boolean);
   if (words.length > MAX_TITLE_WORDS) title = words.slice(0, MAX_TITLE_WORDS).join(" ");
@@ -66,7 +79,9 @@ export function provisionalTitle(prompt: string, maxWords = 4): string | undefin
     .trim();
   if (!cleaned) return undefined;
 
-  const words = cleaned.split(" ");
+  // Pasted absolute or temporary paths never name a session; project-relative paths may.
+  const words = cleaned.split(" ").filter((word) => !isAbsoluteOrTemporaryPath(word));
+  if (words.length === 0) return undefined;
   const meaningful = words.filter((word) => word.length > 1 && !FILLER.has(word.toLowerCase()));
   const chosen = (meaningful.length > 0 ? meaningful : words).slice(0, maxWords);
   return normalizeTitle(chosen.join(" "));

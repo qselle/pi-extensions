@@ -26,7 +26,7 @@ flatten whitespace, and strip terminal controls. Setting a name through `/rename
 or `/title set` cancels any pending title request so a late model response cannot
 replace it. Cancelling the name prompt leaves the current name unchanged.
 
-The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder.
+The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder. Path-like results are rejected too: absolute, home-relative, `file://`, drive, and pasted-clipboard paths (`/tmp/x.png`, `~/Downloads/…`), or a single path token with a file extension (`src/index.ts`). A prompt that is only such a pasted path does not count as the first meaningful request.
 
 ### Tab link for Herdr
 
