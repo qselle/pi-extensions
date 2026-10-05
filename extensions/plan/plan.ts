@@ -23,6 +23,12 @@ export interface PlanItemInput {
   children?: PlanItemInput[];
 }
 
+export interface UpdatePlanInput {
+  explanation?: string;
+  reset?: boolean;
+  plan: PlanItemInput[];
+}
+
 export interface PlanState {
   items: PlanItem[];
   explanation?: string;
@@ -87,6 +93,49 @@ function preserveCompletedMilestones(previous: readonly PlanItem[], next: readon
   }
 }
 
+type JsonObject = Record<string, unknown>;
+const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * Accept the flat plan shape many models emit before schema validation: rows
+ * ordered parent-first with a `depth` (0 = top level) become nested `children`,
+ * and `reason` becomes `explanation`. Other payloads pass through unchanged.
+ */
+export function prepareUpdatePlanArguments(args: unknown): UpdatePlanInput {
+  if (!isObject(args)) return args as unknown as UpdatePlanInput;
+  let prepared: JsonObject = args;
+  if ("reason" in prepared) {
+    const { reason, ...rest } = prepared;
+    prepared = rest.explanation === undefined && reason !== undefined ? { ...rest, explanation: reason } : rest;
+  }
+  const rows = prepared.plan;
+  if (Array.isArray(rows) && rows.some((row) => isObject(row) && "depth" in row)) prepared = { ...prepared, plan: nestFlatRows(rows) };
+  return prepared as unknown as UpdatePlanInput;
+}
+
+function nestFlatRows(rows: readonly unknown[]): JsonObject[] {
+  const roots: JsonObject[] = [];
+  const ancestors: JsonObject[] = [];
+  rows.forEach((row, index) => {
+    if (!isObject(row)) throw new Error(`Plan step ${index + 1} must be an object with a step.`);
+    const { depth = 0, ...item } = row;
+    if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 0) {
+      throw new Error(`Plan step ${index + 1} has an invalid depth; use a whole number from 0, or nest steps in \`children\`.`);
+    }
+    if (depth > ancestors.length) {
+      throw new Error(`Plan step ${index + 1} skips a level: depth may grow by one from the previous row. List each group before its children, or nest steps in \`children\`.`);
+    }
+    if (depth >= MAX_PLAN_DEPTH) throw new Error(`Plans support at most ${MAX_PLAN_DEPTH} levels (depth 0–${MAX_PLAN_DEPTH - 1}).`);
+    const node: JsonObject = { ...item };
+    ancestors.length = depth;
+    const parent = ancestors.at(-1);
+    if (parent) parent.children = [...Array.isArray(parent.children) ? parent.children : [], node];
+    else roots.push(node);
+    ancestors.push(node);
+  });
+  return roots;
+}
+
 export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
   let count = 0;
   const normalize = (nodes: readonly PlanItemInput[], depth: number): PlanItem[] => {
@@ -113,6 +162,7 @@ export function validatePlanItems(items: readonly PlanItemInput[]): PlanItem[] {
         const status: PlanItemStatus = stats.cancelled === stats.total ? "cancelled" : stats.finished === stats.total ? "completed" : stats.inProgress ? "in_progress" : "pending";
         return { step, ...details, status, children };
       }
+      if (item.status === undefined) throw new Error(`Plan step "${step}" needs a status (pending, in_progress, completed, or cancelled). Groups omit status and list their steps in \`children\`.`);
       if (!isPlanItemStatus(item.status)) throw new Error(`Unknown plan status for step ${index + 1}: ${String(item.status)}`);
       return { step, ...details, status: item.status };
     });

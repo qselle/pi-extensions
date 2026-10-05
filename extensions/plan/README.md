@@ -61,6 +61,32 @@ Example tool input:
 }
 ```
 
+### Flat rows
+
+The schema is strict (`additionalProperties: false`) and calls run one at a
+time (`executionMode: "sequential"`). Before validation, a compatibility shim
+accepts the flat shape some models emit:
+
+- rows with `depth` (0 = top level, growing by at most one per row, up to 2)
+  are nested into `children` under the closest preceding shallower row;
+- `reason` becomes `explanation` (an explicit `explanation` wins);
+- parent rows may omit `status`; it is derived from their children.
+
+```json
+{
+  "reason": "Split verification",
+  "plan": [
+    { "step": "Build", "depth": 0 },
+    { "step": "Implement", "status": "completed", "depth": 1 },
+    { "step": "Verify", "status": "in_progress", "depth": 1 }
+  ]
+}
+```
+
+Invalid depths are rejected with an error that points to `children`.
+
+## Display
+
 The default line shows completed/total steps and the current task. Cancelled
 steps are counted separately. Display choices follow the session branch through
 reload and navigation. Finished plans disappear from the passive display.

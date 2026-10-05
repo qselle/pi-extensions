@@ -15,10 +15,11 @@ import {
   decodePlanState,
   planIsActive,
   planResponse,
+  prepareUpdatePlanArguments,
   replacePlan,
   type PlanEntry,
-  type PlanItemInput,
   type PlanState,
+  type UpdatePlanInput,
 } from "./plan.ts";
 import {
   PLAN_CLEARED_CONTEXT,
@@ -46,7 +47,7 @@ const itemParameters = (depth: number): TSchema => Type.Object({
   description: Type.Optional(Type.String({ maxLength: MAX_PLAN_DESCRIPTION_CHARS, description: "Optional useful context or verification details. Keep the step title concise." })),
   status: Type.Optional(StringEnum(["pending", "in_progress", "completed", "cancelled"] as const, { description: "Required for leaf steps. Group status is derived from children." })),
   ...(depth < MAX_PLAN_DEPTH ? { children: Type.Optional(Type.Array(itemParameters(depth + 1), { minItems: 1, maxItems: MAX_PLAN_ITEMS })) } : {}),
-});
+}, { additionalProperties: false });
 const PlanItemParameters = itemParameters(1);
 
 const UpdatePlanParameters = Type.Object({
@@ -54,15 +55,9 @@ const UpdatePlanParameters = Type.Object({
   reset: Type.Optional(Type.Boolean({ description: "Start over only when the user changed the objective. Requires an explanation; otherwise preserve completed milestones in the unfinished plan." })),
   plan: Type.Array(PlanItemParameters, {
     maxItems: MAX_PLAN_ITEMS,
-    description: "The complete current plan, with optional nested children. Up to 3 levels and 40 total nodes. Exactly one leaf step is in progress while work remains. Keep completed milestones at their existing group paths until the plan is finished or explicitly reset.",
+    description: "The complete current plan, with optional nested children. Up to 3 levels and 40 total nodes. Exactly one leaf step is in progress while work remains. Keep completed milestones until the plan is finished or explicitly reset.",
   }),
-});
-
-interface UpdatePlanInput {
-  explanation?: string;
-  reset?: boolean;
-  plan: PlanItemInput[];
-}
+}, { additionalProperties: false });
 
 interface PlanToolDetails {
   plan: PlanState;
@@ -189,6 +184,8 @@ export default function planExtension(pi: ExtensionAPI): void {
     description: "Create or replace the tactical execution plan for meaningful multi-step work.",
     parameters: UpdatePlanParameters,
     promptGuidelines: PLAN_PROMPT_GUIDELINES,
+    prepareArguments: prepareUpdatePlanArguments,
+    executionMode: "sequential",
     async execute(_toolCallId, params: UpdatePlanInput) {
       commit(replacePlan(plan, params.plan, params.explanation, undefined, params.reset));
       return {
