@@ -50,7 +50,10 @@ failed tools stay visible in compact mode.
 branch, including after reload. Failed tools and interrupted/error responses are
 visible; “settled” describes the lifecycle event, not proof the task succeeded.
 
-Missing usage is reported explicitly, separately for each category. Known zero
+Run totals include every model response, usage that tools report on their results
+(nested model calls), and compactions that happen during the run, so a turn's cost
+matches the footer's change over that turn. Compacting while idle is not attributed
+to a turn. Missing usage is reported explicitly, separately for each category. Known zero
 values remain zero. A partial total is the sum of reported values only. Timing
 covers the entire agent run, including tool execution and provider waits; it is
 not model token throughput. Queued follow-ups belong to their actual agent run.
@@ -72,6 +75,10 @@ windows can include provider stalls and reasoning, so the rate is an observation
 of the run, not a provider benchmark. Older saved summaries lack these measurements
 and remain readable.
 
+Older sessions may contain `turn-stats` entries with whole-turn totals and average
+timing. They render as the same compact row (read-only, never written). Their tool
+counts and outcomes were not recorded, and timing comes from stored averages.
+
 ## Dependencies and limitations
 
 - Pi public lifecycle, custom entries, branch history and rendering APIs; no new
@@ -80,8 +87,9 @@ and remain readable.
   response, including absent measurements, for optional step timing rules.
 - No network calls, timers or prompt text in summary records. These custom entries
   are UI metadata and are not injected into model context.
-- Main-agent assistant usage only. Child agents and independent title/side-chat
-  requests are excluded; use usage-export for recorded child-agent accounting.
+- Main-agent responses, tool-reported usage and in-run compactions. Child-agent
+  usage records and independent title/side-chat requests are excluded; use
+  usage-export for recorded child-agent accounting.
 - Recorded costs depend on the provider adapter and are not authoritative billing.
 - A crash or session change before settlement does not fabricate a completed
   summary. Interrupted responses are counted when the run subsequently settles.

@@ -1,9 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { decodeSummary, emptySummary, recordResponse, summaryText, type Summary } from "./stats.ts";
+import { decodeLegacySummary, decodeSummary, emptySummary, recordExtraUsage, recordResponse, summaryText, type Summary } from "./stats.ts";
 import { addTiming, isFirstOutputEvent } from "./timing.ts";
 import { renderCompletion } from "./render.ts";
 import { isTelemetryStyle, telemetryStyle, TELEMETRY_ENTRY, TELEMETRY_CHANGED, RESPONSE_TIMING_EVENT } from "../../lib/telemetry.ts";
 const ENTRY = "turn-usage-summary";
+/** Per-turn totals written by older sessions; rendered read-only. */
+const LEGACY_ENTRY = "turn-stats";
+
+function storedSummary(entry: { type: string; customType?: string; data?: unknown }): Summary | undefined {
+  if (entry.type !== "custom") return;
+  if (entry.customType === ENTRY) return decodeSummary(entry.data);
+  if (entry.customType === LEGACY_ENTRY) return decodeLegacySummary(entry.data);
+}
 /** Full agent-run accounting, separate from individual response/work-block timing. */
 export default function turnStats(pi: ExtensionAPI, now: () => number = () => performance.now(), wallNow: () => number = Date.now): void {
   let current: Summary | undefined;
@@ -31,7 +39,13 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
   pi.on("tool_execution_end", (event) => { if (current && event.isError) current.failedTools++; });
   pi.on("message_end", (event, ctx) => {
     const message = event.message;
-    if (!current || message.role !== "assistant" || seen.has(message)) return;
+    if (!current || seen.has(message)) return;
+    if (message.role === "toolResult") {
+      seen.add(message);
+      recordExtraUsage(current, message.usage);
+      return;
+    }
+    if (message.role !== "assistant") return;
     seen.add(message);
     recordResponse(current, message);
     const timing = addTiming(current.timing!, sent, first, now(), message.usage?.output);
@@ -40,6 +54,8 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
     pi.events?.emit(RESPONSE_TIMING_EVENT, { sessionId: ctx?.sessionManager?.getSessionId?.(), ...timing });
     sent = undefined; first = undefined;
   });
+  // Compaction during the run is billed to it, as in the footer's session totals.
+  pi.on("session_compact", (event) => { if (current) recordExtraUsage(current, event.compactionEntry?.usage); });
   pi.on("agent_settled", () => {
     if (!current) return;
     const summary = current;
@@ -48,10 +64,10 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
     reset();
     if (summary.responses || summary.tools) pi.appendEntry(ENTRY, summary);
   });
-  pi.registerEntryRenderer(ENTRY, (entry, options, theme) => ({
+  for (const customType of [ENTRY, LEGACY_ENTRY]) pi.registerEntryRenderer(customType, (entry, options, theme) => ({
     invalidate() {},
     render(width) {
-      const summary = decodeSummary(entry.data);
+      const summary = storedSummary(entry);
       if (!summary || width <= 0 || style === "hide") return [];
       return renderCompletion(summary, width, theme, options.expanded || style === "full", entry.timestamp);
     },
@@ -68,7 +84,7 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
       }
       if (action) { ctx.ui.notify("Usage: /turn-stats [compact|full|hide]", "info"); return; }
       const summary = current ? { ...current, durationMs: Math.max(0, now() - started) }
-        : [...ctx.sessionManager.getBranch()].reverse().flatMap((entry) => entry.type === "custom" && entry.customType === ENTRY ? [decodeSummary(entry.data)] : []).find(Boolean);
+        : [...ctx.sessionManager.getBranch()].reverse().map(storedSummary).find(Boolean);
       ctx.ui.notify(summary ? summaryText(summary, true, Boolean(current)) : "No turn statistics recorded on this branch.", "info");
     },
   });
