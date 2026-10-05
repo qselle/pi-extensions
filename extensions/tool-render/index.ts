@@ -113,8 +113,10 @@ function bashBody(result: any, opts: any, theme: Theme, width: number, isError =
 		if (quietSuccess) {
 			header = []; // status and elapsed time are on the headline
 		} else {
-			// The job ID remains actionable; output cursors are only useful expanded.
-			header = header.map((line) => line.replace(/^(Job: \S+) · cursor: \d+/, "$1"));
+			// The job ID remains actionable; output cursors and the model's
+			// job_wait/job_stop hint are only useful expanded.
+			header = header.filter((line) => !line.startsWith("Still running — "))
+				.map((line) => line.replace(/^(Job: \S+) · cursor: \d+/, "$1"));
 		}
 	}
 	const { lines, omitted } = boundTail(output, opts?.expanded ? 200 : 8);
