@@ -42,7 +42,7 @@ Steps and groups accept an optional `description` (up to 600 characters) for
 implementation context or verification details. Keep `step` concise. Descriptions
 are saved with the plan, included in tool results and checkpoints, and shown when their
 row is selected in `/plan`. Long descriptions remain complete in `/plan status`
-and expanded tool results; the passive progress line stays compact.
+and expanded tool results; the card shows at most two rows for the current step.
 
 While a plan is unfinished, updates must retain every completed leaf with
 `completed` status. Completed leaves are matched by name, so they may move
@@ -98,7 +98,7 @@ accepts the flat shape some models emit:
 
 Invalid depths are rejected with an error that points to `children`.
 
-## Display
+### Display
 
 The default card shows the whole tree in 50 columns. Groups on the path to the
 current step are expanded; every other group collapses to `name n/m`
@@ -133,7 +133,7 @@ available in the panel and expanded tool results.
 
 Plans describe the current route through work; they do not replace persistent goal completion checks.
 
-## Model context
+### Model context
 
 Each `update_plan` result already shows the model the complete plan, so nothing
 is added to individual provider requests. This keeps the conversation prefix
@@ -149,7 +149,9 @@ visible conversation stops showing the current plan:
 
 The newest visible `update_plan` result or checkpoint is compared with the
 current plan first, so repeated restores never send a duplicate. Finished plans
-are treated like no plan. Plan state follows session branches.
+are treated like no plan. When idle, the checkpoint is appended without starting
+a turn; during a run it is delivered as steering before the next model request.
+Plan state follows session branches.
 
 ## Dependencies and limitations
 
@@ -159,7 +161,8 @@ Tool results use a single-line receipt. Expand the result or open `/plan` for th
   unique within a group; repeated names in different groups are allowed.
 - Older flat plans remain readable. Fold state is local to the panel; the plan
   tree persists with session branches.
-- Uses Pi's public extension, session, context, and TUI APIs.
+- Uses Pi's public extension, session, and TUI APIs. Checkpoints read
+  `sessionManager.buildSessionProjection()` (Pi 1.0); without it none are sent.
 - Requires [`overlay-stack`](../overlay-stack/).
 - Uses host-provided `typebox` for the tool schema.
 - Persistent TUI and RPC sessions are supported; panels require the TUI.
