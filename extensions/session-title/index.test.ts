@@ -31,6 +31,7 @@ function setup(options: {
   config?: SessionTitleConfig;
   results?: TitleResult[];
   name?: string;
+  env?: NodeJS.ProcessEnv;
   request?: (args: any) => Promise<TitleResult>;
 } = {}) {
   const pi = new MockPi();
@@ -40,6 +41,7 @@ function setup(options: {
   let index = 0;
   sessionTitleExtension(pi as any, {
     config: options.config ?? config(),
+    env: options.env ?? {},
     request: (async (args: any) => {
       calls.push(args);
       if (options.request) return options.request(args);
@@ -118,6 +120,21 @@ describe("loadConfig", () => {
     expect(loadConfig(dir)).toEqual({ enabled: true, model: undefined });
     writeFileSync(join(dir, "session-title.json"), "{oops");
     expect(loadConfig(dir)).toEqual({ enabled: true });
+  });
+
+  test("reads an ordered models list that takes precedence over model", () => {
+    const dir = mkdtempSync(join(tmpdir(), "title-models-"));
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({
+      model: "openai/gpt-4.1-mini",
+      models: ["mistral/mistral-medium-3.5", "junk", 3, "openai/gpt-4.1-mini", "mistral/mistral-medium-3.5"],
+    }));
+    expect(loadConfig(dir)).toEqual({
+      enabled: true,
+      model: "mistral/mistral-medium-3.5",
+      models: ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"],
+    });
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({ model: "openai/gpt-4.1-mini", models: [] }));
+    expect(loadConfig(dir)).toEqual({ enabled: true, model: "openai/gpt-4.1-mini" });
   });
 
   test("reads the independent Tab link switch", () => {
@@ -236,6 +253,34 @@ describe("titling once", () => {
     await flushDetachedRequest();
     expect(h.calls).toHaveLength(1);
     expect(h.pi.name).toBe("Generated Title");
+  });
+
+  test("never titles automatically in a child agent process", async () => {
+    const h = setup({ env: { PI_SUBAGENT_CHILD: "1" } });
+    await firstTurn(h);
+    await h.pi.emit("before_agent_start", { prompt: "redesign the Pi footer" }, h.ctx);
+    await flushDetachedRequest();
+    expect(h.calls).toHaveLength(0);
+    expect(h.pi.name).toBeUndefined();
+    await h.pi.commands.get("title").handler("status", h.ctx);
+    expect(h.notifications.at(-1)!.message).toContain("automatic: off (child agent)");
+  });
+
+  test("passes ordered models and announces a fallback only once", async () => {
+    const fallback = "mistral/mistral-medium-3.5 unavailable; used amazon-bedrock/opus-5";
+    const h = setup({
+      config: config({ model: "mistral/mistral-medium-3.5", models: ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"] }),
+      results: [{ title: "Fallback Title", model: "amazon-bedrock/opus-5", fallback }],
+    });
+    await firstTurn(h);
+    expect(h.calls[0].overrides).toEqual(["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"]);
+    expect(h.calls[0].override).toBe("mistral/mistral-medium-3.5");
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    const notices = h.notifications.filter((notice) => notice.message.startsWith("Title model fallback"));
+    expect(notices).toEqual([{ message: `Title model fallback: ${fallback}.`, level: "warning" }]);
+    await h.pi.commands.get("title").handler("status", h.ctx);
+    expect(h.notifications.at(-1)!.message).toContain("model: mistral/mistral-medium-3.5 → openai/gpt-4.1-mini → active session model");
+    expect(h.notifications.at(-1)!.message).toContain(`last fallback: ${fallback}`);
   });
 
   test("does nothing when disabled", async () => {

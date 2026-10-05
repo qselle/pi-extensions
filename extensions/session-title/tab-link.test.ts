@@ -5,7 +5,7 @@ import type { HerdrMethod, HerdrRequest } from "./herdr-client.ts";
 
 const environment = { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr-test.sock", HERDR_PANE_ID: "w1:p2", HERDR_TAB_ID: "stale" };
 
-function setup(options: { label?: string; mode?: string; env?: NodeJS.ProcessEnv; enabled?: boolean; entries?: any[] } = {}) {
+function setup(options: { label?: string; name?: string; mode?: string; env?: NodeJS.ProcessEnv; enabled?: boolean; entries?: any[] } = {}) {
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
   const entries = options.entries ?? [];
@@ -14,7 +14,7 @@ function setup(options: { label?: string; mode?: string; env?: NodeJS.ProcessEnv
   const writes: { tab_id: string; label: string }[] = [];
   const pane = { pane_id: "w1:p2", tab_id: "w1:t3", terminal_id: "terminal-2" };
   const tab = { tab_id: "w1:t3", label: options.label ?? "", pane_count: 1 };
-  let name: string | undefined = "First Title";
+  let name: string | undefined = options.name ?? "First Title";
   let intercept: ((method: HerdrMethod, signal: AbortSignal) => Promise<void>) | undefined;
   let modelCalls = 0;
   const ctx: any = {
@@ -105,7 +105,7 @@ describe("Tab link", () => {
     expect(h.entries.at(-1)?.data.owner?.label).toBe("First Title");
   });
 
-  test.each(["My Workspace", "1", "First Title"])("preserves an unverified label %s until explicitly linked", async (label) => {
+  test.each(["My Workspace", "1"])("preserves an unverified label %s until explicitly linked", async (label) => {
     const h = setup({ label });
     await h.start();
     expect(h.writes).toHaveLength(0);
@@ -114,6 +114,22 @@ describe("Tab link", () => {
     await h.rename("Second Title");
     await h.idle();
     expect(h.tab.label).toBe("Second Title");
+  });
+
+  test("adopts a label already equal to the Pi name, including after an older pause, then keeps syncing", async () => {
+    const key = createHash("sha256")
+      .update(`${environment.HERDR_SOCKET_PATH}\0terminal-2\0w1:t3`)
+      .digest("hex");
+    for (const entries of [[], [{ type: "custom", customType: "session-title:tab-link", data: { version: 1, paused: key } }]]) {
+      const h = setup({ label: "First Title", entries });
+      await h.start();
+      expect(h.writes).toHaveLength(0);
+      expect(h.entries.at(-1)?.data).toEqual({ version: 1, owner: { key, label: "First Title" } });
+      expect(h.notices.at(-1)).toContain("linked");
+      await h.rename("Second Title");
+      await h.idle();
+      expect(h.writes).toEqual([{ tab_id: "w1:t3", label: "Second Title" }]);
+    }
   });
 
   test.each(["Hand-written label", ""])("yields to an external rename, including clearing to %s", async (label) => {
@@ -138,7 +154,8 @@ describe("Tab link", () => {
     await resumed.rename("Resumed Title");
     await resumed.idle();
     expect(resumed.tab.label).toBe("Resumed Title");
-    const other = setup({ label: first.tab.label, entries: structuredClone(first.entries) });
+    // Saved ownership matches the label, but not this terminal; the Pi name differs.
+    const other = setup({ label: first.tab.label, name: "Resumed Elsewhere", entries: structuredClone(first.entries) });
     other.pane.terminal_id = "another-terminal";
     await other.start();
     await other.rename("Wrong Pane");

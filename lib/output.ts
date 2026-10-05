@@ -32,6 +32,31 @@ export class PlainOutput {
 
 export interface OutputSlice { text: string; cursor: number; lost: number; more: boolean }
 
+/** A bounded read over retained output. `omitted` retained characters after `from` were skipped to fit the limit. */
+export interface OutputWindow extends OutputSlice { from: number; omitted: number }
+
+/**
+ * Read retained `text`, which begins at absolute offset `start`, from `cursor`.
+ * `newest` returns the last ≤limit characters ending at the output end; otherwise
+ * pages forward from the cursor. Windows never split a surrogate pair.
+ */
+export function outputWindow(text: string, start: number, cursor: number, limit: number, newest: boolean): OutputWindow {
+  if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > start + text.length) throw new Error("Invalid output cursor.");
+  if (!Number.isSafeInteger(limit) || limit < 2) throw new Error("Output limit must be at least two characters.");
+  let begin = Math.max(cursor, start) - start;
+  if (isLow(text.charCodeAt(begin))) begin++;
+  let first = begin;
+  let end = text.length;
+  if (newest) {
+    first = Math.max(begin, text.length - limit);
+    if (isLow(text.charCodeAt(first))) first++;
+  } else {
+    end = Math.min(text.length, begin + limit);
+    if (end < text.length && isLow(text.charCodeAt(end))) end--;
+  }
+  return { text: text.slice(first, end), cursor: start + end, lost: start + begin - cursor, more: end < text.length, from: start + begin, omitted: first - begin };
+}
+
 /** Bounded text with absolute UTF-16 cursors; reads never split a surrogate pair. */
 export class OutputLog {
   private text = "";
@@ -58,6 +83,10 @@ export class OutputLog {
     let end = Math.min(this.text.length, start + limit);
     if (end < this.text.length && isLow(this.text.charCodeAt(end))) end--;
     return { text: this.text.slice(start, end), cursor: this.offset + end, lost: this.offset + start - cursor, more: end < this.text.length };
+  }
+  /** Like `read`, with any limit up to the retained size and an optional newest-first window. */
+  window(cursor = this.offset, limit = 24_000, newest = false): OutputWindow {
+    return outputWindow(this.text, this.offset, cursor, limit, newest);
   }
   tail(limit = 2000): string {
     let start = Math.max(0, this.text.length - limit);

@@ -84,7 +84,7 @@ test("collects a terminal answer first, cancels Telegram polling, and mirrors th
       close: async (outcome) => { mirrored = outcome; },
     };
   });
-  questionsExtension(pi as any, { telegramService: telegram });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: telegram });
   const titles: string[] = [];
 
   const result = await pi.tool.execute("call", {
@@ -116,7 +116,7 @@ test("a Telegram reply closes the terminal prompt", async () => {
     result: Promise.resolve({ status: "answered", value: "Remote answer" }),
     close: async () => undefined,
   }));
-  questionsExtension(pi as any, { telegramService: telegram });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: telegram });
   const ctx = {
     mode: "tui",
     cwd: "/work/project",
@@ -161,7 +161,7 @@ test("discovers the optional globally registered Telegram hub at execution time"
   }));
   const registration = registerTelegramService(telegram);
   try {
-    questionsExtension(pi as any);
+    questionsExtension(pi as any, { isSubagentChild: false });
     const result = await pi.tool.execute("call", {
       questions: [{ id: "remote", question: "Answer remotely?" }],
     }, new AbortController().signal, undefined, {
@@ -189,7 +189,7 @@ test("labels delayed first cards with the session and sends follow-up questions 
     }),
     questionDelayMs: 1,
   } satisfies TelegramService;
-  questionsExtension(pi as any, { telegramService: telegram });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: telegram });
 
   const result = await pi.tool.execute("call", {
     questions: [
@@ -220,7 +220,7 @@ test("requires TUI for secret questions even when Telegram is configured", async
       close: async () => undefined,
     };
   });
-  questionsExtension(pi as any, { telegramService: telegram });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: telegram });
 
   const result = await pi.tool.execute("call", {
     questions: [{ id: "token", question: "Token?", secret: true }],
@@ -237,7 +237,7 @@ test("requires TUI for secret questions even when Telegram is configured", async
 
 test("reports a useful interruption when neither terminal nor Telegram is available", async () => {
   const pi = new MockPi();
-  questionsExtension(pi as any, { telegramService: null });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
   const result = await pi.tool.execute("call", {
     questions: [{ id: "choice", question: "Choose?", options: ["A", "B"] }],
   }, new AbortController().signal, undefined, {
@@ -271,7 +271,7 @@ function secretTerminalContext(secret: string) {
 
 test("returns a handle for a secret answer and keeps the value out of the result", async () => {
   const pi = new MockPi();
-  questionsExtension(pi as any, { telegramService: null });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
 
   const result = await pi.tool.execute("call", {
     questions: [{ id: "api token", question: "Token?", secret: true }],
@@ -285,7 +285,7 @@ test("returns a handle for a secret answer and keeps the value out of the result
 
 test("substitutes issued handles into later tool calls and blocks stale ones", async () => {
   const pi = new MockPi();
-  questionsExtension(pi as any, { telegramService: null });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
   const result = await pi.tool.execute("call", {
     questions: [{ id: "token", question: "Token?", secret: true }],
   }, new AbortController().signal, undefined, secretTerminalContext("actual-secret"));
@@ -310,7 +310,7 @@ test("substitutes issued handles into later tool calls and blocks stale ones", a
 for (const event of ["session_tree", "session_start", "session_shutdown"]) {
   test(`${event} cancels a pending questionnaire without leaking its answer`, async () => {
     const pi = new MockPi();
-    questionsExtension(pi as any, { telegramService: null });
+    questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
     const titles: string[] = [];
     const ctx = terminalContext(titles);
     let component: any;
@@ -333,7 +333,7 @@ for (const event of ["session_tree", "session_start", "session_shutdown"]) {
 
 test("an old questionnaire cleanup does not clear a newer attention title", async () => {
   const pi = new MockPi();
-  questionsExtension(pi as any, { telegramService: null });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
   const titles: string[] = [];
   const ctx = terminalContext(titles);
   const components: any[] = [];
@@ -351,7 +351,7 @@ test("an old questionnaire cleanup does not clear a newer attention title", asyn
 
 test("an already aborted questionnaire opens no input and leaves the title alone", async () => {
   const pi = new MockPi();
-  questionsExtension(pi as any, { telegramService: null });
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
   const titles: string[] = [];
   const ctx = terminalContext(titles);
   ctx.ui.custom = () => { throw new Error("must not open input"); };

@@ -10,7 +10,7 @@ const config: TelegramConfig = { botToken: "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function root() { const value = await mkdtemp(join(tmpdir(), "pi-inbox-")); roots.push(value); return value; }
-const reply = (id: number) => ({ update_id: id, message: { message_id: id + 100, text: "yes", chat: { id: 12345 }, reply_to_message: { message_id: 5 } } });
+const reply = (id: number) => ({ update_id: id, message: { message_id: id + 100, text: "yes", chat: { id: 12345 }, from: { id: 12345, is_bot: false, first_name: "Private Name" }, reply_to_message: { message_id: 5 } } });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; }
 
 test("concurrent readers share one poll and each receives the durable replies", async () => {
@@ -32,13 +32,16 @@ test("concurrent readers share one poll and each receives the durable replies", 
   await entered.promise;
   expect(await second.read(signal)).toEqual([]);
   gate.resolve();
-  expect((await reading).map((update: any) => update.update_id)).toEqual([6]);
+  const delivered = await reading;
+  expect(delivered.map((update: any) => update.update_id)).toEqual([6]);
+  expect((delivered[0] as any).message.from).toEqual({ id: 12345, is_bot: false });
   expect((await second.read(signal)).map((update: any) => update.update_id)).toEqual([6]);
   expect(bodies.map((body) => body.offset)).toEqual([-1, 6]);
   const path = join(directory, (await readdir(directory))[0]!, "replies.json");
   const stored = await readFile(path, "utf8");
   expect(stored).not.toContain(config.botToken);
   expect(stored).not.toContain("unrelated message");
+  expect(stored).not.toContain("Private Name");
   expect(JSON.parse(stored).offset).toBe(8);
   if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
 });

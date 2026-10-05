@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { TelegramApiClient, TelegramApiError } from "./api.ts";
-import { SessionTopics, TOPIC_ENTRY, topicName } from "./topics.ts";
+import { createHash } from "node:crypto";
+import { LEGACY_TOPIC_ENTRY, SessionTopics, TOPIC_ENTRY, topicName } from "./topics.ts";
 import type { TelegramConfig } from "./config.ts";
 
 const config: TelegramConfig = { botToken: "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi", chatId: "12345", details: "summary", questionDelayMinutes: 5 };
@@ -140,4 +141,48 @@ test("topic labels are bounded and unnamed sessions have a distinct local label"
   expect(topicName(undefined, "/projects/alpha", "abcdef1234")).toBe("alpha · abcdef12");
   expect(topicName("A\nB\x07", "/", "id")).toBe("A B");
   expect([...topicName("🚀".repeat(180), "/", "id")]).toHaveLength(128);
+});
+
+const legacyKey = (token = config.botToken, chatId = config.chatId) =>
+  createHash("sha256").update(`${token}\0${chatId}`).digest("hex").slice(0, 24);
+const legacyEntry = (data: Record<string, unknown>) => ({
+  type: "custom", customType: LEGACY_TOPIC_ENTRY,
+  data: { version: 1, sessionId: "session-a", configKey: legacyKey(), messageThreadId: 77, name: "First Session", ...data },
+});
+
+test("resume reuses a topic recorded by the earlier notification integration", async () => {
+  const h = setup({}, [legacyEntry({})]);
+  expect(h.topics.status()).toContain("topic 77");
+  expect(await h.topics.resolve()).toEqual({ threadId: 77 });
+  expect(h.calls).toHaveLength(0);
+
+  const renamed = setup({}, [legacyEntry({ name: "Old Label" })]);
+  expect(await renamed.topics.resolve()).toEqual({ threadId: 77 });
+  expect(renamed.calls).toEqual([{ method: "editForumTopic", body: { chat_id: "12345", message_thread_id: 77, name: "First Session" } }]);
+  expect(renamed.entries.at(-1)).toMatchObject({ customType: TOPIC_ENTRY, data: { threadId: 77, title: "First Session" } });
+});
+
+test("legacy topic records must match the session, bot credentials and recipient", async () => {
+  for (const data of [
+    { sessionId: "other-session" },
+    { configKey: legacyKey(config.botToken, "98765") },
+    { configKey: legacyKey("123456789:ROTATED_CREDENTIAL") },
+    { messageThreadId: 0 },
+    { name: 7 },
+    { version: 2 },
+  ]) {
+    const h = setup({}, [legacyEntry(data)]);
+    expect(await h.topics.resolve()).toEqual({ threadId: 100 });
+    expect(h.calls.map((call) => call.method)).toEqual(["getMe", "createForumTopic"]);
+  }
+});
+
+test("a newer native mapping takes precedence over an older legacy record", async () => {
+  const first = setup();
+  await first.topics.command("new");
+  const native = { type: "custom", customType: TOPIC_ENTRY, data: { ...first.entries.at(-1).data, threadId: 55, title: "First Session" } };
+  const h = setup({}, [legacyEntry({}), native]);
+  expect(await h.topics.resolve()).toEqual({ threadId: 55 });
+  const reversed = setup({}, [native, legacyEntry({})]);
+  expect(await reversed.topics.resolve()).toEqual({ threadId: 77 });
 });

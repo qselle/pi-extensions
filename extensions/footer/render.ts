@@ -37,7 +37,7 @@ function usageSegment(totals: UsageTotals, key: UsageField, label?: string): Seg
   const value = totals[key] ?? 0;
   const missing = totals.missing?.[key] ?? 0;
   const formatted = key === "cost" ? formatCost(value) : formatTokens(value);
-  if (!missing) return segment(formatted, "text", label);
+  if (!missing) return segment(key === "cost" && totals.estimated ? `≈${formatted}` : formatted, "text", label);
   if (missing >= (totals.responses ?? missing)) return segment(key === "cost" ? "$?" : "?", "muted", label);
   return segment(`≥${formatted}`, "warning", label);
 }

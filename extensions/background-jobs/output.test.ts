@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { OutputLog, PlainOutput } from "../../lib/output.ts";
+import { OutputLog, outputWindow, PlainOutput } from "../../lib/output.ts";
 
 test("split terminal escape sequences never enter captured output", () => {
   const output = new PlainOutput();
@@ -26,4 +26,25 @@ test("retention and reads preserve complete Unicode characters", () => {
   expect(log.read(0, 3)).toEqual({ text: "🐈", cursor: 4, lost: 2, more: true });
   expect(log.read(4, 3).text).toBe("🐈");
   expect(log.tail(3)).toBe("🐈");
+});
+
+test("newest-first windows end at the output end and report what they skipped", () => {
+  const log = new OutputLog(100);
+  log.append("0123456789".repeat(15));
+  expect(log.start).toBe(50);
+  const newest = log.window(0, 20, true);
+  expect(newest).toEqual({ text: "01234567890123456789", cursor: 150, lost: 50, more: false, from: 50, omitted: 80 });
+  expect(log.window(140, 20, true)).toEqual({ text: "0123456789", cursor: 150, lost: 0, more: false, from: 140, omitted: 0 });
+  const page = log.window(60, 30);
+  expect(page).toEqual({ text: "0123456789".repeat(3), cursor: 90, lost: 0, more: true, from: 60, omitted: 0 });
+  expect(() => log.window(151, 20, true)).toThrow();
+  expect(() => log.window(0, 1, true)).toThrow();
+  // The legacy reader keeps its own limit and semantics.
+  expect(() => log.read(0, 20_000)).toThrow();
+});
+
+test("windows never split a surrogate pair at either edge", () => {
+  expect(outputWindow("a🐈b", 10, 10, 2, true)).toEqual({ text: "b", cursor: 14, lost: 0, more: false, from: 10, omitted: 3 });
+  expect(outputWindow("🐈🐈", 0, 0, 3, false).text).toBe("🐈");
+  expect(outputWindow("🐈🐈", 0, 1, 4, true)).toMatchObject({ text: "🐈", from: 2, lost: 1 });
 });

@@ -122,6 +122,39 @@ describe("requestTitle", () => {
     expect(result.model).toBe("amazon-bedrock/opus-5");
   });
 
+  test("tries ordered models, skipping missing and failing ones, and reports the fallback", async () => {
+    const used: string[] = [];
+    const completion = (async (model: any) => {
+      used.push(`${model.provider}/${model.id}`);
+      return model.provider === "openai"
+        ? { stopReason: "error", errorMessage: "rate limited", content: [] }
+        : { content: [{ type: "text", text: "Ordered Title" }] };
+    }) as never;
+    const result = await requestTitle({
+      ctx: context(["openai/gpt-4.1-mini", "anthropic/claude-haiku-4-5"]),
+      overrides: ["mistral/missing", "openai/gpt-4.1-mini", "anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"],
+      override: "ignored/when-overrides-are-present",
+      prompt: "p",
+      completion,
+    });
+    expect(used).toEqual(["openai/gpt-4.1-mini", "anthropic/claude-haiku-4-5"]);
+    expect(result).toMatchObject({
+      title: "Ordered Title",
+      model: "anthropic/claude-haiku-4-5",
+      fallback: "mistral/missing unavailable; openai/gpt-4.1-mini failed; used anthropic/claude-haiku-4-5",
+    });
+  });
+
+  test("reports no fallback when the first preferred model answers, or when none is configured", async () => {
+    const completion = textResponse("Direct Title") as never;
+    const preferred = await requestTitle({ ctx: context(["openai/gpt-4.1-mini"]), overrides: ["openai/gpt-4.1-mini"], prompt: "p", completion });
+    expect(preferred).toMatchObject({ title: "Direct Title", model: "openai/gpt-4.1-mini" });
+    expect(preferred.fallback).toBeUndefined();
+    expect((await requestTitle({ ctx: context(), prompt: "p", completion })).fallback).toBeUndefined();
+    const missing = await requestTitle({ ctx: context([]), overrides: ["a/one", "b/two"], prompt: "p", completion });
+    expect(missing.fallback).toBe("a/one unavailable; b/two unavailable; used amazon-bedrock/opus-5");
+  });
+
   test("reports missing credentials instead of throwing", async () => {
     const result = await requestTitle({ ctx: context(["anthropic/claude-haiku-4-5"], false), prompt: "p" });
     expect(result.title).toBeUndefined();

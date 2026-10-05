@@ -44,10 +44,21 @@ export class TelegramApiError extends Error {
     message: string,
     readonly code: "timeout" | "network" | "response" | "rejected" | "rate_limited",
     readonly status?: number,
+    /** Telegram's flood-control wait in seconds, when reported. */
+    readonly retryAfter?: number,
   ) {
     super(message);
     this.name = "TelegramApiError";
   }
+}
+
+/** Bad request, credentials, permissions or missing resources do not heal by waiting. */
+const PERMANENT_STATUSES = new Set([400, 401, 403, 404]);
+
+/** True for failures a later identical request may survive (network, timeout, 409, 429, 5xx). */
+export function isTransientTelegramError(error: unknown): boolean {
+  if (error instanceof Error && error.name === "AbortError") return false;
+  return !(error instanceof TelegramApiError && error.status !== undefined && PERMANENT_STATUSES.has(error.status));
 }
 
 export class TelegramApiClient {
@@ -97,7 +108,7 @@ export class TelegramApiClient {
         return { messageId: typeof messageId === "number" ? messageId : undefined };
       } catch (error) {
         if (!(error instanceof TelegramApiError) || error.code !== "rate_limited" || attempt > 0) throw error;
-        const retryAfter = (error as TelegramApiError & { retryAfter?: number }).retryAfter;
+        const retryAfter = error.retryAfter;
         if (!Number.isInteger(retryAfter) || retryAfter! < 0 || retryAfter! > MAX_RETRY_AFTER_SECONDS) throw error;
         await abortableSleep(retryAfter! * 1_000, options.signal, this.sleep);
       }
@@ -167,10 +178,8 @@ export class TelegramApiClient {
 
       const payload = await parseResponse(response, options.signal, () => timedOut);
       if (response.status === 429) {
-        const error = new TelegramApiError("Telegram rate-limited the request.", "rate_limited", 429) as TelegramApiError & { retryAfter?: number };
         const retryAfter = payload?.parameters?.retry_after;
-        if (Number.isInteger(retryAfter)) error.retryAfter = retryAfter;
-        throw error;
+        throw new TelegramApiError("Telegram rate-limited the request.", "rate_limited", 429, Number.isInteger(retryAfter) ? retryAfter : undefined);
       }
       if (!response.ok || payload?.ok !== true) {
         throw new TelegramApiError(
@@ -198,7 +207,7 @@ export function safeTelegramError(error: unknown): string {
     : "Telegram request failed unexpectedly.";
 }
 
-async function abortableSleep(
+export async function abortableSleep(
   milliseconds: number,
   signal: AbortSignal | undefined,
   sleep: (milliseconds: number) => Promise<void>,

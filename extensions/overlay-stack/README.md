@@ -25,6 +25,13 @@ exceed 80% of terminal height, lower-priority cards use the compact area instead
 Overall visibility resets on reload or a new session.
 
 Cards share available rows; short cards leave space for larger ones. Renderers may be called twice with different budgets and must have no side effects.
+A card may set `requiredBodyHeight: () => number` to reserve more rows than
+`minBodyHeight` while they fit; on shorter terminals it falls back to `minBodyHeight`.
+
+Pi refuses to change the TUI mode in `/settings` while any overlay exists. The
+stack removes its overlay whenever it is hidden or has no card to draw, and
+re-creates it when a card becomes visible again, including after the renderer
+changes. While cards are on screen, run `/overlay hide` before switching modes.
 
 ## Dependencies and limitations
 

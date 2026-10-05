@@ -1,5 +1,5 @@
 import type { ContextMode, ChildCheckpoint } from "./context.ts";
-import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { RPC_RECORD_SKIPPED, type AgentClient, type RpcEvent } from "./rpc.ts";
 import { decodeParentReport, MAX_RETAINED_REPORTS, MAX_SEEN_REPORT_IDS, REPORT_TOOL_NAME, type ParentReport, type SavedReport } from "./report.ts";
 
 export const DEFAULT_MAX_OPEN_AGENTS = 6;
@@ -7,8 +7,12 @@ export const MAX_AGENT_NAME_CHARS = 64;
 export const MAX_TASK_CHARS = 16_000;
 export const MAX_MESSAGE_CHARS = 16_000;
 export const MAX_RESULT_BYTES = 24 * 1024;
+/** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
+export const PROGRESS_CHECKPOINT_MS = 60_000;
 
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "stopped" | "closed";
+export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "stopped" | "closed";
+/** Settled statuses that carry a final result for the parent. */
+export const FINAL_STATUSES: readonly AgentStatus[] = ["completed", "paused", "failed"];
 export type WaitMode = "any" | "all";
 export type WaitWake = "any" | "final";
 
@@ -61,6 +65,8 @@ export interface AgentRuntime {
   cleanup(): Promise<void>;
   transcript?(): unknown[];
   checkpoint?(): ChildCheckpoint;
+  /** A fresh client for the same conversation files, used to wake a hibernated child. */
+  relaunch?(): AgentClient;
 }
 
 export interface AgentTranscript {
@@ -71,7 +77,10 @@ export interface AgentTranscript {
 export type AgentRuntimeFactory = (request: SpawnRequest, signal?: AbortSignal) => Promise<AgentRuntime>;
 
 export interface CoordinatorHooks {
+  /** Display state changed; called for every child event. */
   onChange?(): void;
+  /** Durable state should be saved: lifecycle transitions and throttled progress. */
+  onPersist?(): void;
   onCompletion?(agent: AgentSnapshot): void | Promise<void>;
   onUsage?(message: unknown, agent: AgentSnapshot): void;
   onReport?(report: ParentReport, agent: AgentSnapshot): void | Promise<void>;
@@ -101,10 +110,15 @@ export interface SavedAgent { agent: AgentSnapshot; resume?: ChildCheckpoint; de
 interface ManagedAgent extends AgentSnapshot {
   checkpoint?: () => ChildCheckpoint;
   resume?: ChildCheckpoint;
+  /** The child may have appended entries since `resume` was read. */
+  leafDirty: boolean;
   inbox: string[];
   resuming?: Promise<void>;
   resumeController?: AbortController;
   client?: AgentClient;
+  relaunch?: () => AgentClient;
+  /** Stopping the idle process of a settled durable child. */
+  hibernating?: Promise<void>;
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
   transcript?: () => unknown[];
@@ -128,6 +142,7 @@ export class SubagentCoordinator {
   private reservations = 0;
   private generation = 0;
   private active = false;
+  private lastPersistAt = 0;
   private readonly maxOpenAgents: number;
   private readonly now: () => number;
 
@@ -143,6 +158,7 @@ export class SubagentCoordinator {
     this.usedNames.clear();
     this.reservedNames.clear();
     this.reservations = 0;
+    this.lastPersistAt = this.now();
     this.changed();
   }
 
@@ -182,8 +198,10 @@ export class SubagentCoordinator {
         activity: [],
         usage: emptyUsage(),
         checkpoint: runtime.checkpoint,
+        leafDirty: true,
         inbox: [],
         client: runtime.client,
+        relaunch: runtime.relaunch,
         cleanup: runtime.cleanup,
         cleanupDone: false,
         transcript: runtime.transcript,
@@ -215,6 +233,7 @@ export class SubagentCoordinator {
         signal?.removeEventListener("abort", abortStartup);
       }
       this.changed();
+      this.persist();
       return this.snapshot(agent);
     } catch (error) {
       if (agent) {
@@ -239,6 +258,7 @@ export class SubagentCoordinator {
     if (agent.inbox.length >= 8) throw new Error("At most 8 queued messages per child; send or interrupt to clear them.");
     agent.inbox.push(boundedInput(message, "queued message", MAX_MESSAGE_CHARS));
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
@@ -251,12 +271,23 @@ export class SubagentCoordinator {
     return { ...this.snapshot(agent), reports };
   }
 
-  /** Snapshot references pin a conversation leaf; restoring never starts a process. */
+  /**
+   * Snapshot references pin a conversation leaf; restoring never starts a process.
+   * A child file is reread only when the child produced events since the last read.
+   */
   checkpoint(): SavedAgent[] {
     return this.ordered().filter((agent) => agent.status !== "closed").map((agent) => {
-      try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Keep the last complete file checkpoint. */ }
+      this.refreshResume(agent);
       return { agent: this.snapshot(agent), resume: agent.resume, delivery: agent.delivery, inbox: [...agent.inbox], reports: structuredClone(agent.reportRecords), seenReportIds: [...agent.seenReportIds] };
     });
+  }
+
+  /** The current durable conversation reference for one child, if any. */
+  savedResume(name: string): ChildCheckpoint | undefined {
+    const agent = this.findAgent(name);
+    if (!agent || agent.status === "closed") return undefined;
+    this.refreshResume(agent);
+    return agent.resume;
   }
 
   restore(saved: SavedAgent[]): void {
@@ -266,7 +297,7 @@ export class SubagentCoordinator {
       const agent: ManagedAgent = { ...row.agent, status: isActive(row.agent) ? "stopped" : row.agent.status,
         runId: row.agent.runId ?? crypto.randomUUID(),
         createdAt: row.agent.createdAt ?? row.agent.startedAt,
-        resume: row.resume, inbox: [...row.inbox], cleanup: async () => {}, cleanupDone: true,
+        resume: row.resume, leafDirty: false, inbox: [...row.inbox], cleanup: async () => {}, cleanupDone: true,
         transcriptCache: [], completion, settled: true, waiters: 0, delivery: row.delivery,
         suppressCompletion: false, generation: this.generation, reportRecords: structuredClone(row.reports ?? []),
         seenReportIds: [...(row.seenReportIds ?? [])], reportUpdate: deferred() };
@@ -281,6 +312,7 @@ export class SubagentCoordinator {
     for (const agent of agents) { agent.suppressCompletion = true; agent.generation = -1; agent.resumeController?.abort(); }
     const outcomes = await Promise.allSettled(agents.map(async (agent) => {
       await agent.resuming?.catch(() => undefined);
+      await agent.hibernating;
       if (agent.client) { await agent.client.stop(); agent.client = undefined; }
       this.captureTranscript(agent);
       if (!agent.checkpoint && !agent.cleanupDone) { await agent.cleanup(); agent.cleanupDone = true; }
@@ -289,6 +321,7 @@ export class SubagentCoordinator {
     }));
     const saved = this.checkpoint();
     this.changed();
+    this.persist();
     const failures = outcomes.filter((outcome) => outcome.status === "rejected");
     if (failures.length) throw new Error("Unable to stop every child process; retained checkpoints for recovery.");
     return saved;
@@ -296,8 +329,9 @@ export class SubagentCoordinator {
 
   private async resumeAgent(agent: ManagedAgent, parentContext?: unknown, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    await agent.hibernating;
     if (agent.client) return;
-    try { agent.resume = agent.checkpoint?.() ?? agent.resume; } catch { /* Retain the last complete checkpoint. */ }
+    this.refreshResume(agent);
     if (!agent.resume) throw new Error(`No durable conversation is available for ${agent.name}; spawn a new child.`);
     if (agent.resuming) return agent.resuming;
     if (this.openCount() + this.reservations >= this.maxOpenAgents) throw new Error(`At most ${this.maxOpenAgents} subagents may remain open`);
@@ -306,8 +340,12 @@ export class SubagentCoordinator {
     const controller = new AbortController();
     agent.resumeController = controller;
     const resumeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    // A hibernated child continues in its own files; a restored one resumes from a copy.
+    const relaunch = !agent.cleanupDone ? agent.relaunch : undefined;
     const work = (async () => {
-      const runtime = await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume }, resumeSignal);
+      const runtime: AgentRuntime = relaunch
+        ? { client: relaunch(), cleanup: async () => {}, checkpoint: agent.checkpoint, transcript: agent.transcript, relaunch }
+        : await this.options.createRuntime({ ...agent, parentContext, resume: agent.resume }, resumeSignal);
       const abortStartup = () => void runtime.client.stop().catch(() => undefined);
       resumeSignal.addEventListener("abort", abortStartup, { once: true });
       try {
@@ -317,8 +355,9 @@ export class SubagentCoordinator {
         throwIfAborted(resumeSignal);
         this.assertGeneration(generation);
         if (agent.status === "closed") throw new Error(`Subagent ${agent.name} was closed during resume`);
-        agent.client = runtime.client; agent.cleanup = runtime.cleanup; agent.cleanupDone = false;
-        agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript;
+        agent.client = runtime.client; agent.relaunch = runtime.relaunch;
+        if (!relaunch) { agent.cleanup = runtime.cleanup; agent.cleanupDone = false; }
+        agent.checkpoint = runtime.checkpoint; agent.transcript = runtime.transcript; agent.leafDirty = true;
         agent.generation = generation; agent.suppressCompletion = false;
         this.attach(agent, runtime.client);
       } catch (error) {
@@ -356,22 +395,30 @@ export class SubagentCoordinator {
         await client.steer(text);
         pushActivity(agent, `steered: ${compact(text, 120)}`);
       } catch (error) {
-        if (!isActive(agent) && agent.client === client) await this.startFollowUp(agent, client, text);
-        else throw error;
+        // The child settled first, possibly hibernating: start the follow-up instead.
+        if (isActive(agent)) throw error;
+        if (agent.client !== client) await this.resumeAgent(agent, parentContext, signal);
+        const current = agent.client;
+        if (!current) throw error;
+        await this.startFollowUp(agent, current, text);
       }
     } else {
       await this.startFollowUp(agent, client, text);
     }
+    agent.leafDirty = true;
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
   async interrupt(name: string): Promise<AgentSnapshot> {
     const agent = this.requireAgent(name);
+    const cleared = agent.inbox.length > 0;
     agent.inbox = [];
     agent.resumeController?.abort();
     await agent.resuming?.catch(() => undefined);
     this.changed();
+    if (cleared) this.persist();
     if (agent.status === "closed") throw new Error(`Subagent ${agent.name} is closed`);
     await agent.client?.clearQueue?.();
     if (!agent.client || !isActive(agent)) return this.snapshot(agent);
@@ -379,6 +426,7 @@ export class SubagentCoordinator {
     await agent.client.clearQueue?.();
     pushActivity(agent, "interrupt requested");
     this.changed();
+    this.persist();
     return this.snapshot(agent);
   }
 
@@ -525,7 +573,11 @@ export class SubagentCoordinator {
   }
 
   private attach(agent: ManagedAgent, client: AgentClient): void {
-    client.onEvent((event) => { if (agent.client === client) this.handleEvent(agent, event); });
+    client.onEvent((event) => {
+      if (agent.client !== client) return;
+      this.handleEvent(agent, event);
+      if (agent.generation === this.generation && this.active) this.persistProgress();
+    });
     client.onExit((error) => {
       if (agent.client !== client || agent.generation !== this.generation || !this.active) return;
       if (agent.checkpoint) {
@@ -556,6 +608,7 @@ export class SubagentCoordinator {
   private handleEvent(agent: ManagedAgent, event: RpcEvent): void {
     if (agent.status === "closed" || agent.generation !== this.generation || !this.active) return;
     if (agent.settled) return;
+    agent.leafDirty = true;
     if (event.type === "agent_start") {
       agent.status = "running";
       this.changed();
@@ -610,6 +663,9 @@ export class SubagentCoordinator {
           agent.reportUpdate.resolve();
           agent.reportUpdate = deferred();
           queueMicrotask(() => void this.deliverReport(agent, record));
+          this.changed();
+          this.persist();
+          return;
         }
       }
       this.changed();
@@ -620,12 +676,42 @@ export class SubagentCoordinator {
       this.changed();
       return;
     }
+    if (event.type === RPC_RECORD_SKIPPED) {
+      const size = mebibytes(event.bytes), limit = mebibytes(event.limitBytes);
+      const kind = typeof event.recordType === "string" ? event.recordType : "unknown";
+      pushActivity(agent, `skipped oversized ${kind} RPC record (${size})`);
+      if (kind === "message_end" && event.role === "assistant") {
+        agent.output = `[The latest assistant message was omitted because its RPC record (${size}) exceeded the ${limit} limit. The child session file keeps the full message.]`;
+      }
+      this.changed();
+      return;
+    }
     if (event.type === "agent_settled") {
-      this.finish(agent, agent.error ? "failed" : "completed", agent.error);
+      this.finish(agent, !agent.error ? "completed" : isProviderLimitError(agent.error) ? "paused" : "failed", agent.error);
+      this.hibernate(agent);
     }
   }
 
-  private finish(agent: ManagedAgent, status: "completed" | "failed", error?: string, suppress = false): void {
+  /** Stops the idle process of a settled child whose conversation is durable; send relaunches it. */
+  private hibernate(agent: ManagedAgent): void {
+    const client = agent.client;
+    if (!client || !agent.checkpoint || !agent.relaunch || agent.hibernating || isActive(agent) || agent.status === "closed") return;
+    agent.client = undefined;
+    const operation = client.stop().then(
+      () => { pushActivity(agent, "hibernated"); },
+      (error) => {
+        pushActivity(agent, `hibernate failed: ${compact(toError(error).message, 100)}`);
+        // Keep the process reachable so close or suspend can retry stopping it.
+        if (!agent.client && agent.status !== "closed") agent.client = client;
+      },
+    ).finally(() => {
+      if (agent.hibernating === operation) agent.hibernating = undefined;
+      this.changed();
+    });
+    agent.hibernating = operation;
+  }
+
+  private finish(agent: ManagedAgent, status: "completed" | "paused" | "failed", error?: string, suppress = false): void {
     if (agent.settled || agent.status === "closed") return;
     agent.settled = true;
     agent.status = status;
@@ -634,6 +720,7 @@ export class SubagentCoordinator {
     if (suppress) agent.suppressCompletion = true;
     agent.completion.resolve();
     this.changed();
+    this.persist();
     queueMicrotask(() => void this.deliverCompletion(agent));
   }
 
@@ -671,9 +758,11 @@ export class SubagentCoordinator {
       agent.completion.resolve();
     }
     this.changed();
+    this.persist();
     const operation = (async () => {
       const failures: unknown[] = [];
       await agent.resuming?.catch(() => undefined);
+      await agent.hibernating;
       const client = agent.client;
       if (client) {
         try {
@@ -729,18 +818,33 @@ export class SubagentCoordinator {
   }
 
   private requireAgent(name: string): ManagedAgent {
-    const key = normalizeLookup(name).toLocaleLowerCase();
-    const agent = [...this.agents.values()].find((candidate) => candidate.name.toLocaleLowerCase() === key || candidate.id === name);
+    const agent = this.findAgent(normalizeLookup(name));
     if (!agent) throw new Error(`Subagent not found: ${name}`);
     return agent;
+  }
+
+  private findAgent(name: string): ManagedAgent | undefined {
+    if (typeof name !== "string") return undefined;
+    const key = name.trim().toLocaleLowerCase();
+    return [...this.agents.values()].find((candidate) => candidate.name.toLocaleLowerCase() === key || candidate.id === name);
+  }
+
+  private refreshResume(agent: ManagedAgent): void {
+    if (!agent.checkpoint || !agent.leafDirty && agent.resume) return;
+    try {
+      agent.resume = agent.checkpoint();
+      agent.leafDirty = false;
+    } catch { /* Keep the last complete file checkpoint while the child appends. */ }
   }
 
   private assertGeneration(expected: number): void {
     if (!this.active || this.generation !== expected) throw new Error("Parent session ended during subagent startup");
   }
 
+  /** Live child processes. Durable children without a process do not consume capacity. */
   private openCount(): number {
-    return [...this.agents.values()].filter((agent) => agent.client || !agent.cleanupDone && agent.status !== "closed").length;
+    return [...this.agents.values()].filter((agent) => agent.client || agent.hibernating
+      || !agent.cleanupDone && !agent.checkpoint && agent.status !== "closed").length;
   }
 
   private ordered(): ManagedAgent[] {
@@ -776,7 +880,7 @@ export class SubagentCoordinator {
       activity: [...agent.activity],
       usage: { ...agent.usage },
       queued: agent.inbox.length,
-      unread: agent.settled && agent.delivery === "none" && ["completed", "failed"].includes(agent.status)
+      unread: agent.settled && agent.delivery === "none" && FINAL_STATUSES.includes(agent.status)
         || agent.reportRecords.some((record) => record.delivery === "none"),
       reports: agent.reportRecords.filter((record) => record.delivery === "none").map((record) => ({ ...record.report })),
       omittedReports: agent.omittedReports ?? 0,
@@ -785,6 +889,16 @@ export class SubagentCoordinator {
 
   private changed(): void {
     this.options.hooks?.onChange?.();
+  }
+
+  private persist(): void {
+    this.lastPersistAt = this.now();
+    this.options.hooks?.onPersist?.();
+  }
+
+  /** Bounds crash loss for long runs without saving state on every child event. */
+  private persistProgress(): void {
+    if (this.now() - this.lastPersistAt >= PROGRESS_CHECKPOINT_MS) this.persist();
   }
 }
 
@@ -801,6 +915,22 @@ export function boundedText(text: string, maxBytes: number): string {
 
 export function isActive(agent: Pick<AgentSnapshot, "status">): boolean {
   return agent.status === "starting" || agent.status === "running";
+}
+
+/** Provider quota, rate-limit and overload failures are recoverable once the limit resets. */
+export function isProviderLimitError(message: string): boolean {
+  const text = sanitize(message).toLowerCase().replace(/\s+/g, " ");
+  return [
+    /\brate[ _-]?limit/,
+    /\btoo many requests\b/,
+    /\binsufficient[_ -]?quota\b/,
+    /\bquota\b.{0,80}\b(?:exceeded|exhausted|reached|limit)/,
+    /\b(?:exceeded|exhausted|reached)\b.{0,80}\bquota\b/,
+    /\busage limit\b/,
+    /\b(?:daily|weekly|monthly|billing|spending) limit\b/,
+    /\boverloaded/,
+    /(?:^|\b(?:http|status|code|error)\s*:?\s*)429\b/,
+  ].some((pattern) => pattern.test(text));
 }
 
 function buildChildPrompt(request: SpawnRequest): string {
@@ -892,6 +1022,10 @@ function pushActivity(agent: ManagedAgent, text: string): void {
 
 function slug(name: string): string {
   return name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 18) || "agent";
+}
+
+function mebibytes(value: unknown): string {
+  return `${(positive(value) / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function positive(value: unknown): number {

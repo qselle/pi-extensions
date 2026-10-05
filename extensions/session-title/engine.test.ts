@@ -57,14 +57,34 @@ describe("normalizeGeneratedTitle", () => {
   test("keeps an existing noun phrase intact", () => {
     expect(normalizeGeneratedTitle("Pi Footer Redesign")).toBe("Pi Footer Redesign");
   });
+
+  test("rejects path-like and temporary-file titles", () => {
+    for (const value of [
+      "/tmp/x.png",
+      "~/Downloads/Screenshot 2026-10-01 at 14.png",
+      "file:///Users/me/report.pdf",
+      "\"/var/folders/T/pi-clipboard-0f2c1d3e-1a2b-4c5d-8e9f-0123456789ab.png\"",
+      "pi-clipboard-0f2c1d3e-1a2b-4c5d-8e9f-0123456789ab.png",
+      "./notes.md",
+      "C:\\Users\\me\\shot.jpg",
+      "src/index.ts",
+    ]) expect(normalizeGeneratedTitle(value)).toBeUndefined();
+    for (const value of ["CI/CD Pipeline", "Read/Write Locks", "I/O Scheduler", "README Cleanup"]) {
+      expect(normalizeGeneratedTitle(value)).toBe(value);
+    }
+  });
 });
 
 describe("provisionalTitle", () => {
   test("drops filler words", () => {
     expect(provisionalTitle("can you please fix the retry loop in the fetch wrapper")).toBe("fix retry loop fetch");
   });
-  test("keeps paths", () => {
+  test("keeps project paths but never pasted absolute or temporary paths", () => {
     expect(provisionalTitle("update extensions/verify/config.ts")).toBe("update extensions/verify/config.ts");
+    expect(provisionalTitle("/tmp/x.png")).toBeUndefined();
+    expect(provisionalTitle("~/Downloads/screen.png")).toBeUndefined();
+    expect(provisionalTitle("/var/folders/T/pi-clipboard-0f2c1d3e-1a2b-4c5d-8e9f-0123456789ab.png explain the layout bug"))
+      .toBe("explain layout bug");
   });
   test("ignores code blocks and urls", () => {
     expect(provisionalTitle("look at ```const x = 1``` https://example.com and fix parsing")).toBe("look fix parsing");

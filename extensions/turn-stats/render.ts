@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { fitCells, formatCost, formatTokens } from "../footer/format.ts";
 import { formatDuration, formatLatency, formatRate } from "../../lib/telemetry-format.ts";
-import { FIELDS, summaryText, type Summary, type Totals } from "./stats.ts";
+import { FIELDS, summaryText, usageRecords, type Summary, type Totals } from "./stats.ts";
 
 /** Old entries can use Pi's persisted entry timestamp without changing their accounting. */
 export function completionClock(summary: Summary, entryTimestamp?: string): string | undefined {
@@ -11,8 +11,8 @@ export function completionClock(summary: Summary, entryTimestamp?: string): stri
   return new Intl.DateTimeFormat(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }
 
-function amount(total: Totals, responses: number, formatter: (value: number) => string = formatTokens): string {
-  if (responses > 0 && total.missing === responses) return "?";
+function amount(total: Totals, records: number, formatter: (value: number) => string = formatTokens): string {
+  if (records > 0 && total.missing === records) return "?";
   return `${total.missing ? "≥" : ""}${formatter(total.known)}`;
 }
 
@@ -37,19 +37,20 @@ function completionGroups(summary: Summary, theme: Theme, entryTimestamp?: strin
   groups.push(`${field("first output avg", latency)} ${coverage(timing?.latencySamples ?? 0)}`, `${field("rate", rate)} ${coverage(timing?.streamSamples ?? 0)}`);
 
   const usage = summary.usage;
+  const records = usageRecords(summary);
   const promptTotals = [usage.input, usage.cacheRead, usage.cacheWrite];
   const completePrompt = promptTotals.every((total) => total.missing === 0);
-  const unknownPrompt = summary.responses > 0 && promptTotals.every((total) => total.missing === summary.responses);
+  const unknownPrompt = records > 0 && promptTotals.every((total) => total.missing === records);
   const prompt = promptTotals.reduce((total, value) => total + value.known, 0);
   const promptText = unknownPrompt ? "?" : `${completePrompt ? "" : "≥"}${formatTokens(prompt)}`;
   // A percentage from a partial denominator would look more certain than it is.
   const hit = !completePrompt ? "?" : prompt > 0 ? `${Math.round(100 * usage.cacheRead.known / prompt)}%` : "—";
   const tokenGroups = [
     field("prompt", promptText),
-    field("in", amount(usage.input, summary.responses)), field("out", amount(usage.output, summary.responses)),
-    field("cache read", amount(usage.cacheRead, summary.responses)), field("cache write", amount(usage.cacheWrite, summary.responses)),
+    field("in", amount(usage.input, records)), field("out", amount(usage.output, records)),
+    field("cache read", amount(usage.cacheRead, records)), field("cache write", amount(usage.cacheWrite, records)),
     field("cache hit", hit),
-    field("cost", amount(usage.cost, summary.responses, formatCost)),
+    field("cost", amount(usage.cost, records, formatCost)),
   ];
   if (FIELDS.some((key) => usage[key].missing > 0)) tokenGroups.push(theme.fg("warning", "partial usage"));
   return [groups, tokenGroups];
@@ -66,6 +67,7 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
   if (!width) return [];
   const dim = (text: string) => theme.fg("dim", text);
   const usage = summary.usage;
+  const records = usageRecords(summary);
   const promptComplete = [usage.input, usage.cacheRead, usage.cacheWrite].every((total) => total.missing === 0);
   const prompt = usage.input.known + usage.cacheRead.known + usage.cacheWrite.known;
   const hit = !promptComplete ? "?" : prompt > 0 ? `${Math.round(100 * usage.cacheRead.known / prompt)}%` : "—";
@@ -76,8 +78,8 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
   const turn = value(`Turn ${summary.durationMs < 500 ? "<1s" : formatDuration(summary.durationMs / 1000)}`, "accent");
   const clock = completionClock(summary, entryTimestamp);
   const leading = clock ? `${value(clock)}${dim(" · ")}${turn}` : turn;
-  const tokens = `${field("in", amount(usage.input, summary.responses))}${dim(" · ")}${field("out", amount(usage.output, summary.responses))}`;
-  const cost = value(amount(usage.cost, summary.responses, formatCost).replace(/^\?$/, "$?"));
+  const tokens = `${field("in", amount(usage.input, records))}${dim(" · ")}${field("out", amount(usage.output, records))}`;
+  const cost = value(amount(usage.cost, records, formatCost).replace(/^\?$/, "$?"));
   // Show the clock first when the clock, turn duration, tokens and cost all fit.
   // On a narrower screen, retain the useful core instead of a clipped clock.
   const coreWidth = visibleWidth(leading) + 6 + visibleWidth(tokens) + visibleWidth(cost);
@@ -99,8 +101,8 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
     { text: `${value(String(summary.responses))} ${theme.fg("muted", summary.responses === 1 ? "response" : "responses")}`, priority: 60 },
   );
   if (summary.tools) cells.push({ text: `${value(String(summary.tools))} ${theme.fg("muted", summary.tools === 1 ? "tool" : "tools")}`, priority: 60 });
-  if (usage.cacheRead.known || usage.cacheRead.missing) cells.push({ text: field("cache read", amount(usage.cacheRead, summary.responses)), priority: 70 });
-  if (usage.cacheWrite.known || usage.cacheWrite.missing) cells.push({ text: field("cache write", amount(usage.cacheWrite, summary.responses)), priority: 70 });
+  if (usage.cacheRead.known || usage.cacheRead.missing) cells.push({ text: field("cache read", amount(usage.cacheRead, records)), priority: 70 });
+  if (usage.cacheWrite.known || usage.cacheWrite.missing) cells.push({ text: field("cache write", amount(usage.cacheWrite, records)), priority: 70 });
   const fitted = fitCells(cells, budget, 3, visibleWidth).map((cell) => cell.text).join(dim(" · "));
   const rows = [`${" ".repeat(padding)}${truncateToWidth(fitted, budget, "…")}`];
   if (expanded) {

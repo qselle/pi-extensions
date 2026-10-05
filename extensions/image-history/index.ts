@@ -2,12 +2,18 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { STATE_TYPE, referenceOlderImages, restoreEnabled, retrieveImage } from "./history.ts";
-import { ImageStore, ORIGINAL_IMAGE, originalReference, isImagePart } from "./storage.ts";
-import { exportPortableSession, hydrateImages, restoreStorageEnabled, STORAGE_STATE_TYPE, storeMessage, storedImages } from "./pipeline.ts";
+import { ImageStore, ORIGINAL_IMAGE, originalReference } from "./storage.ts";
+import { exportPortableSession, hasStorableImage, hydrateImages, restoreStorageEnabled, STORAGE_STATE_TYPE, storeMessage, storedImages } from "./pipeline.ts";
 import { inspectStorage, originalFiles, removeUnusedOriginals } from "./cleanup.ts";
 import { OriginalImageViewer, prepareImageForViewer } from "./viewer.ts";
+import { loadConfig, storageSupported, type ImageHistoryConfig } from "./config.ts";
+import { LEGACY_PREVIEW_ENTRY, LegacyImagePreview, LegacyImageStore, legacyReference, restoreLegacyMessages, restoreLegacyTranscript } from "./legacy.ts";
 
-export default function imageHistory(pi: ExtensionAPI): void {
+export interface ImageHistoryOptions { agentDir?: string; config?: ImageHistoryConfig }
+
+export default function imageHistory(pi: ExtensionAPI, options: ImageHistoryOptions = {}): void {
+  const agentDir = options.agentDir ?? getAgentDir();
+  const config = options.config ?? loadConfig(agentDir);
   let enabled = false;
   let replaced = 0;
   let storageEnabled = false;
@@ -16,7 +22,11 @@ export default function imageHistory(pi: ExtensionAPI): void {
   let exportAbort: AbortController | undefined;
   let cleanupAbort: AbortController | undefined;
   let closeViewer: (() => void) | undefined;
-  const store = new ImageStore(join(getAgentDir(), "image-store"));
+  const store = new ImageStore(join(agentDir, "image-store"));
+  const legacy = new LegacyImageStore(agentDir);
+  const legacyWarning = (ctx: ExtensionContext, version: number) => () => {
+    if (version === generation) warning(ctx, "A stored image from an earlier session is unavailable; a note marks its place.");
+  };
   const rememberSession = async (ctx: ExtensionContext) => {
     await store.rememberSessionDirectory(ctx.sessionManager.getSessionDir());
     const file = ctx.sessionManager.getSessionFile();
@@ -29,12 +39,15 @@ export default function imageHistory(pi: ExtensionAPI): void {
     if (ctx.hasUI) ctx.ui.setStatus("image-history", enabled ? `images: ${replaced} deferred` : undefined);
   };
   const restore = async (ctx: ExtensionContext) => {
-    generation++; exportAbort?.abort(); exportAbort = undefined; store.clearCache(); warned = false;
+    generation++; exportAbort?.abort(); exportAbort = undefined; store.clearCache(); legacy.clearCache(); warned = false;
     cleanupAbort?.abort(); cleanupAbort = undefined; closeViewer?.(); closeViewer = undefined;
     const entries = ctx.sessionManager.getBranch();
-    enabled = restoreEnabled(entries); storageEnabled = restoreStorageEnabled(entries); replaced = 0; sync(ctx);
+    enabled = restoreEnabled(entries, config.deferral);
+    storageEnabled = restoreStorageEnabled(entries, config.storage && storageSupported()); replaced = 0; sync(ctx);
     const version = generation;
-    if (storageEnabled || storedImages(entries).length) {
+    if (ctx.mode === "tui") restoreLegacyTranscript(entries, legacy, legacyWarning(ctx, version));
+    // A global default alone never creates the store; the first storable image does.
+    if (restoreStorageEnabled(entries) || storedImages(entries).length) {
       try { await rememberSession(ctx); }
       catch { if (version === generation) warning(ctx, "Image session directory could not be recorded; new originals will stay embedded until storage is available."); }
     }
@@ -42,13 +55,13 @@ export default function imageHistory(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
-    generation++; enabled = false; storageEnabled = false; store.clearCache(); exportAbort?.abort();
+    generation++; enabled = false; storageEnabled = false; store.clearCache(); legacy.clearCache(); exportAbort?.abort();
     cleanupAbort?.abort(); closeViewer?.(); closeViewer = undefined;
     if (ctx.hasUI) ctx.ui.setStatus("image-history", undefined);
   });
   pi.on("message_end", async (event, ctx) => {
     if (!storageEnabled || !["user", "toolResult"].includes(event.message.role)
-      || !("content" in event.message) || !Array.isArray(event.message.content) || !event.message.content.some(isImagePart)) return;
+      || !hasStorableImage(event.message)) return;
     const version = generation;
     try { await rememberSession(ctx); }
     catch { if (version === generation) warning(ctx, "Image storage unavailable; this image remains embedded."); return; }
@@ -58,11 +71,17 @@ export default function imageHistory(pi: ExtensionAPI): void {
   pi.on("context", async (event, ctx) => {
     const version = generation;
     const entries = ctx.sessionManager.getBranch();
-    const result = enabled ? referenceOlderImages(event.messages, entries) : { messages: event.messages, replaced: 0 };
+    const messages = restoreLegacyMessages(event.messages, legacy, legacyWarning(ctx, version));
+    const result = enabled ? referenceOlderImages(messages, entries) : { messages, replaced: 0 };
     replaced = result.replaced;
     if (enabled && ctx.hasUI) ctx.ui.setStatus("image-history", `images: ${replaced} deferred`);
     return { messages: await hydrateImages(result.messages, entries, store,
       () => { if (version === generation) warning(ctx, "An original image is unavailable. Pi and the model retain its labeled preview; portable export requires the original."); }) };
+  });
+  pi.registerEntryRenderer(LEGACY_PREVIEW_ENTRY, (entry, _options, theme) => {
+    const data = entry.data as { version?: unknown; ref?: unknown; label?: unknown } | undefined;
+    const ref = data?.version === 1 ? legacyReference(data.ref) : undefined;
+    return ref ? new LegacyImagePreview(ref, typeof data!.label === "string" ? data!.label : undefined, legacy, theme) : undefined;
   });
   pi.registerCommand("image-store", {
     description: "Original images: on|off|status|list|view <reference>|export [path]|gc [session directory]",
@@ -98,7 +117,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
           await rememberSession(ctx);
           const extra = args.trim().slice(action.length).trim();
           if (extra) await store.rememberSessionDirectory(resolve(ctx.cwd, extra));
-          const sessions = join(getAgentDir(), "sessions");
+          const sessions = join(agentDir, "sessions");
           const inventory = await inspectStorage(store, sessions, abort.signal);
           if (version !== generation) return;
           const bytes = inventory.candidates.reduce((sum, file) => sum + file.bytes, 0);
@@ -122,7 +141,7 @@ export default function imageHistory(pi: ExtensionAPI): void {
         const abort = new AbortController(); exportAbort = abort;
         try {
           const supplied = args.trim().slice(action.length).trim();
-          const exportsDirectory = join(getAgentDir(), "exports");
+          const exportsDirectory = join(agentDir, "exports");
           if (!supplied) await mkdir(exportsDirectory, { recursive: true, mode: 0o700 });
           const destination = supplied ? resolve(ctx.cwd, supplied)
             : join(exportsDirectory, `${ctx.sessionManager.getSessionId()}-${Date.now()}.portable.jsonl`);

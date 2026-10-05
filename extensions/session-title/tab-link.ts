@@ -111,7 +111,10 @@ export function registerTabLink(pi: ExtensionAPI, options: TabLinkOptions = {}) 
       const paused = known.paused === key && !defaultOrdinal;
       const ownershipLost = !owned
         && ((tab.label !== "" && !defaultOrdinal) || known.owner?.key === key);
-      if (!work.claim && (paused || ownershipLost)) {
+      // A label already equal to the Pi name (e.g. set by another tool) is
+      // adopted without a write, then followed like an owned label.
+      const matchesName = tab.label === work.title;
+      if (!work.claim && !matchesName && (paused || ownershipLost)) {
         state.owner = undefined;
         state.paused = key;
         live = { paused: key };

@@ -51,3 +51,18 @@ test("validates persisted envelopes while retaining legacy numeric cost and meas
     expect(decodeUsageRecord(invalid)).toBeUndefined();
   }
 });
+
+test("counts legacy rows without agent identity when they name the provider and model", () => {
+  const legacy = { version: 1, provider: "anthropic", model: "claude", usage: { input: 1_000, output: 200, cacheRead: 5_000, cacheWrite: 50, cacheWrite1h: 0, cost: 0.42 } };
+  expect(decodeUsageRecord(legacy)).toEqual({
+    version: 1, provider: "anthropic", model: "claude",
+    usage: { input: 1_000, output: 200, cacheRead: 5_000, cacheWrite: 50, cost: 0.42 },
+  });
+  for (const invalid of [
+    { ...legacy, provider: undefined },
+    { ...legacy, model: 7 },
+    { ...legacy, usage: undefined },
+    { ...legacy, agentId: "only-one-identity-field" },
+    { ...legacy, version: 2 },
+  ]) expect(decodeUsageRecord(invalid)).toBeUndefined();
+});

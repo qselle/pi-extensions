@@ -12,7 +12,7 @@ Export recorded token usage and cost to a local JSON or CSV file on demand. Noth
 
 Choose a new destination: existing files and symlinks are never overwritten. Relative paths use the current workspace; absolute paths and `~/` are supported. Parent directories must already exist. New files request owner-only permissions on systems that support them.
 
-Each record contains the entry ID, timestamp, source kind, available provider/model/stop reason, input/output/cache-read/cache-write/total tokens, and recorded total cost. Assistant responses with missing usage remain in the report. Tool-result, compaction, branch-summary and this package's `subagent-usage` records are included when explicitly recorded. Child-agent task text and names are excluded. Duplicate entry IDs count once.
+Each record contains the entry ID, timestamp, source kind, available provider/model/stop reason, input/output/cache-read/cache-write/total tokens, and recorded total cost. Assistant responses with missing usage remain in the report. Tool-result, compaction, branch-summary and this package's `subagent-usage` records are included when explicitly recorded, including older rows that name a provider and model but no child agent. Child-agent task text and names are excluded. Duplicate entry IDs count once.
 
 JSON includes the export scope, generation time, records, and totals with a separate missing-record count for every metric. Missing or invalid values are `null`; known zero stays zero. CSV contains one row per record with blank missing values and quotes/escapes metadata. Formula-like text is prefixed with an apostrophe for spreadsheet safety.
 

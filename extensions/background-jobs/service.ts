@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { startProcess, terminalSize, type JobProcess } from "./transport.ts";
-import { OutputLog, PlainOutput, type OutputSlice } from "../../lib/output.ts";
+import { OutputLog, PlainOutput, type OutputSlice, type OutputWindow } from "../../lib/output.ts";
 import { StreamRedactor, redactText } from "../../lib/redact.ts";
 
 export type JobStatus = "starting" | "running" | "stopping" | "completed" | "failed" | "stopped" | "timed-out" | "interrupted";
@@ -15,14 +15,25 @@ export interface JobSnapshot {
 export interface StartJob {
   name: string; command: string; cwd: string; executable: string; args: string[];
   env?: NodeJS.ProcessEnv; timeoutMs?: number; pty?: boolean; columns?: number; rows?: number;
+  /** Keep a writable stdin pipe for pipe jobs. Otherwise stdin is closed (EOF). PTYs always accept input. */
+  stdin?: boolean;
 }
+export const MAX_ACTIVE_JOBS = 16;
+export const MAX_RETAINED_JOBS = 50;
+export const LOG_CAPACITY = 128_000;
+export const MAX_WAIT_MS = 300_000;
+/** How long output may keep arriving after the process group is gone before escaped holders are detached. */
+export const DRAIN_MS = 500;
+/** Extra time shutdown allows beyond the TERM grace period before abandoning stuck jobs. */
+export const SHUTDOWN_SLACK_MS = 2000;
 interface Job {
   snapshot: Omit<JobSnapshot, "outputStart" | "outputEnd" | "tail">;
   child: JobProcess; log: OutputLog; done: Promise<void>; resolve: () => void;
   timeout?: ReturnType<typeof setTimeout>; force?: ReturnType<typeof setTimeout>;
-  groupPoll?: ReturnType<typeof setInterval>; streamsClosed: boolean; leaderExited: boolean;
+  groupPoll?: ReturnType<typeof setInterval>; drain?: ReturnType<typeof setTimeout>;
+  streamsClosed: boolean; leaderExited: boolean;
   forced: boolean; stopping?: "stopped" | "timed-out"; pendingWrites: number;
-  secretValues: string[];
+  secretValues: string[]; flush: (() => void)[];
 }
 export const isActive = (status: JobStatus) => ["starting", "running", "stopping"].includes(status);
 
@@ -52,10 +63,10 @@ export class JobService {
   start(input: StartJob, signal?: AbortSignal): JobSnapshot {
     signal?.throwIfAborted();
     if (this.closed) throw new Error("Background job service is closed.");
-    if (this.list().filter((job) => isActive(job.status)).length >= 4) throw new Error("Four jobs are already active. Stop one before starting another.");
+    if (this.list().filter((job) => isActive(job.status)).length >= MAX_ACTIVE_JOBS) throw new Error(`${MAX_ACTIVE_JOBS} jobs are already active. Stop one before starting another.`);
     if (!input.command.trim() || input.command.length > 16000) throw new Error("Command must contain 1–16000 characters.");
     if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 100 || input.timeoutMs > 86400000)) throw new Error("Timeout must be 100–86400000 milliseconds.");
-    while (this.jobs.size >= 24) {
+    while (this.jobs.size >= MAX_RETAINED_JOBS) {
       const old = [...this.jobs.values()].find((job) => !isActive(job.snapshot.status));
       if (!old) break;
       this.jobs.delete(old.snapshot.id);
@@ -67,21 +78,30 @@ export class JobService {
     let resolve!: () => void;
     const job: Job = {
       snapshot: { id: randomUUID().slice(0, 8), name: clean(input.name).slice(0, 80) || "Background job", command: clean(input.command), cwd: clean(input.cwd), pty: !!input.pty, ...size, status: "starting", startedAt: Date.now() },
-      child, log: new OutputLog(), done: new Promise<void>((done) => { resolve = done; }), resolve: () => resolve(),
+      child, log: new OutputLog(LOG_CAPACITY), done: new Promise<void>((done) => { resolve = done; }), resolve: () => resolve(),
       streamsClosed: false, leaderExited: false, forced: false, pendingWrites: 0,
-      secretValues: known,
+      secretValues: known, flush: [],
     };
     this.jobs.set(job.snapshot.id, job);
     for (const stream of [child.stdout, child.stderr]) {
+      if (!stream) continue;
       const decoder = new StringDecoder("utf8");
       const sanitizer = new PlainOutput();
       const redactor = new StreamRedactor(() => [...known, ...this.secrets()]);
       const displayRedactor = new StreamRedactor(() => [...known, ...this.secrets()]);
-      stream?.on("data", (chunk: Buffer) => {
+      let flushed = false;
+      const flush = () => {
+        if (flushed) return;
+        flushed = true;
+        job.log.append(displayRedactor.push(sanitizer.push(redactor.push(decoder.end(), true)), true));
+      };
+      stream.on("data", (chunk: Buffer) => {
+        if (flushed) return;
         job.log.append(displayRedactor.push(sanitizer.push(redactor.push(decoder.write(chunk)))));
         this.emit(job, true);
       });
-      stream?.on("end", () => { job.log.append(displayRedactor.push(sanitizer.push(redactor.push(decoder.end(), true)), true)); });
+      stream.on("end", flush);
+      job.flush.push(flush);
     }
     // A closed input stream is an ordinary job outcome, not an unhandled error.
     child.stdin?.on("error", () => {});
@@ -103,13 +123,11 @@ export class JobService {
       job.leaderExited = true;
       job.snapshot.code = code;
       job.snapshot.signal = signal;
+      this.settle(job);
     });
     child.once("close", () => {
       job.streamsClosed = true;
-      if (process.platform !== "win32" && !job.forced && this.groupAlive(job)) {
-        job.groupPoll = setInterval(() => { if (!this.groupAlive(job)) this.finish(job); }, 100);
-        job.groupPoll.unref?.();
-      } else this.finish(job);
+      this.settle(job);
     });
     if (input.timeoutMs) {
       job.timeout = setTimeout(() => this.stop(job.snapshot.id, "timed-out"), input.timeoutMs);
@@ -120,11 +138,16 @@ export class JobService {
   }
 
   output(id: string, cursor?: number): OutputSlice { return this.require(id).log.read(cursor); }
+  /** Bounded read with a caller-chosen limit; `newest` returns the end of the unread range. */
+  window(id: string, cursor: number | undefined, limit: number, newest: boolean): OutputWindow {
+    return this.require(id).log.window(cursor, limit, newest);
+  }
 
   async write(id: string, text: string, eof = false, signal?: AbortSignal): Promise<JobSnapshot> {
     signal?.throwIfAborted();
     const job = this.require(id);
     if (job.snapshot.pty && eof) throw new Error("PTY input cannot be half-closed. Send \u0004 for terminal EOF or use job_stop.");
+    if (!job.snapshot.pty && !job.child.stdin) throw new Error("Job input is closed: pipe jobs start with stdin at EOF unless started with stdin: true.");
     if (!isActive(job.snapshot.status) || job.stopping || !job.child.stdin?.writable) throw new Error("Job input is closed.");
     for (const secret of this.secrets()) if (!job.secretValues.includes(secret)) job.secretValues.push(secret);
     if (text.length > 16000 || job.pendingWrites >= 2) throw new Error("Input exceeds the pending write limit.");
@@ -171,15 +194,16 @@ export class JobService {
     job.force = setTimeout(() => {
       job.forced = true;
       this.kill(job, "SIGKILL");
-      if (job.streamsClosed) this.finish(job);
+      this.settle(job);
     }, this.graceMs);
+    job.force.unref?.();
     this.emit(job);
     return this.snapshot(job);
   }
 
   async wait(id: string, milliseconds = 1000, signal?: AbortSignal): Promise<JobSnapshot> {
     signal?.throwIfAborted();
-    if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 30000) throw new Error("Wait must be 0–30000 milliseconds.");
+    if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > MAX_WAIT_MS) throw new Error(`Wait must be 0–${MAX_WAIT_MS} milliseconds.`);
     const job = this.require(id);
     if (!isActive(job.snapshot.status) || milliseconds === 0) return this.snapshot(job);
     await new Promise<void>((resolve, reject) => {
@@ -193,10 +217,18 @@ export class JobService {
     return this.snapshot(job);
   }
 
+  /** Stop every job. Bounded: jobs still unsettled after grace + slack are detached and marked stopped. */
   async shutdown(): Promise<void> {
     this.closed = true;
-    for (const job of this.jobs.values()) if (isActive(job.snapshot.status)) this.stop(job.snapshot.id);
-    await Promise.all([...this.jobs.values()].map((job) => job.done));
+    const jobs = [...this.jobs.values()];
+    for (const job of jobs) if (isActive(job.snapshot.status)) this.stop(job.snapshot.id);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all(jobs.map((job) => job.done)),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, this.graceMs + SHUTDOWN_SLACK_MS); }),
+    ]);
+    clearTimeout(timer);
+    for (const job of jobs) if (isActive(job.snapshot.status)) { this.kill(job, "SIGKILL"); this.detach(job); }
     this.listeners.clear();
   }
 
@@ -215,13 +247,36 @@ export class JobService {
   }
   private finish(job: Job, status?: JobStatus): void {
     if (!isActive(job.snapshot.status)) return;
-    clearTimeout(job.timeout); clearTimeout(job.force); clearInterval(job.groupPoll);
+    clearTimeout(job.timeout); clearTimeout(job.force); clearInterval(job.groupPoll); clearTimeout(job.drain);
     job.snapshot.status = status ?? job.stopping ?? (job.snapshot.code === 0 ? "completed" : "failed");
     job.snapshot.endedAt = Date.now();
     job.secretValues.length = 0;
     if (job.child.pid) reapers.delete(job.child.pid);
     this.emit(job);
     job.resolve();
+  }
+  /**
+   * Finish once the process group is gone and output has closed. When a
+   * daemonized descendant escapes the group but keeps the pipes open, allow a
+   * short drain and then detach from its streams instead of waiting for it.
+   */
+  private settle(job: Job): void {
+    if (!isActive(job.snapshot.status) || !job.leaderExited && !job.streamsClosed && !job.forced) return;
+    const check = () => {
+      if (!isActive(job.snapshot.status)) return true;
+      if (process.platform !== "win32" && !job.forced && this.groupAlive(job)) return false;
+      if (job.streamsClosed) this.finish(job);
+      else if (!job.drain) { job.drain = setTimeout(() => this.detach(job), DRAIN_MS); job.drain.unref?.(); }
+      return true;
+    };
+    if (check() || job.groupPoll) return;
+    job.groupPoll = setInterval(() => { if (check()) { clearInterval(job.groupPoll); job.groupPoll = undefined; } }, 100);
+    job.groupPoll.unref?.();
+  }
+  private detach(job: Job): void {
+    for (const flush of job.flush) flush();
+    job.child.stdin?.destroy(); job.child.stdout?.destroy(); job.child.stderr?.destroy();
+    this.finish(job);
   }
   private groupAlive(job: Job): boolean {
     if (!job.child.pid) return false;

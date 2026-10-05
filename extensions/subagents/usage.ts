@@ -12,8 +12,9 @@ export interface RecordedSubagentUsage {
 
 export interface SubagentUsageRecord {
   version: 1;
-  agentId: string;
-  agentName: string;
+  /** Absent only in legacy rows, which identify the response by provider and model. */
+  agentId?: string;
+  agentName?: string;
   provider?: string;
   model?: string;
   usage: RecordedSubagentUsage;
@@ -36,11 +37,17 @@ export function usageRecord(message: unknown, agent: { id: string; name: string 
 export function decodeUsageRecord(value: unknown): SubagentUsageRecord | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Partial<SubagentUsageRecord>;
-  if (candidate.version !== 1 || typeof candidate.agentId !== "string" || typeof candidate.agentName !== "string") return undefined;
+  if (candidate.version !== 1) return undefined;
+  const identified = typeof candidate.agentId === "string" && typeof candidate.agentName === "string";
+  // Older child usage rows carry no agent identity but always name the provider
+  // and model of the response, plus a usage object.
+  const legacy = candidate.agentId === undefined && candidate.agentName === undefined
+    && typeof candidate.provider === "string" && typeof candidate.model === "string"
+    && !!candidate.usage && typeof candidate.usage === "object";
+  if (!identified && !legacy) return undefined;
   return {
     version: 1,
-    agentId: candidate.agentId,
-    agentName: candidate.agentName,
+    ...identified ? { agentId: candidate.agentId, agentName: candidate.agentName } : {},
     provider: typeof candidate.provider === "string" ? candidate.provider : undefined,
     model: typeof candidate.model === "string" ? candidate.model : undefined,
     usage: normalizeUsage(candidate.usage),

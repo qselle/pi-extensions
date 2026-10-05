@@ -7,12 +7,24 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const TERMINATE_GRACE_MS = 1_000;
 const KILL_GRACE_MS = 1_000;
 const MAX_STDERR_BYTES = 16 * 1024;
-const MAX_RECORD_BYTES = 2 * 1024 * 1024;
+export const MAX_RECORD_BYTES = 2 * 1024 * 1024;
+// Enough of a discarded record to identify its type, role, and request id.
+const SKIPPED_PREFIX_CHARS = 512;
 const CHILD_MARKER = "PI_SUBAGENT_CHILD";
+/** Synthetic event emitted instead of an RPC record above MAX_RECORD_BYTES. */
+export const RPC_RECORD_SKIPPED = "rpc_record_skipped";
 
 export interface RpcEvent {
   type: string;
   [key: string]: unknown;
+}
+
+export interface SkippedRecordEvent extends RpcEvent {
+  type: typeof RPC_RECORD_SKIPPED;
+  recordType?: string;
+  role?: string;
+  bytes: number;
+  limitBytes: number;
 }
 
 export interface AgentClient {
@@ -44,8 +56,9 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-const liveProcessGroups = new Set<number>();
-let reaperInstalled = false;
+interface ExitReaper { pids: Set<number>; listener?: () => void }
+// Shared by every loaded copy of this module so /reload cannot add listeners.
+const EXIT_REAPER = Symbol.for("pi-extensions.subagents.exit-reaper");
 
 export function getPiCommand(args: string[]): { command: string; args: string[] } {
   const script = process.argv[1];
@@ -94,10 +107,7 @@ export class RpcAgentClient implements AgentClient {
       windowsHide: true,
     });
     this.child = child;
-    if (child.pid) {
-      liveProcessGroups.add(child.pid);
-      installExitReaper();
-    }
+    if (child.pid) trackProcessGroup(child.pid);
 
     child.stderr.on("data", (chunk) => {
       this.stderrTail = boundedTail(this.stderrTail, String(chunk), MAX_STDERR_BYTES);
@@ -105,7 +115,7 @@ export class RpcAgentClient implements AgentClient {
     child.stdin.on("error", (error) => this.fail(new Error(`Subagent stdin failed: ${error.message}`)));
     child.once("error", (error) => this.fail(new Error(`Subagent process failed: ${error.message}`)));
     child.once("close", (code, signal) => {
-      if (child.pid) liveProcessGroups.delete(child.pid);
+      if (child.pid) untrackProcessGroup(child.pid);
       this.fail(new Error(
         `Subagent process exited (code=${code ?? "none"}, signal=${signal ?? "none"})${this.stderrTail ? `: ${this.stderrTail.trim()}` : ""}`,
       ));
@@ -113,10 +123,7 @@ export class RpcAgentClient implements AgentClient {
     this.stopReader = readJsonLines(
       child.stdout,
       (line) => this.handleLine(line),
-      (error) => {
-        this.fail(error);
-        void this.stop().catch(() => undefined);
-      },
+      (prefix, bytes) => this.handleSkipped(prefix, bytes),
     );
 
     try {
@@ -185,7 +192,7 @@ export class RpcAgentClient implements AgentClient {
     }
     if (!closed) throw new Error(`Subagent process ${child.pid ?? "unknown"} did not exit after SIGKILL`);
 
-    if (child.pid) liveProcessGroups.delete(child.pid);
+    if (child.pid) untrackProcessGroup(child.pid);
     this.child = undefined;
     this.rejectPending(new Error("Subagent RPC client stopped"));
   }
@@ -213,6 +220,19 @@ export class RpcAgentClient implements AgentClient {
       return;
     }
     for (const listener of [...this.events]) listener(message as RpcEvent);
+  }
+
+  /** Long runs repeat every message in `agent_end`; dropping such a record keeps the child alive. */
+  private handleSkipped(prefix: string, bytes: number): void {
+    const event = describeSkippedRecord(prefix, bytes);
+    const requestId = /"id"\s*:\s*"(subagent-\d+)"/.exec(prefix)?.[1];
+    const pending = event.recordType === "response" && requestId ? this.pending.get(requestId) : undefined;
+    if (pending) {
+      this.pending.delete(requestId!);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(`Subagent RPC response exceeded ${MAX_RECORD_BYTES} bytes`));
+    }
+    for (const listener of [...this.events]) listener(event);
   }
 
   private cancelDialog(request: any): void {
@@ -275,43 +295,65 @@ export class RpcAgentClient implements AgentClient {
   }
 }
 
+export function describeSkippedRecord(prefix: string, bytes: number): SkippedRecordEvent {
+  // Pi serializes `type` first and messages start with `role`, so the prefix
+  // identifies the record without buffering or parsing all of it.
+  const recordType = /^\s*\{\s*"type"\s*:\s*"([\w-]{1,64})"/.exec(prefix)?.[1]
+    ?? /"type"\s*:\s*"(response)"/.exec(prefix)?.[1];
+  const role = /"message"\s*:\s*\{\s*"role"\s*:\s*"([\w-]{1,32})"/.exec(prefix)?.[1];
+  return { type: RPC_RECORD_SKIPPED, recordType, role, bytes, limitBytes: MAX_RECORD_BYTES };
+}
+
+/**
+ * Splits JSONL while holding at most one record limit of text. An oversized
+ * record is discarded as it streams in, keeping only a short prefix; later
+ * records keep flowing.
+ */
 function readJsonLines(
   stream: NodeJS.ReadableStream,
   onLine: (line: string) => void,
-  onError: (error: Error) => void,
+  onSkipped: (prefix: string, bytes: number) => void,
 ): () => void {
   const decoder = new StringDecoder("utf8");
   let buffer = "";
-  let failed = false;
-  const fail = () => {
-    if (failed) return;
-    failed = true;
-    buffer = "";
-    onError(new Error(`Subagent RPC record exceeded ${MAX_RECORD_BYTES} bytes`));
-  };
-  const drain = () => {
+  let skipping: { prefix: string; bytes: number } | undefined;
+  const emit = (line: string) => onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+  const consume = (text: string) => {
+    let rest = text;
+    if (skipping) {
+      const newline = rest.indexOf("\n");
+      if (newline < 0) {
+        skipping.bytes += Buffer.byteLength(rest);
+        return;
+      }
+      const skipped = skipping;
+      skipping = undefined;
+      skipped.bytes += Buffer.byteLength(rest.slice(0, newline));
+      onSkipped(skipped.prefix, skipped.bytes);
+      rest = rest.slice(newline + 1);
+    }
+    buffer += rest;
     for (;;) {
       const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      let line = buffer.slice(0, newline);
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
-      if (Buffer.byteLength(line) > MAX_RECORD_BYTES) return fail();
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      onLine(line);
-      if (failed) return;
+      const bytes = Buffer.byteLength(line);
+      if (bytes > MAX_RECORD_BYTES) onSkipped(line.slice(0, SKIPPED_PREFIX_CHARS), bytes);
+      else emit(line);
+    }
+    const pending = Buffer.byteLength(buffer);
+    if (pending > MAX_RECORD_BYTES) {
+      skipping = { prefix: buffer.slice(0, SKIPPED_PREFIX_CHARS), bytes: pending };
+      buffer = "";
     }
   };
-  const onData = (chunk: Buffer | string) => {
-    if (failed) return;
-    buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-    drain();
-    if (!failed && Buffer.byteLength(buffer) > MAX_RECORD_BYTES) fail();
-  };
+  const onData = (chunk: Buffer | string) => consume(typeof chunk === "string" ? chunk : decoder.write(chunk));
   const onEnd = () => {
-    if (failed) return;
-    buffer += decoder.end();
-    if (Buffer.byteLength(buffer) > MAX_RECORD_BYTES) fail();
-    else if (buffer) onLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+    consume(decoder.end());
+    if (skipping) onSkipped(skipping.prefix, skipping.bytes);
+    else if (buffer) emit(buffer);
+    skipping = undefined;
     buffer = "";
   };
   stream.on("data", onData);
@@ -333,13 +375,29 @@ function boundedTail(before: string, chunk: string, maxBytes: number): string {
   return marker + tailText;
 }
 
-function installExitReaper(): void {
-  if (reaperInstalled) return;
-  reaperInstalled = true;
-  process.on("exit", () => {
-    for (const pid of liveProcessGroups) killProcessTree(pid, "SIGKILL");
-    liveProcessGroups.clear();
-  });
+function exitReaper(): ExitReaper {
+  const registry = globalThis as typeof globalThis & { [EXIT_REAPER]?: ExitReaper };
+  return registry[EXIT_REAPER] ??= { pids: new Set() };
+}
+
+/** One process-wide exit listener exists only while child process groups are live. */
+function trackProcessGroup(pid: number): void {
+  const reaper = exitReaper();
+  reaper.pids.add(pid);
+  if (reaper.listener) return;
+  reaper.listener = () => {
+    for (const live of reaper.pids) killProcessTree(live, "SIGKILL");
+    reaper.pids.clear();
+  };
+  process.on("exit", reaper.listener);
+}
+
+function untrackProcessGroup(pid: number): void {
+  const reaper = exitReaper();
+  reaper.pids.delete(pid);
+  if (reaper.pids.size > 0 || !reaper.listener) return;
+  process.off("exit", reaper.listener);
+  reaper.listener = undefined;
 }
 
 function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
