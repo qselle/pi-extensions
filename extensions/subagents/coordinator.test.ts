@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test";
 import {
+  PROGRESS_CHECKPOINT_MS,
   SubagentCoordinator,
+  isProviderLimitError,
+  type AgentSnapshot,
   type AgentRuntime,
   type SpawnRequest,
 } from "./coordinator.ts";
-import type { AgentClient, RpcEvent } from "./rpc.ts";
+import { RPC_RECORD_SKIPPED, type AgentClient, type RpcEvent } from "./rpc.ts";
 import { restoreAgents, SUBAGENT_STATE } from "./persistence.ts";
 import { REPORT_MESSAGE_TYPE } from "./report.ts";
 
@@ -394,6 +397,175 @@ test("keeps a bounded transcript snapshot after child cleanup", async () => {
   expect(retained.agent.status).toBe("closed");
   expect(retained.entries).toHaveLength(500);
   expect((retained.entries.at(-1) as any).index).toBe(519);
+});
+
+test("child activity does not persist state or reread the child file between lifecycle transitions", async () => {
+  let now = 1_000;
+  let persisted = 0, fileReads = 0;
+  let client!: FakeClient;
+  const coordinator: SubagentCoordinator = new SubagentCoordinator({
+    now: () => now,
+    createRuntime: async () => {
+      client = new FakeClient();
+      return { client, cleanup: async () => {}, checkpoint: () => {
+        fileReads++;
+        return { directory: "pi-subagent-context-test", file: "child.jsonl", initialEntryCount: 0, leafId: `leaf-${fileReads}` };
+      } };
+    },
+    hooks: { onPersist: () => { persisted++; coordinator.checkpoint(); } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Busy"));
+  expect({ persisted, fileReads }).toEqual({ persisted: 1, fileReads: 1 });
+
+  for (let index = 0; index < 50; index++) {
+    now += 100;
+    client.emit({ type: "tool_execution_start", toolName: "bash", args: { command: `step ${index}` } });
+    client.emit({ type: "tool_execution_end", toolName: "bash", isError: false, result: {} });
+    if (index % 5 === 0) client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `progress ${index}` }] } });
+  }
+  expect(persisted, "110 child events add no state entry").toBe(1);
+  expect(fileReads, "child events do not reread the session file").toBe(1);
+  expect(coordinator.list()[0]!.activity.at(-1)).toBe("bash: step 49");
+  coordinator.checkpoint();
+  coordinator.checkpoint();
+  expect(fileReads, "one read per batch of new child entries").toBe(2);
+
+  now += 100;
+  client.emit({ type: "agent_settled" });
+  expect(persisted).toBe(2);
+  expect(fileReads).toBe(3);
+  expect(coordinator.checkpoint()[0]!.resume?.leafId).toBe("leaf-3");
+  expect(fileReads, "a settled child is not reread").toBe(3);
+  await coordinator.shutdown();
+});
+
+test("long runs persist progress at a bounded interval", async () => {
+  let now = 0;
+  let persisted = 0;
+  let client!: FakeClient;
+  const coordinator = new SubagentCoordinator({
+    now: () => now,
+    createRuntime: async () => { client = new FakeClient(); return { client, cleanup: async () => {} }; },
+    hooks: { onPersist: () => { persisted++; } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Long"));
+  expect(persisted).toBe(1);
+  for (let index = 0; index < 30; index++) {
+    now += 10_000;
+    client.emit({ type: "tool_execution_start", toolName: "read" });
+  }
+  expect(persisted).toBe(1 + Math.floor(300_000 / PROGRESS_CHECKPOINT_MS));
+  await coordinator.shutdown();
+});
+
+function durableHarness(maxOpenAgents = 6) {
+  const clients = new Map<string, FakeClient[]>();
+  const runtimes: string[] = [];
+  const completions: AgentSnapshot[] = [];
+  const coordinator = new SubagentCoordinator({
+    maxOpenAgents,
+    createRuntime: async (spawn) => {
+      runtimes.push(spawn.name);
+      const make = () => { const client = new FakeClient(); clients.set(spawn.name, [...clients.get(spawn.name) ?? [], client]); return client; };
+      return { client: make(), relaunch: make, cleanup: async () => {},
+        checkpoint: () => ({ directory: `pi-subagent-context-${spawn.name}`, file: "child.jsonl", initialEntryCount: 0, leafId: "leaf" }) };
+    },
+    hooks: { onCompletion: (agent) => { completions.push(agent); } },
+  });
+  coordinator.startSession();
+  const latest = (name: string) => clients.get(name)!.at(-1)!;
+  return { coordinator, clients, runtimes, completions, latest };
+}
+
+test("recognizes provider quota, rate-limit and overload errors", () => {
+  for (const message of ["429 Too Many Requests", "HTTP 429", "Rate limit reached for requests", "rate_limit_error",
+    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached"]) {
+    expect(isProviderLimitError(message), message).toBe(true);
+  }
+  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted"]) {
+    expect(isProviderLimitError(message), message).toBe(false);
+  }
+});
+
+test("a provider limit pauses the child, and send resumes the same conversation", async () => {
+  const { coordinator, clients, runtimes, completions, latest } = durableHarness();
+  await coordinator.spawn(request("Quota"));
+  latest("Quota").emit({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "429 Too Many Requests: rate limit reached" } });
+  latest("Quota").emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  expect(coordinator.list()[0]).toMatchObject({ status: "paused", error: "429 Too Many Requests: rate limit reached" });
+  expect(completions.map((agent) => agent.status)).toEqual(["paused"]);
+  const restored = restoreAgents([{ type: "custom", customType: SUBAGENT_STATE, data: { version: 1, agents: coordinator.checkpoint() } }]);
+  expect(restored[0]!.agent.status).toBe("paused");
+
+  const resumed = await coordinator.send("Quota", "Limits reset; continue");
+  expect(resumed.status).toBe("running");
+  expect(resumed.error).toBeUndefined();
+  expect(runtimes, "no replacement conversation").toEqual(["Quota"]);
+  expect(clients.get("Quota")).toHaveLength(2);
+  expect(latest("Quota").promptCalls).toEqual(["Limits reset; continue"]);
+  await coordinator.shutdown();
+});
+
+test("settled durable children hibernate, release capacity and relaunch on follow-up", async () => {
+  const { coordinator, clients, runtimes, latest } = durableHarness(1);
+  await coordinator.spawn(request("First"));
+  const first = latest("First");
+  first.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "first done" }], stopReason: "stop" } });
+  first.emit({ type: "agent_settled" });
+  await waitUntil(() => coordinator.list()[0]!.activity.at(-1) === "hibernated");
+  expect(first.stopCalls).toBe(1);
+
+  await coordinator.spawn(request("Second"));
+  await expect(coordinator.send("First", "Too early"), "one live process at a time").rejects.toThrow("At most 1");
+  latest("Second").emit({ type: "agent_settled" });
+  await flushMicrotasks();
+
+  const followed = await coordinator.send("First", "Continue the review");
+  expect(followed).toMatchObject({ status: "running", output: "" });
+  expect(runtimes).toEqual(["First", "Second"]);
+  expect(clients.get("First")).toHaveLength(2);
+  expect(latest("First")).not.toBe(first);
+  expect(latest("First").startCalls).toBe(1);
+  expect(latest("First").promptCalls).toEqual(["Continue the review"]);
+  first.emit({ type: "agent_settled" });
+  expect(coordinator.list().find((agent) => agent.name === "First")!.status, "the stopped process cannot settle the new run").toBe("running");
+  await coordinator.shutdown();
+});
+
+test("children without a durable conversation keep their process after settling", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Ephemeral"));
+  clients.get("Ephemeral")!.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  expect(clients.get("Ephemeral")!.stopCalls).toBe(0);
+  await coordinator.send("Ephemeral", "More");
+  expect(clients.get("Ephemeral")!.promptCalls.at(-1)).toBe("More");
+  await coordinator.shutdown();
+});
+
+test("an oversized agent_end record leaves the child running and its final output intact", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Long run"));
+  const client = clients.get("Long run")!;
+  client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Final answer" }], stopReason: "stop" } });
+  client.emit({ type: RPC_RECORD_SKIPPED, recordType: "agent_end", bytes: 3 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+  expect(coordinator.list()[0]!.status).toBe("running");
+  client.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  const [agent] = coordinator.list();
+  expect(agent).toMatchObject({ status: "completed", output: "Final answer" });
+  expect(agent!.activity.at(-1)).toBe("skipped oversized agent_end RPC record (3.0 MiB)");
+  expect(completions).toEqual(["Long run"]);
+
+  await coordinator.send("Long run", "Return a huge answer");
+  client.emit({ type: RPC_RECORD_SKIPPED, recordType: "message_end", role: "assistant", bytes: 5 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+  client.emit({ type: "agent_settled" });
+  expect(coordinator.list()[0]!.output).toContain("omitted because its RPC record (5.0 MiB) exceeded the 2.0 MiB limit");
+  expect(coordinator.list()[0]!.status).toBe("completed");
+  await coordinator.shutdown();
 });
 
 test("converts unexpected process exits into bounded failed completions", async () => {

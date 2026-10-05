@@ -38,6 +38,7 @@ import {
   type AgentClientFactory,
 } from "./rpc.ts";
 import { resolveRuntimeSelection } from "./runtime-selection.ts";
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS, prepareSubagentArguments, waitTimeout } from "./arguments.ts";
 import { REPORT_MESSAGE_TYPE, REPORT_TOOL_NAME, decodeParentReport, registerChildReporter, renderParentReport } from "./report.ts";
 import { SharedWork } from "./shared-work.ts";
 import { ChildTranscriptBrowser, navigableAgents } from "./transcript.ts";
@@ -58,9 +59,9 @@ import {
 
 const TOOL_NAME = "subagents";
 const COMPLETION_MESSAGE_TYPE = "subagent-completion";
-const DEFAULT_WAIT_MS = 30_000;
-const MAX_WAIT_MS = 5 * 60_000;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
+const WAIT_TIMEOUT_GUIDANCE = "A wait timeout is not a failure: the selected children keep working. Do not interrupt, close, or ask healthy children to stop or finalize because a wait timed out; continue non-overlapping work or wait again.";
+const PAUSED_GUIDANCE = "Paused by a provider quota or rate limit; the conversation is kept. After the limit resets, use send to resume this child instead of spawning a replacement.";
 
 export interface SubagentsExtensionOptions {
   createClient?: AgentClientFactory;
@@ -87,7 +88,7 @@ const Parameters = Type.Object({
   agent_names: Type.Optional(Type.Array(Type.String(), { description: "Names to wait for; defaults to running children and unread results" })),
   wait_mode: Type.Optional(WaitModeSchema),
   wake_on: Type.Optional(StringEnum(["any", "final"] as const, { description: "For wait_mode any: final (default) waits for a final; any also wakes for an explicit interim report. Ordinary commentary never wakes wait." })),
-  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS })),
+  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout; default ${DEFAULT_WAIT_MS} (5 minutes), maximum ${MAX_WAIT_MS} (1 hour)` })),
 });
 
 export default function registerSubagents(
@@ -138,14 +139,17 @@ export default function registerSubagents(
     const childContext = await createContext(ctx, request.contextMode, summary, request.resume);
     try {
       const invocation = getPiCommand(buildChildArgs(pi, ctx, childContext, request));
-      const client = createClient({
+      const clientOptions = {
         command: invocation.command,
         args: invocation.args,
         cwd: request.cwd,
         env: subagentEnvironment(request.name),
-      });
+      };
+      const client = createClient(clientOptions);
       return {
         client,
+        // Relaunching reopens the same session file, so only durable children hibernate.
+        relaunch: childContext.checkpoint ? () => createClient(clientOptions) : undefined,
         cleanup: childContext.cleanup,
         checkpoint: childContext.checkpoint,
         transcript: () => childTranscriptEntries(childContext, request.task, request.cwd),
@@ -163,11 +167,12 @@ export default function registerSubagents(
       onChange: () => {
         card?.invalidate();
         activeTranscriptRefresh?.();
-        if (activeContext && !restoring) {
-          const agents = coordinator.checkpoint();
-          const signature = JSON.stringify(agents);
-          if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
-        }
+      },
+      onPersist: () => {
+        if (!activeContext || restoring) return;
+        const agents = coordinator.checkpoint();
+        const signature = JSON.stringify(agents);
+        if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
       },
       onCompletion: (agent) => {
         pi.sendMessage({
@@ -227,9 +232,9 @@ export default function registerSubagents(
     label: "Subagents",
     description: [
       "Coordinate bounded, persistent child agents in isolated Pi sessions.",
-      "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Read retrieves the latest result. Reload/quit stop processes and retain conversations; send explicitly resumes a restored child.",
+      "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Send steers a running child or resumes a settled, paused, or stopped one. Read retrieves the latest result. Settled children stop their process and keep their conversation; reload/quit also stop processes and retain conversations.",
       "Spawn returns immediately; completions are delivered automatically.",
-      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final.",
+      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after 5 minutes by default, at most 1 hour.",
       "Children inherit the current model, thinking level, active tools, working directory, and project instructions.",
       "Spawn may override model and thinking for a clear task-specific reason.",
       "Context defaults to fresh; summary provides a compact handoff and fork copies the active parent conversation.",
@@ -242,10 +247,13 @@ export default function registerSubagents(
       "Use fresh subagent context by default, summary when prior decisions matter, and fork only when the exact active conversation is necessary.",
       "Omit subagent model and thinking overrides by default; set them only when the user requests a model or a concrete task-specific cost, speed, or capability reason justifies it.",
       "Do not duplicate a delegated task. Continue useful non-overlapping work and use subagents wait only when blocked on results.",
+      "A timed-out subagents wait is not a failure. Do not interrupt, close, or ask healthy children to stop or finalize because a wait timed out.",
       "Parallel writing subagents must have disjoint file scopes. Review their changes before integrating them.",
-      "Close completed subagents after collecting final results when no follow-up is needed, because open children consume capacity.",
+      "Close completed subagents after collecting final results when no follow-up is needed; settled children stop their process but keep a retained conversation slot.",
+      "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
     parameters: Parameters,
+    prepareArguments: prepareSubagentArguments,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.action === "spawn") {
         const contextMode = (params.context ?? "fresh") as ContextMode;
@@ -284,8 +292,7 @@ export default function registerSubagents(
         return toolResult("interrupt", [agent], `Interrupt requested for ${agent.name}.`);
       }
       if (params.action === "wait") {
-        const timeout = params.timeout_ms ?? DEFAULT_WAIT_MS;
-        if (timeout > MAX_WAIT_MS) throw new Error(`timeout_ms must be at most ${MAX_WAIT_MS}`);
+        const timeout = waitTimeout(params.timeout_ms);
         const waited = await coordinator.wait(
           params.agent_names,
           timeout,
@@ -294,7 +301,7 @@ export default function registerSubagents(
           params.wake_on ?? "final",
         );
         const visible = waited.agents.filter((agent) => !waited.alreadyReportedIds.includes(agent.id) || agent.reports?.length);
-        const prefix = waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? "Wait timed out.\n" : "";
+        const prefix = waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? `Wait timed out after ${formatDuration(timeout)}. ${WAIT_TIMEOUT_GUIDANCE}\n\n` : "";
         return {
           content: [{ type: "text", text: boundedText(prefix + (visible.length
             ? visible.map((agent) => formatAgent(agent, !waited.alreadyReportedIds.includes(agent.id), true)).join("\n\n---\n\n")
@@ -313,9 +320,9 @@ export default function registerSubagents(
         return toolResult("list", agents, formatAgents(agents, false));
       }
       if (params.action === "close") {
-        const saved = coordinator.checkpoint().find((row) => row.agent.name.toLowerCase() === params.agent_name?.toLowerCase() || row.agent.id === params.agent_name);
+        const resume = coordinator.savedResume(params.agent_name ?? "");
         const agent = await coordinator.close(params.agent_name ?? "");
-        if (saved?.resume) await removeCheckpoint(ctx, saved.resume);
+        if (resume) await removeCheckpoint(ctx, resume);
         return toolResult("close", [agent], `Closed ${agent.name}.`);
       }
       throw new Error(`Unknown subagents action: ${params.action}`);
@@ -346,19 +353,19 @@ export default function registerSubagents(
     }
     if (!agent) return;
     if (ctx.mode !== "tui") {
-      ctx.ui.notify(boundedText(formatAgent(agent, true), 4 * 1024), agent.status === "failed" ? "error" : "info");
+      ctx.ui.notify(boundedText(formatAgent(agent, true), 4 * 1024), agent.status === "failed" ? "error" : agent.status === "paused" ? "warning" : "info");
       return;
     }
     const loadSaved = async (target: AgentSnapshot) => {
-      const saved = coordinator.checkpoint().find((row) => row.agent.id === target.id);
-      if (!saved?.resume || isActive(target)) return;
+      const resume = isActive(target) ? undefined : coordinator.savedResume(target.id);
+      if (!resume) return;
       try {
-        const file = await checkpointFile(ctx, saved.resume);
+        const file = await checkpointFile(ctx, resume);
         if (revision !== viewRevision) return;
         const current = coordinator.list().find((child) => child.id === target.id);
         if (!current || isActive(current) || current.runId !== target.runId) return;
         const session = SessionManager.open(file);
-        const entries = (saved.resume.leafId ? session.getBranch(saved.resume.leafId) : []).slice(saved.resume.initialEntryCount);
+        const entries = (resume.leafId ? session.getBranch(resume.leafId) : []).slice(resume.initialEntryCount);
         const first = entries.findIndex((entry: any) => entry.type === "message" && entry.message?.role === "user");
         if (first >= 0) entries.splice(first, 1);
         coordinator.restoreTranscript(target.name, entries);
@@ -516,6 +523,7 @@ function completionContext(agent: AgentSnapshot): string {
       result: agent.output || null,
       error: agent.error || null,
     }, null, 2),
+    ...agent.status === "paused" ? [PAUSED_GUIDANCE] : [],
   ].join("\n\n"), 24 * 1024);
 }
 
@@ -543,10 +551,16 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean, includeReport
   if (agent.queued) lines.push(`queued: ${agent.queued} message(s); delivered only by send`);
   if (agent.unread) lines.push("unread result available: use read or wait");
   if (agent.status === "stopped") lines.push("stopped after session transition; send explicitly resumes the saved conversation");
+  if (agent.status === "paused") lines.push(PAUSED_GUIDANCE);
   if (agent.error) lines.push(`error: ${agent.error}`);
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
   else if (includeOutput && isActive(agent)) lines.push("", "(still running)");
   return lines.join("\n");
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return ms >= 1_000 ? `${Math.round(ms / 100) / 10} s` : `${ms} ms`;
 }
 
 function renderFallbackMessage(text: string, theme: Theme) {
@@ -563,6 +577,7 @@ function runtimeLabel(agent: AgentSnapshot): string {
 function statusSymbol(agent: AgentSnapshot): string {
   if (agent.status === "starting" || agent.status === "running") return "●";
   if (agent.status === "completed") return "✓";
+  if (agent.status === "paused") return "‖";
   if (agent.status === "failed") return "×";
   return "■";
 }
