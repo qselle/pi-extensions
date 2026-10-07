@@ -21,7 +21,7 @@ Hiding the card does not stop tracking. Visibility itself resets on reload.
 ## Dependencies and limitations
 
 - Uses Pi's extension, tool-event, session, and TUI APIs.
-- Requires [`overlay-stack`](../overlay-stack/); uses [`hyperlinks`](../hyperlinks/) for clickable paths.
+- Requires [`overlay-stack`](../overlay-stack/); clickable paths follow Pi's `terminal.hyperlinks` setting.
 - No third-party packages or executables.
 - Tracks successful local built-in `edit` and `write` calls only. Changes from shell commands, custom tools, remote tools, and external programs are not included.
 - Interactive TUI only; the card requires at least 72 columns and 12 rows.

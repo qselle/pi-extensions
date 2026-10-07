@@ -110,7 +110,7 @@ test("optional context tools are off rather than broken and provider gates are e
   expect(supported.find((row) => row.id === "fast-mode")?.detail).toContain("eligibility and actual tier are not tested");
 });
 
-test("validates editor accents and hyperlink modes without exposing config contents", async () => {
+test("validates editor accents without exposing config contents", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-doctor-ui-"));
   try {
     const probe = localProbe({ ...input, agentDir: dir });
@@ -122,14 +122,9 @@ test("validates editor accents and hyperlink modes without exposing config conte
       await writeFile(join(dir, "codex-prompt.json"), JSON.stringify({ accent }));
       expect(await probe.config("codex-prompt.json")).toBe("invalid");
     }
-    await writeFile(join(dir, "hyperlinks.json"), JSON.stringify({ mode: "always" }));
-    expect(await probe.config("hyperlinks.json")).toBe("valid");
-    await writeFile(join(dir, "hyperlinks.json"), JSON.stringify({ mode: "secret-invalid-value" }));
-    expect(await probe.config("hyperlinks.json")).toBe("invalid");
-    const report = formatReport(await diagnose({ ...input, agentDir: dir, commands: ["codex-prompt", "hyperlinks"] }, probe));
+    const report = formatReport(await diagnose({ ...input, agentDir: dir, commands: ["codex-prompt"] }, probe));
     expect(report).not.toContain("secret-invalid-value");
     expect(report).toContain("Repair codex-prompt.json");
-    expect(report).toContain("Repair hyperlinks.json");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

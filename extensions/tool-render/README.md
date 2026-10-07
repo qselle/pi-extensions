@@ -83,7 +83,7 @@ clickable destination, so similar directory prefixes remain distinguishable.
 
 Expanded exploration calls show their individual output, including calls hidden behind a grouped leader when collapsed. Output keeps the last 200 lines with an omitted-line count. Collapsed groups retain a failure diagnostic instead of replacing it with a successful read range. Command and edit/write errors show up to eight lines when collapsed and 200 when expanded.
 
-`Ctrl+O` expands output. File targets use the shared helpers from [`hyperlinks`](../hyperlinks/). Enabling that extension is optional; it adds `/hyperlinks` mode controls and `/open-path`. Every rendered line is width-bounded; rendering errors fall back to a plain line.
+`Ctrl+O` expands output. File targets use the shared helpers in [`lib/links.ts`](../../lib/links.ts), which follow Pi's `terminal.hyperlinks` setting and `PI_HYPERLINKS`. Every rendered line is width-bounded; rendering errors fall back to a plain line.
 
 Shell command lines wrap to the panel's inner width, including long tokens.
 Collapsed commands show four visual rows, expanded commands up to 128, followed
@@ -129,6 +129,6 @@ Long or multiline shell commands wrap into a bounded block; expand it for more l
 - Pi reports a one-time startup warning for each intentionally overridden built-in tool.
 - Pi owns inline image previews, including compact and restored `read` cards.
   Previews follow its image visibility preference and terminal capabilities;
-  this renderer does not add a duplicate image. Pi 0.87 does not expose a
+  this renderer does not add a duplicate image. Pi does not expose a
   per-result switch for lazy previews on expansion. Embedded image content,
   session exports, and image-history retrieval remain unchanged.
