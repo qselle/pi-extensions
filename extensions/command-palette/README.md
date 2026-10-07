@@ -20,7 +20,7 @@ The palette does not execute commands, call the model or add tools to its prompt
 
 ## Dependencies and limitations
 
-- Requires Pi 0.87.x and its public command-discovery, shortcut, editor and custom-UI APIs. No additional runtime packages.
+- Requires Pi 1.0.4 or newer 1.x and its public command-discovery, shortcut, editor and custom-UI APIs. No additional runtime packages.
 - Uses the history-search extension's pure fuzzy matcher; that extension need not be enabled.
 - Interactive TUI only; cross-platform. Some terminals cannot distinguish Ctrl+Shift+P; `/palette` always works.
 - Pi's command-discovery API excludes native commands such as `/model` and `/settings`; use Pi's slash completion for those.

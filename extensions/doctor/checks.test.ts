@@ -145,7 +145,9 @@ test("host and access diagnostics use metadata without printing raw config or re
   const report = await diagnose({ ...input, hostVersion: "0.85.0", modelAuthConfigured: false, modelConfigInvalid: true, bindingConflicts: 2 }, good);
   for (const id of ["host-version", "model-auth", "model-config", "keybindings"]) expect(report.find((row) => row.id === id)?.status).toBe("warn");
   expect(report.find((row) => row.id === "search-keys")?.status).toBe("ok");
-  const valid = await diagnose({ ...input, hostVersion: "0.87.0", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "configured-key" } }, good);
+  for (const hostVersion of ["0.87.0", "1.0.3", "2.0.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("warn");
+  for (const hostVersion of ["1.0.4", "1.2.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("ok");
+  const valid = await diagnose({ ...input, hostVersion: "1.0.4", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "configured-key" } }, good);
   expect(valid.find((row) => row.id === "host-version")?.status).toBe("ok");
   expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("Exa API key");
   expect(JSON.stringify(valid)).not.toContain("configured-key");

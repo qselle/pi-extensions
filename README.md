@@ -4,7 +4,7 @@ Optional extensions for the [Pi coding agent](https://github.com/earendil-works/
 
 ## Install
 
-Requires Pi 0.87.x. macOS and Linux ARM64 are tested; Windows is unverified.
+Requires Pi 1.0.4 or newer 1.x. macOS and Linux ARM64 are tested; Windows is unverified.
 Interactive PTY jobs require Node.js; pipe jobs also work with Bun.
 
 ```bash

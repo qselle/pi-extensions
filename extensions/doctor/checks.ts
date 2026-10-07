@@ -68,13 +68,22 @@ export function localProbe(input: DoctorInput): Probe {
   };
 }
 
+/** Pi 1.x from 1.0.4, the oldest host this package is verified against. */
+function supportedHost(version: string): boolean {
+  const match = /^1\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+  return !!match && (Number(match[1]) > 0 || Number(match[2]) >= 4);
+}
+
 export async function diagnose(input: DoctorInput, probe = localProbe(input)): Promise<Finding[]> {
   const result: Finding[] = [];
   const add = (id: string, label: string, status: Finding["status"], detail: string, fix?: string) => result.push({ id, label, status, detail, ...(fix ? { fix } : {}) });
   const loaded = (name: string) => input.tools.includes(name);
   const active = (name: string) => input.activeTools.includes(name);
   add("runtime", "Runtime", "ok", `${input.bun ? "Bun" : "Node.js"} on ${input.platform}.`);
-  if (input.hostVersion) add("host-version", "Pi host", /^0\.87\.(?:0|[1-9]\d*)$/.test(input.hostVersion) ? "ok" : "warn", `Version ${input.hostVersion}; supported line is 0.87.x (minimum 0.87.0).`, /^0\.87\.(?:0|[1-9]\d*)$/.test(input.hostVersion) ? undefined : "Use the supported Pi host line and reload.");
+  if (input.hostVersion) {
+    const supported = supportedHost(input.hostVersion);
+    add("host-version", "Pi host", supported ? "ok" : "warn", `Version ${input.hostVersion}; supported line is 1.x (minimum 1.0.4).`, supported ? undefined : "Use the supported Pi host line and reload.");
+  }
   if (input.modelConfigInvalid !== undefined) add("model-config", "Model configuration", input.modelConfigInvalid ? "warn" : "ok", input.modelConfigInvalid ? "Pi reports a model configuration error; raw configuration is not displayed." : "Pi's model registry reports no configuration error.", input.modelConfigInvalid ? "Repair models.json, then reload Pi." : undefined);
   if (input.modelAuthConfigured !== undefined) add("model-auth", "Current model authentication", input.modelAuthConfigured ? "ok" : "warn", input.modelAuthConfigured ? "Authentication is configured according to Pi metadata; validity and balance are not tested." : "Pi reports no configured authentication for the selected model.", input.modelAuthConfigured ? undefined : "Use /login or configure the provider, then select the model again.");
   if (input.bindingConflicts !== undefined) add("keybindings", "Custom key assignments", input.bindingConflicts ? "warn" : "ok", input.bindingConflicts ? `${input.bindingConflicts} duplicate custom key assignment(s) reported by Pi; some may be intentional in separate UI contexts.` : "Pi reports no duplicate custom key assignments.", input.bindingConflicts ? "Review keybindings.json and keep intended context-specific overlaps." : undefined);

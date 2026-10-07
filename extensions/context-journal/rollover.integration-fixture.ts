@@ -48,7 +48,7 @@ try {
   const command = runner.getCommand("context-journal")!;
   await assert.rejects(command.handler("reset", runner.createCommandContext()), /stale/);
   const notes = runner.getAllRegisteredTools().find(tool => tool.definition.name === "context_notes")!.definition;
-  await notes.execute("checkpoint", { action: "write", key: "next", text: "review implementation evidence" }, undefined, undefined, runner.createContext());
+  await notes.execute("checkpoint", { action: "write", key: "next", text: "review implementation evidence" }, undefined, undefined, runner.createToolContext("checkpoint", undefined));
   await command.handler("reset", runner.createCommandContext());
   const entries = manager.getBranch();
   const compaction = entries.at(-1) as any;
@@ -77,7 +77,7 @@ try {
     assert(text.includes("[>] Verify rollover"));
     assert(text.includes("Retain completed milestones, goal checks and tool evidence."));
     const getGoal = currentRunner.getToolDefinition("get_goal")!;
-    const result = await getGoal.execute("inspect-goal", {}, undefined, undefined, currentRunner.createContext());
+    const result = await getGoal.execute("inspect-goal", {}, undefined, undefined, currentRunner.createToolContext("inspect-goal", undefined));
     assert.equal(JSON.parse(result.content.find((part) => part.type === "text")!.text).goal.id, savedGoal.id);
   };
   await assertWorkflow(runtime);
@@ -95,7 +95,7 @@ try {
     manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Verified second-cycle evidence. ".repeat(200) }], api: model.api, provider: model.provider, model: model.id, stopReason: "stop", timestamp: Date.now(),
       usage: { input: 95000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 95100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
   }
-  await notes.execute("checkpoint-two", { action: "write", key: "next", text: "verify the second cycle" }, undefined, undefined, runner.createContext());
+  await notes.execute("checkpoint-two", { action: "write", key: "next", text: "verify the second cycle" }, undefined, undefined, runner.createToolContext("checkpoint-two", undefined));
   await command.handler("reset", runner.createCommandContext());
   assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 2);
   await assertWorkflow(runtime);

@@ -36,7 +36,7 @@ try {
   const session = await create(manager);
   const run = (args: any) => {
     const runner = session.extensionRunner;
-    return runner.getToolDefinition("terminal_process")!.execute("synthetic", args, undefined, undefined, runner.createContext());
+    return runner.getToolDefinition("terminal_process")!.execute("synthetic", args, undefined, undefined, runner.createToolContext("synthetic", undefined));
   };
   assert(session.getActiveToolNames().includes("terminal_process"));
   const started = await run({ action: "start", command: "  printf 'literal $HOME'\n", label: "Native fixture" });
@@ -71,13 +71,13 @@ try {
   const resumedManager = SessionManager.open(manager.getSessionFile()!);
   const resumed = await create(resumedManager);
   const resumedRunner = resumed.extensionRunner;
-  await resumedRunner.getToolDefinition("terminal_process")!.execute("resumed", { action: "input", pane_id: "w1:p2", press_enter: true }, undefined, undefined, resumedRunner.createContext());
+  await resumedRunner.getToolDefinition("terminal_process")!.execute("resumed", { action: "input", pane_id: "w1:p2", press_enter: true }, undefined, undefined, resumedRunner.createToolContext("resumed", undefined));
   assert.deepEqual(wire.requests.at(-1)!.params, { pane_id: "w1:p2", text: "", keys: ["Enter"] });
   const fork = SessionManager.forkFrom(manager.getSessionFile()!, wire.root, join(wire.root, "fork"));
   const forkSession = await create(fork), forkRunner = forkSession.extensionRunner;
   assert.notEqual(fork.getSessionId(), manager.getSessionId());
   assert(fork.getEntries().some((entry) => entry.type === "custom" && entry.customType === ENTRY));
-  await assert.rejects(forkRunner.getToolDefinition("terminal_process")!.execute("fork", { action: "interrupt", pane_id: "w1:p2" }, undefined, undefined, forkRunner.createContext()), /this Pi session/);
+  await assert.rejects(forkRunner.getToolDefinition("terminal_process")!.execute("fork", { action: "interrupt", pane_id: "w1:p2" }, undefined, undefined, forkRunner.createToolContext("fork", undefined)), /this Pi session/);
   for (const [mode, env] of [["rpc", wire.env], ["tui", { ...wire.env, HERDR_ENV: "0" }], ["tui", { ...wire.env, PI_SUBAGENT_CHILD: "1" }]] as const) {
     const inactive = await create(SessionManager.inMemory(wire.root), mode, env);
     assert.equal(inactive.extensionRunner.getToolDefinition("terminal_process"), undefined);

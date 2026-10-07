@@ -90,7 +90,7 @@ try {
   await session.prompt("Continue without the images");
   const retrieve = async () => {
     const runner = session!.extensionRunner;
-    const result = await runner.getToolDefinition("history_image")!.execute("retrieve", { reference: locations[0]!.reference }, undefined, undefined, runner.createContext());
+    const result = await runner.getToolDefinition("history_image")!.execute("retrieve", { reference: locations[0]!.reference }, undefined, undefined, runner.createToolContext("retrieve", undefined));
     assert.deepEqual(result.content[1], original);
   };
   await retrieve();
@@ -112,7 +112,7 @@ try {
   const editOriginal: ImageContent = { type: "image", mimeType: "image/png", data: syntheticPng(640, 640).toString("base64") };
   const editPreview = await new ImageStore(join(root, "image-store")).pack(editOriginal);
   const editId = manager.appendContextEdit(locations[0]!.reference.split(":")[0]!, { content: [editPreview] });
-  const retrievedEdit = await session.extensionRunner.getToolDefinition("history_image")!.execute("retrieve-edit", { reference: `${editId}:0` }, undefined, undefined, session.extensionRunner.createContext());
+  const retrievedEdit = await session.extensionRunner.getToolDefinition("history_image")!.execute("retrieve-edit", { reference: `${editId}:0` }, undefined, undefined, session.extensionRunner.createToolContext("retrieve-edit", undefined));
   assert.deepEqual(retrievedEdit.content[1], editOriginal);
   const exported = join(root, "portable.jsonl");
   const beforeExport = await readFile(manager.getSessionFile()!, "utf8");

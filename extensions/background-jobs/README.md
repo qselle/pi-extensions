@@ -90,7 +90,7 @@ remain known to that job during session teardown.
 
 Foreground waits stream output at most ten times per second, with elapsed-time updates for quiet commands.
 
-- Pi 0.87.0 public shell, tool, session, and overlay APIs; Node.js built-ins;
+- Pi 1.0.4 public shell, tool, session, and overlay APIs; Node.js built-ins;
   [`node-pty`](https://github.com/microsoft/node-pty) 1.1.x for PTY jobs.
   Install package dependencies with install scripts enabled. On macOS the root
   postinstall script repairs the packaged spawn helper’s execute permission.

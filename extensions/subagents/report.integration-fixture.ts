@@ -44,7 +44,7 @@ try {
   assert.equal(childRunner.getToolDefinition("subagents"), undefined, "children must not recursively spawn");
   const reporter = childRunner.getToolDefinition(REPORT_TOOL_NAME)!;
   assert(reporter);
-  const childContext = childRunner.createContext();
+  const childContext = childRunner.createToolContext("report", undefined);
   await assert.rejects(reporter.execute("empty", { message: " " }, undefined, undefined, childContext), /1–4000/);
   await assert.rejects(reporter.execute("large", { message: "x".repeat(4001) }, undefined, undefined, childContext), /1–4000/);
   await assert.rejects(reporter.execute("aborted", { message: "Actionable finding" }, AbortSignal.abort(), undefined, childContext));
