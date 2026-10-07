@@ -3,6 +3,11 @@
 A searchable, scrollable view of saved conversation history, including live
 assistant output and messages from before context compaction.
 
+Pi's fullscreen mode (the default since 1.0) already scrolls and searches the
+rendered transcript with `Ctrl+Shift+F`, but only the current context: it
+redraws without compacted messages and shows one branch. Use this viewer for
+history before compaction or across every saved branch.
+
 ## Usage
 
 ```text
@@ -33,7 +38,7 @@ Keyboard hints shrink with the panel; hidden bindings remain available.
 
 ## Dependencies and limitations
 
-- Pi 0.87.0 public session, event, Markdown, and TUI APIs; no runtime packages.
+- Pi 1.0.4 public session, event, Markdown, and TUI APIs; no runtime packages.
 - Shares keyboard-hint formatting with `history-search`; that extension need not
   be enabled. Interactive TUI only; cross-platform.
 - All-branches mode is chronological storage order, not a session-tree graph.

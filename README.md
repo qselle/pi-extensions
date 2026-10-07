@@ -40,7 +40,6 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`goal`](extensions/goal/) | Persistent goals that continue across turns |
 | [`handoff`](extensions/handoff/) | Hand off work to a new session, pane, tab, or workspace that starts from a summary |
 | [`history-search`](extensions/history-search/) | Fuzzy search of the active prompt history |
-| [`hyperlinks`](extensions/hyperlinks/) | Clickable terminal paths |
 | [`image-history`](extensions/image-history/) | Opt-in image deferral, compact previews, original viewing, portable export and storage cleanup |
 | [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
@@ -90,7 +89,8 @@ Telegram configuration continue to apply.
 | Reload participating terminals or inspect progress | `/reload-all` / `/reload-all status` |
 | Check Telegram authentication, chat, webhook and topics without sending | `/telegram doctor` |
 | Send a Markdown message to this session's configured Telegram destination | `/telegram send **Done** — checks passed` |
-| Search the full conversation | `/transcript <search>` |
+| Search the current context (native fullscreen) | `Ctrl+Shift+F` |
+| Search history before compaction or across branches | `/transcript <search>` |
 | Inspect child conversations | `/subagents [name]` or Right from an empty editor; Left/Right switch children |
 | Hide/show workflow cards | `/overlay hide` / `/overlay show` |
 

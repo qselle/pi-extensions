@@ -1,6 +1,7 @@
 import { isAbsolute, resolve, win32 } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
+import * as tui from "@earendil-works/pi-tui";
 
 /** OSC 8 sequences with the ST terminator (ESC \). */
 const OSC8_OPEN = "\x1b]8;;";
@@ -11,6 +12,7 @@ export type HyperlinkMode = "auto" | "always" | "never";
 
 let mode: HyperlinkMode = "auto";
 
+/** Test seam. `auto` follows Pi's detection and `terminal.hyperlinks` / `PI_HYPERLINKS`. */
 export function setHyperlinkMode(next: HyperlinkMode): void {
   mode = next;
 }
@@ -19,38 +21,10 @@ export function getHyperlinkMode(): HyperlinkMode {
   return mode;
 }
 
-export interface TerminalEnvironment {
-  TERM_PROGRAM?: string;
-  TERM?: string;
-  FORCE_HYPERLINK?: string;
-  NO_HYPERLINK?: string;
-}
-
-/**
- * Terminals that render OSC 8. Apple Terminal parses the sequence but shows the
- * URL as literal text, so it is excluded.
- */
-export function supportsHyperlinks(
-  env: TerminalEnvironment = process.env as TerminalEnvironment,
-  isTty: boolean = Boolean(process.stdout?.isTTY),
-): boolean {
-  if (env.NO_HYPERLINK) return false;
-  if (env.FORCE_HYPERLINK) return true;
-  if (!isTty) return false;
-  const term = (env.TERM ?? "").toLowerCase();
-  if (term === "dumb" || !term) return false;
-  const program = (env.TERM_PROGRAM ?? "").toLowerCase();
-  if (program === "apple_terminal") return false;
-  return true;
-}
-
-export function hyperlinksEnabled(
-  env: TerminalEnvironment = process.env as TerminalEnvironment,
-  isTty: boolean = Boolean(process.stdout?.isTTY),
-): boolean {
+export function hyperlinksEnabled(): boolean {
   if (mode === "never") return false;
   if (mode === "always") return true;
-  return supportsHyperlinks(env, isTty);
+  return tui.getCapabilities().hyperlinks;
 }
 
 /** Builds a `file://` URI, percent-encoding but preserving path separators. */

@@ -46,7 +46,6 @@ export function localProbe(input: DoctorInput): Probe {
       if (result.status !== "valid") return result.status;
       const { data } = result;
       if (name === "settings.json") return "valid";
-      if (name === "hyperlinks.json") return data.mode === undefined || ["auto", "always", "never"].includes(data.mode as string) ? "valid" : "invalid";
       if (name === "codex-prompt.json" && data.accent !== undefined && (typeof data.accent !== "string" || !parseAccent(data.accent))) return "invalid";
       const fields = name === "notify.json" ? ["enabled", "banner", "bell"] : ["enabled"];
       return fields.every((key) => data[key] === undefined || typeof data[key] === "boolean") ? "valid" : "invalid";
@@ -111,7 +110,7 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
     add("cleanup", "Process cleanup", input.platform === "win32" ? "warn" : "ok", input.platform === "win32" ? "Windows cleanup is best effort and has not been verified on a Windows host." : "POSIX process-group cleanup is available; detached/escaped processes are outside that guarantee.");
   }
   if (input.commands.includes("telegram")) add("telegram", "Telegram configuration", input.telegram === "invalid" ? "warn" : input.telegram === "disabled" ? "off" : "ok", input.telegram === "enabled" ? "Local configuration validated; credentials and delivery not tested." : input.telegram === "disabled" ? "Optional Telegram service is disabled." : "Configuration is invalid or its file cannot be read securely.", input.telegram === "invalid" ? "Use /telegram setup; check owner-only file permissions and environment overrides." : undefined);
-  for (const name of ["notify", "tool-render", "codex-prompt", "hyperlinks"]) if (input.commands.includes(name)) {
+  for (const name of ["notify", "tool-render", "codex-prompt"]) if (input.commands.includes(name)) {
     const status = await probe.config(`${name}.json`);
     add(`config-${name}`, `${name} settings`, status === "invalid" ? "warn" : "ok", status === "absent" ? "No settings file; defaults apply." : status === "valid" ? "Settings are valid." : "Settings are unreadable, oversized, or invalid; extension defaults may apply.", status === "invalid" ? `Repair ${name}.json in the Pi agent directory and /reload.` : undefined);
   }

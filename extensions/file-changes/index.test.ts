@@ -49,6 +49,7 @@ mock.module("@earendil-works/pi-coding-agent", () => ({
 }));
 
 mock.module("@earendil-works/pi-tui", () => ({
+  getCapabilities: () => ({ images: null, trueColor: true, hyperlinks: false }),
   Input: MockInput,
   Text: class Text {
     constructor(public text: string) {}

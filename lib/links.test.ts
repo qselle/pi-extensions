@@ -11,9 +11,8 @@ import {
   hyperlinksEnabled,
   link,
   setHyperlinkMode,
-  supportsHyperlinks,
   toAbsolutePath,
-} from "../../lib/links.ts";
+} from "./links.ts";
 
 afterEach(() => setHyperlinkMode("auto"));
 
@@ -48,31 +47,26 @@ describe("toAbsolutePath", () => {
   });
 });
 
-describe("supportsHyperlinks", () => {
-  test("accepts a modern terminal on a tty", () => {
-    expect(supportsHyperlinks({ TERM_PROGRAM: "ghostty", TERM: "xterm-256color" }, true)).toBe(true);
-  });
-  test("rejects Apple Terminal, which prints the URL literally", () => {
-    expect(supportsHyperlinks({ TERM_PROGRAM: "Apple_Terminal", TERM: "xterm-256color" }, true)).toBe(false);
-  });
-  test("rejects dumb terminals and non-ttys", () => {
-    expect(supportsHyperlinks({ TERM: "dumb" }, true)).toBe(false);
-    expect(supportsHyperlinks({ TERM: "xterm-256color" }, false)).toBe(false);
-    expect(supportsHyperlinks({}, true)).toBe(false);
-  });
-  test("honors explicit overrides", () => {
-    expect(supportsHyperlinks({ TERM: "dumb", FORCE_HYPERLINK: "1" }, false)).toBe(true);
-    expect(supportsHyperlinks({ TERM: "xterm-256color", NO_HYPERLINK: "1" }, true)).toBe(false);
-  });
-});
-
 describe("mode", () => {
-  test("always and never override detection", () => {
+  test("always and never override Pi's detection", () => {
     setHyperlinkMode("never");
     expect(getHyperlinkMode()).toBe("never");
-    expect(hyperlinksEnabled({ TERM: "xterm-256color" }, true)).toBe(false);
+    expect(hyperlinksEnabled()).toBe(false);
     setHyperlinkMode("always");
-    expect(hyperlinksEnabled({ TERM: "dumb" }, false)).toBe(true);
+    expect(hyperlinksEnabled()).toBe(true);
+  });
+
+  test("auto follows Pi's terminal capabilities", async () => {
+    const { getCapabilities, resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
+    const detected = getCapabilities();
+    try {
+      for (const hyperlinks of [true, false]) {
+        setCapabilities({ ...detected, hyperlinks });
+        expect(hyperlinksEnabled()).toBe(hyperlinks);
+      }
+    } finally {
+      resetCapabilitiesCache();
+    }
   });
 });
 
