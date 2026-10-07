@@ -33,7 +33,7 @@ pane needs `/handoff`.
 
 ## Dependencies and limitations
 
-- Pi 0.87.0 public command, tool, and session APIs; no runtime packages.
+- Pi 1.0.4 public command, tool, and session APIs; no runtime packages.
 - New panes, tabs, and workspaces require a Herdr-managed Pi. Herdr starts `pi`
   from the pane's `PATH` and waits up to 30 seconds for it. If Pi does not
   start, the new pane, tab, or workspace and the new session are removed; if

@@ -27,7 +27,7 @@ try {
   const context = await runner.emitContext(manager.buildSessionContext().messages);
   assert(!JSON.stringify(context).includes(image.data));
   assert(JSON.stringify(context).includes(`${id}:0`));
-  const result = await runner.getToolDefinition("history_image")!.execute("lookup", { reference: `${id}:0` }, undefined, undefined, runner.createContext());
+  const result = await runner.getToolDefinition("history_image")!.execute("lookup", { reference: `${id}:0` }, undefined, undefined, runner.createToolContext("lookup", undefined));
   assert.deepEqual(result.content[1], image);
   assert.equal(await readFile(manager.getSessionFile()!, "utf8"), before);
   await session.prompt("/image-history off");

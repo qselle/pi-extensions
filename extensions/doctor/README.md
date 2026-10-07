@@ -28,7 +28,7 @@ to refresh; reports are not saved or sent to the model.
 
 ## Dependencies and limitations
 
-- Requires Pi 0.87.x; uses public Pi APIs and Node.js built-ins.
+- Requires Pi 1.0.4 or newer 1.x; uses public Pi APIs and Node.js built-ins.
 - Uses the shared transcript viewer and Telegram configuration reader; their UI
   extensions need not be enabled.
 - Checks local metadata and files only. It does not run commands, load PTYs,

@@ -68,7 +68,7 @@ manager.appendCustomEntry(SUBAGENT_STATE, { version: 1, agents: ["research", "ve
 })) });
 const runtime = await createAgentSessionRuntime(async ({ cwd, agentDir, sessionManager }) => {
   const services = await createAgentSessionServices({ cwd, agentDir,
-    settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "0.87.0", enableInstallTelemetry: false, enableAnalytics: false,
+    settingsManager: SettingsManager.inMemory({ quietStartup: true, lastChangelogVersion: "1.0.4", enableInstallTelemetry: false, enableAnalytics: false,
       compaction: { enabled: false }, theme: "gruvbox-dark", tuiMode: "fullscreen", hideThinkingBlock: true, markdown: { codeBlockIndent: "│ " } }),
     resourceLoaderOptions: { additionalExtensionPaths: paths, additionalThemePaths: [join(repo, "themes/gruvbox-dark.json")], noSkills: true, noPromptTemplates: true, noContextFiles: true } });
   const loaded = services.resourceLoader.getExtensions();

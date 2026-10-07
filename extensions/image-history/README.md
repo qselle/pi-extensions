@@ -114,7 +114,7 @@ the original detail. Export does not alter the live session or its branch.
   or a 64 MiB entry. Unusually large sessions must be exported/archived before
   cleanup; files are retained when a complete scan is not possible.
 - Disabled by default. Deferral changes what the model can immediately see; it must retrieve an older image when visual details matter. Text context remains unchanged.
-- Pi 0.87's per-model `inputLimits.images.resize` controls apply when image input
+- Pi's per-model `inputLimits.images.resize` controls apply when image input
   is sent, including retrieved tool images. Resizing controls image dimensions;
   this extension separately defers older images and retrieves them on demand.
   Canonical context omissions remain omitted when deferral is turned off.

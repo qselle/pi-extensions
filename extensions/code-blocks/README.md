@@ -20,7 +20,7 @@ configuration to return to the host presentation.
 
 ## Dependencies and limitations
 
-- Pi 0.87.0 public Markdown transformer and language mapping APIs; `marked` and
+- Pi 1.0.4 public Markdown transformer and language mapping APIs; `marked` and
   `shiki` are declared runtime dependencies. Shiki 4 requires Node.js 20 or newer.
   Its bundled Oniguruma engine, grammars and theme run locally without a service
   or network request. One cached highlighter loads before the first render and
