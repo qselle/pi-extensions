@@ -46,6 +46,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
 | [`notify`](extensions/notify/) | Desktop and terminal notifications |
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
+| [`pasted-images`](extensions/pasted-images/) | OpenCode-style pasted image tokens, thumbnails and viewer |
 | [`plan`](extensions/plan/) | Current multi-step execution plan |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep your Mac awake while Pi works; no-op on Linux |
 | [`reload-all`](extensions/reload-all/) | Reload participating Pi terminals when idle, with confirmed per-session status |
@@ -91,6 +92,7 @@ Telegram configuration continue to apply.
 | Send a Markdown message to this session's configured Telegram destination | `/telegram send **Done** — checks passed` |
 | Search the current context (native fullscreen) | `Ctrl+Shift+F` |
 | Search history before compaction or across branches | `/transcript <search>` |
+| View pasted images | `Alt+I` or `/images` |
 | Inspect child conversations | `/subagents [name]` or Right from an empty editor; Left/Right switch children |
 | Hide/show workflow cards | `/overlay hide` / `/overlay show` |
 
