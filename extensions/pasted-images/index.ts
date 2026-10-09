@@ -1,6 +1,9 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { makeTokensAtomic } from "./atomic.ts";
+import { DEFAULT_SETTINGS, hexForeground, MAX_ROWS, MIN_ROWS, parseColor, parseRows, readSettings, thumbnailRows, writeSettings, type PreviewSettings } from "./config.ts";
 import { bracketedPasteContent, imageToken, parsePastedImages, PASTE_END, PASTE_START, PI_CLIPBOARD_PATH, referencedLabels } from "./paste.ts";
 import { PastedImageStore, type StoredImage } from "./store.ts";
 import { ThumbnailStrip, type StripItem } from "./strip.ts";
@@ -8,6 +11,9 @@ import { ImageViewer, type ViewerItem } from "./viewer.ts";
 
 export const ENTRY_TYPE = "pasted-images";
 const WIDGET = "pasted-images";
+const settingsPath = () => join(getAgentDir(), "pasted-images.json");
+const USAGE = `Usage: /images [prompt on|off | transcript on|off | rows auto|${MIN_ROWS}-${MAX_ROWS} | color <theme color|#rrggbb> | settings]`;
+const SETTING_COMPLETIONS = ["prompt on", "prompt off", "transcript on", "transcript off", "rows auto", "rows 4", "rows 8", "color warning", "color accent", "settings"];
 
 export interface PastedImagesEntry {
   version: 1;
@@ -41,8 +47,25 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
   let nextLabel = 1;
   let viewerOpen = false;
   let normalizing = false;
+  let settings: PreviewSettings = { ...DEFAULT_SETTINGS };
 
   const requestRender = () => tui?.requestRender();
+  const rows = () => thumbnailRows(settings.previewRows, tui?.terminal.rows ?? 24);
+  const tokenBehavior = {
+    isLive: (label: number) => draft.has(label),
+    // OpenCode's pasted-content style: bold, background-colored text on a colored block.
+    highlight: (token: string) => {
+      const theme = ctx?.ui.theme;
+      if (!theme) return token;
+      const color = settings.tokenColor;
+      let colored: string;
+      if (color.startsWith("#")) colored = `${hexForeground(color)}${token}\x1b[39m`;
+      else {
+        try { colored = theme.fg(color as ThemeColor, token); } catch { colored = theme.fg("warning", token); }
+      }
+      return theme.bold(theme.inverse(colored));
+    },
+  };
 
   const resetDraft = () => {
     draft = new Map();
@@ -120,11 +143,13 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
       const text = ctx.ui.getEditorText();
       normalizePiClipboardPaths(text);
       if (!text.trim() && draft.size) resetDraft();
+      if (!settings.promptPreview) return [];
       const items: StripItem[] = referencedDraft(text).map((item) => ({ label: item.label, image: item.stored, failed: item.failed }));
       const signature = items.map((item) => `${item.label}:${item.image?.digest ?? (item.failed ? "x" : "…")}`).join(",");
       if (signature !== this.signature || !this.strip) {
         this.signature = signature;
         this.strip = new ThumbnailStrip(items, store, this.theme, {
+          rows,
           requestRender,
           onOpen: (index) => {
             const digest = items[index]?.image?.digest;
@@ -146,6 +171,7 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
 
   pi.on("session_start", (_event, context) => {
     ctx = context;
+    settings = readSettings(settingsPath());
     resetDraft();
     unsubscribeInput?.();
     unsubscribeInput = undefined;
@@ -155,6 +181,10 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
       return new DraftWidget(theme);
     }, { placement: "aboveEditor" });
     unsubscribeInput = context.ui.onTerminalInput((data) => {
+      // Runs before the editor sees the key, so tokens are atomic before the first one is inserted.
+      // Pi's TUI class exposes the focused editor, though its TUI interface does not declare it.
+      const focused = (tui as { getFocusedComponent?: () => Component | null } | undefined)?.getFocusedComponent?.();
+      if (focused && "getCursor" in focused) makeTokensAtomic(focused, tokenBehavior);
       const content = bracketedPasteContent(data);
       if (content === undefined) return undefined;
       // Bash mode keeps literal paths for shell commands.
@@ -197,8 +227,9 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
 
   pi.registerEntryRenderer<PastedImagesEntry>(ENTRY_TYPE, (entry, _options, theme) => {
     const images = entryImages(entry.data);
-    if (!images) return undefined;
+    if (!images || !settings.transcriptPreview) return undefined;
     return new ThumbnailStrip(images.map((image) => ({ label: image.label, image })), store, theme, {
+      rows,
       requestRender,
       onOpen: (index) => {
         const target = images[index];
@@ -225,9 +256,64 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
     ? markdown.replace(/(?<!`)\[Image \d+\](?!`)/g, (token) => `\`${token}\``)
     : markdown);
 
+  const describeSettings = () => {
+    const onOff = (value: boolean) => value ? "on" : "off";
+    const size = settings.previewRows === "auto" ? `auto (${rows()})` : String(settings.previewRows);
+    return `Image previews: prompt ${onOff(settings.promptPreview)} · transcript ${onOff(settings.transcriptPreview)} · rows ${size} · token color ${settings.tokenColor}`;
+  };
+
+  const configure = (args: string, context: ExtensionContext) => {
+    const [rawKey = "", rawValue, extra] = args.trim().split(/\s+/);
+    const key = rawKey.toLowerCase();
+    const value = rawValue?.toLowerCase();
+    if (key === "settings" && !value) {
+      context.ui.notify(describeSettings(), "info");
+      return;
+    }
+    let update: Partial<PreviewSettings> | undefined;
+    if (extra === undefined && (value === "on" || value === "off")) {
+      if (key === "prompt") update = { promptPreview: value === "on" };
+      else if (key === "transcript") update = { transcriptPreview: value === "on" };
+    } else if (extra === undefined && key === "rows") {
+      const previewRows = parseRows(value);
+      if (previewRows !== undefined) update = { previewRows };
+    } else if (extra === undefined && key === "color") {
+      const tokenColor = parseColor(rawValue);
+      if (tokenColor && !tokenColor.startsWith("#")) {
+        try { context.ui.theme.fg(tokenColor as ThemeColor, ""); } catch {
+          context.ui.notify(`Unknown theme color: ${tokenColor}. Use a Pi theme color such as warning or accent, or #rrggbb.`, "error");
+          return;
+        }
+      }
+      if (tokenColor) update = { tokenColor };
+    }
+    if (!update) {
+      context.ui.notify(USAGE, "error");
+      return;
+    }
+    try {
+      writeSettings(settingsPath(), update);
+    } catch (error) {
+      context.ui.notify(error instanceof Error ? error.message : "Image settings could not be saved.", "error");
+      return;
+    }
+    settings = { ...settings, ...update };
+    // Rebuild transcript entries so their previews appear or disappear now.
+    tui?.invalidate();
+    requestRender();
+    context.ui.notify(describeSettings(), "info");
+  };
+
   pi.registerCommand("images", {
-    description: "View pasted images: /images",
-    handler: async () => { await openViewer(); },
+    description: "View pasted images, or configure previews: /images [prompt|transcript on|off, rows auto|N, settings]",
+    getArgumentCompletions: (prefix) => {
+      const matches = SETTING_COMPLETIONS.filter((value) => value.startsWith(prefix.trimStart().toLowerCase()));
+      return matches.length ? matches.map((value) => ({ value, label: value })) : null;
+    },
+    handler: async (args, context) => {
+      if (args.trim()) configure(args, context);
+      else await openViewer();
+    },
   });
 
   pi.registerShortcut("alt+i", {

@@ -59,10 +59,10 @@ test("recognizes Pi's temporary clipboard image paths", () => {
 });
 
 test("lays thumbnails out left to right and reports overflow", () => {
-  const all = layoutSlots([20, 4, 30], [1, 2, 3], 100);
-  expect(all.slots.map((slot) => [slot.start, slot.columns])).toEqual([[0, 20], [22, 9], [33, 30]]);
+  const all = layoutSlots([20, 4, 30], 100);
+  expect(all.slots.map((slot) => [slot.start, slot.columns])).toEqual([[0, 20], [22, 4], [28, 30]]);
   expect(all.hidden).toBe(0);
-  const narrow = layoutSlots([20, 20, 20], [1, 2, 3], 50);
+  const narrow = layoutSlots([20, 20, 20], 50);
   expect(narrow.slots.length).toBe(2);
   expect(narrow.hidden).toBe(1);
   expect(narrow.columns).toBeLessThanOrEqual(50);
