@@ -3,14 +3,17 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSessionServices, createAgentSessionFromServices, SessionManager, SettingsManager, type TerminalInputHandler } from "@earendil-works/pi-coding-agent";
-import { setCapabilities, setCellDimensions, type Component } from "@earendil-works/pi-tui";
+import { Editor, setCapabilities, setCellDimensions, type Component } from "@earendil-works/pi-tui";
 import extension, { ENTRY_TYPE } from "./index.ts";
 import { encodePng } from "./png.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pi-pasted-images-"));
 process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 const theme = { fg: (_: string, text: string) => text, bg: (_: string, text: string) => text, style: (text: string) => text };
-const tui = { requestRender: () => {}, terminal: { rows: 40, columns: 100 } };
+const identity = (text: string) => text;
+let invalidations = 0;
+const tui = { requestRender: () => {}, invalidate: () => { invalidations++; }, getFocusedComponent: () => focused, terminal: { rows: 40, columns: 100 } };
+const focused = new Editor(tui as never, { borderColor: identity, selectList: { selectedPrefix: identity, selectedText: identity, description: identity, scrollInfo: identity, noMatch: identity } });
 const KITTY = "\x1b_G";
 let session: Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"] | undefined;
 
@@ -56,10 +59,14 @@ try {
 
   // Herdr and terminals paste clipboard images as file paths.
   assert.equal(paste(`\x1b[200~hello\x1b[201~`), undefined, "ordinary text passes through");
-  assert.deepEqual(paste(`\x1b[200~${shot}\x1b[201~`), { data: "\x1b[200~[Image 1] \x1b[201~" });
+  const pasted = paste(`\x1b[200~${shot}\x1b[201~`);
+  assert.deepEqual(pasted, { data: "\x1b[200~[Image 1] \x1b[201~" });
+  // The paste listener made the focused editor treat the live token as one unit.
+  for (const key of [pasted.data!, "\x7f", "\x7f"]) focused.handleInput(key);
+  assert.equal(focused.getText(), "", "two Backspaces remove the space and the whole token");
   editor = "look [Image 1]";
   await until(() => widget!.render(100).some((line) => line.includes(KITTY)), "draft thumbnail");
-  assert.match(widget.render(100).at(-1)!, /^ \[Image 1\]/, "label sits under its thumbnail");
+  assert(!widget.render(100).join("\n").includes("[Image 1]"), "thumbnails carry no caption; the token names them");
 
   // Pi's own Ctrl+V inserts a temporary path; it becomes the next token.
   const piClipboard = join(root, "pi-clipboard-0b4c6a3e-2f7d-4c5e-9a1b-3c2d1e0f9a8b.png");
@@ -81,7 +88,7 @@ try {
   assert(entry && entry.type === "custom");
   const strip = session.extensionRunner.getEntryRenderer(ENTRY_TYPE)!(entry, { expanded: false }, theme as never)!;
   await until(() => strip.render(100).some((line) => line.includes(KITTY)), "transcript thumbnails");
-  assert.match(strip.render(100).at(-1)!, /\[Image 1\].*\[Image 2\]/);
+  assert.equal((strip as unknown as { renderedSlots: unknown[] }).renderedSlots.length, 2, "both transcript thumbnails are laid out");
 
   const viewing = session.prompt("/images");
   await until(() => viewer !== undefined, "viewer opened");
@@ -92,7 +99,24 @@ try {
   viewer!.handleInput("\x1b");
   await viewing;
   assert.deepEqual(notices, []);
-  console.log("pasted image tokens, thumbnails, attachments and viewer verified");
+
+  // Previews are configurable at runtime and persisted.
+  editor = "look [Image 1]";
+  assert.deepEqual(paste(`\x1b[200~${shot}\x1b[201~`), { data: "\x1b[200~[Image 1] \x1b[201~" });
+  await until(() => widget!.render(100).some((line) => line.includes(KITTY)), "draft thumbnail before toggling");
+  await session.prompt("/images prompt off");
+  assert.deepEqual(widget.render(100), [], "prompt previews hidden");
+  await session.prompt("/images transcript off");
+  assert.equal(session.extensionRunner.getEntryRenderer(ENTRY_TYPE)!(entry, { expanded: false }, theme as never), undefined, "transcript previews hidden");
+  await session.prompt("/images rows 4");
+  await session.prompt("/images color #FE8019");
+  await session.prompt("/images rows 99");
+  assert.equal(invalidations, 4, "each saved change rebuilds the transcript");
+  const saved = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR, "pasted-images.json"), "utf8"));
+  assert.deepEqual(saved, { promptPreview: false, transcriptPreview: false, previewRows: 4, tokenColor: "#fe8019" });
+  assert.match(notices.at(-2)!, /prompt off · transcript off · rows 4 · token color #fe8019/);
+  assert.match(notices.at(-1)!, /^Usage: \/images/);
+  console.log("pasted image tokens, thumbnails, attachments, viewer and settings verified");
 } finally {
   session?.dispose();
   await rm(root, { recursive: true, force: true });

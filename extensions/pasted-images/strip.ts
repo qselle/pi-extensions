@@ -1,5 +1,5 @@
 import { convertToPng, resizeImage, type Theme } from "@earendil-works/pi-coding-agent";
-import { getCapabilities, getCellDimensions, Image, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { getCapabilities, getCellDimensions, Image, truncateToWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { blit, decodePng, encodePng, type Rgba } from "./png.ts";
 import { imageToken } from "./paste.ts";
 import type { PastedImageStore, StoredImage } from "./store.ts";
@@ -57,12 +57,12 @@ function thumbnailKey(image: StoredImage, boxWidth: number, boxHeight: number) {
   return `${image.digest}:${boxWidth}x${boxHeight}`;
 }
 
-/** Arrange thumbnails left to right with labels at least as wide as their token. */
-export function layoutSlots(thumbColumns: number[], labels: number[], available: number): { slots: Slot[]; hidden: number; columns: number } {
+/** Arrange thumbnails left to right, leaving room for a `+N` overflow count. */
+export function layoutSlots(thumbColumns: number[], available: number): { slots: Slot[]; hidden: number; columns: number } {
   const slots: Slot[] = [];
   let cursor = 0;
   for (let index = 0; index < thumbColumns.length; index++) {
-    const columns = Math.max(thumbColumns[index]!, imageToken(labels[index]!).length);
+    const columns = thumbColumns[index]!;
     const start = slots.length ? cursor + GAP : 0;
     const remaining = thumbColumns.length - index - 1;
     const reserve = remaining > 0 ? GAP + `+${remaining}`.length : 0;
@@ -75,12 +75,17 @@ export function layoutSlots(thumbColumns: number[], labels: number[], available:
 }
 
 export interface StripOptions {
-  rows?: number;
+  /** Thumbnail height in terminal rows, read on every render. */
+  rows?: () => number;
   requestRender: () => void;
   onOpen?: (index: number) => void;
 }
 
-/** One row of image thumbnails composited into a single terminal image, with labels below. */
+/**
+ * One row of image thumbnails composited into a single terminal image. Like
+ * OpenCode, thumbnails carry no captions: the `[Image N]` tokens already name
+ * them, in the same order.
+ */
 export class ThumbnailStrip implements Component {
   private lastSlots: Slot[] = [];
   private lastHidden = 0;
@@ -102,7 +107,7 @@ export class ThumbnailStrip implements Component {
     this.lastSlots = [];
     if (!this.items.length || width < 8) return [];
     if (!getCapabilities().images) return this.chips(width, "· terminal images off (set terminal.images)");
-    const rows = this.options.rows ?? STRIP_ROWS;
+    const rows = this.options.rows?.() ?? STRIP_ROWS;
     const cell = getCellDimensions();
     const boxHeight = rows * cell.heightPx;
     const boxWidth = boxHeight * MAX_ASPECT;
@@ -131,7 +136,7 @@ export class ThumbnailStrip implements Component {
     const compositeKey = [width, rows, cell.widthPx, cell.heightPx, ...ready.map(({ item }) => `${item.label}:${item.image!.digest}`)].join("|");
     let composite = composites.get(compositeKey);
     if (!composite) {
-      const layout = layoutSlots(thumbColumns, ready.map(({ item }) => item.label), available);
+      const layout = layoutSlots(thumbColumns, available);
       if (!layout.slots.length) return this.chips(width);
       const canvas: Rgba = { width: layout.columns * cell.widthPx, height: boxHeight, data: new Uint8Array(layout.columns * cell.widthPx * boxHeight * 4) };
       for (const slot of layout.slots) blit(canvas, ready[slot.index]!.thumb, slot.start * cell.widthPx, 0);
@@ -143,13 +148,9 @@ export class ThumbnailStrip implements Component {
     this.lastSlots = composite.slots.map((slot) => ({ ...slot, index: this.items.indexOf(ready[slot.index]!.item) }));
     this.lastHidden = composite.hidden;
 
-    let labels = "";
-    for (const slot of composite.slots) {
-      labels += " ".repeat(Math.max(0, PAD + slot.start - visibleWidth(labels))) + this.label(ready[slot.index]!.item.label);
-    }
-    if (composite.hidden) labels += " ".repeat(GAP) + this.theme.fg("dim", `+${composite.hidden}`);
     const imageLines = composite.image.render(width).map((line) => line ? " ".repeat(PAD) + line : line);
-    return [...imageLines, truncateToWidth(labels, width)];
+    if (!composite.hidden) return imageLines;
+    return [...imageLines, truncateToWidth(" ".repeat(PAD) + this.theme.fg("dim", `+${composite.hidden} more · Alt+I to view all`), width)];
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
