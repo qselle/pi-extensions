@@ -72,6 +72,15 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
     nextLabel = 1;
   };
 
+  /**
+   * A paste into an editor that shows no draft token starts a new draft.
+   * Never reset on an empty editor: submitting clears it before the input
+   * event attaches the draft.
+   */
+  const resetAbandonedDraft = (text: string) => {
+    if (draft.size && !referencedDraft(text).length) resetDraft();
+  };
+
   const addDraft = (path: string): number => {
     const label = nextLabel++;
     const item: DraftImage = { label, ready: Promise.resolve(undefined) };
@@ -127,6 +136,7 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
       normalizing = false;
       if (!ctx) return;
       const current = ctx.ui.getEditorText();
+      resetAbandonedDraft(current);
       const next = current.replace(PI_CLIPBOARD_PATH, (path) => imageToken(addDraft(path)));
       if (next !== current) ctx.ui.setEditorText(next);
     });
@@ -142,7 +152,6 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
       if (!ctx || viewerOpen) return [];
       const text = ctx.ui.getEditorText();
       normalizePiClipboardPaths(text);
-      if (!text.trim() && draft.size) resetDraft();
       if (!settings.promptPreview) return [];
       const items: StripItem[] = referencedDraft(text).map((item) => ({ label: item.label, image: item.stored, failed: item.failed }));
       const signature = items.map((item) => `${item.label}:${item.image?.digest ?? (item.failed ? "x" : "…")}`).join(",");
@@ -191,6 +200,7 @@ export default function pastedImages(pi: ExtensionAPI, options: PastedImagesOpti
       if (context.ui.getEditorText().trimStart().startsWith("!")) return undefined;
       const images = parsePastedImages(content, context.cwd);
       if (!images) return undefined;
+      resetAbandonedDraft(context.ui.getEditorText());
       const tokens = images.map((image) => imageToken(addDraft(image.path)));
       return { data: `${PASTE_START}${tokens.join(" ")} ${PASTE_END}` };
     });

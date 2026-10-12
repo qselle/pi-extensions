@@ -76,7 +76,11 @@ try {
   await until(() => editor === "look [Image 1] and [Image 2]", "Pi clipboard path normalized");
 
   const original = (await readFile(shot)).toString("base64");
-  const input = await session.extensionRunner.emitInput(editor, undefined, "interactive");
+  // Submitting clears the editor, and Pi can render before the input event runs.
+  const submitted = editor;
+  editor = "";
+  widget.render(100);
+  const input = await session.extensionRunner.emitInput(submitted, undefined, "interactive");
   assert.equal(input.action, "transform");
   assert(input.action === "transform");
   assert.equal(input.text, "look [Image 1] and [Image 2]", "tokens stay in the prompt");
@@ -116,6 +120,10 @@ try {
   assert.deepEqual(saved, { promptPreview: false, transcriptPreview: false, previewRows: 4, tokenColor: "#fe8019" });
   assert.match(notices.at(-2)!, /prompt off · transcript off · rows 4 · token color #fe8019/);
   assert.match(notices.at(-1)!, /^Usage: \/images/);
+
+  // Clearing the editor abandons its draft; the next paste numbers from 1 again.
+  editor = "";
+  assert.deepEqual(paste(`\x1b[200~${shot}\x1b[201~`), { data: "\x1b[200~[Image 1] \x1b[201~" });
   console.log("pasted image tokens, thumbnails, attachments, viewer and settings verified");
 } finally {
   session?.dispose();
