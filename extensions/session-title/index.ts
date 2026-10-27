@@ -113,8 +113,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   let requestGeneration = 0;
   let activeRequest: AbortController | undefined;
   let titleBadge: string | undefined;
-  /** The first fallback is announced once per runtime; /title status keeps the latest. */
-  let fallbackNoticed = false;
+  /** A fallback route is announced when it first appears; /title status keeps the latest. */
+  let fallbackRoute: string | undefined;
 
   const branchOf = (ctx: ExtensionContext): Entries => (ctx.sessionManager?.getBranch?.() ?? []) as Entries;
   // Names are session-wide, so ownership checks use every entry; focus follows the branch.
@@ -187,10 +187,10 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     activeRequest = undefined;
     setTitleBadge();
     last = result;
-    if (result.fallback && !fallbackNoticed) {
-      fallbackNoticed = true;
+    if (result.fallback && result.fallback !== fallbackRoute) {
       ctx.ui?.notify(`Title model fallback: ${result.fallback}.`, "warning");
     }
+    if (result.title) fallbackRoute = result.fallback;
     if (!result.title) return result;
     save(job.leaf && result.focus && result.turn
       ? { version: 1, title: result.title, focus: result.focus, turn: result.turn, leaf: job.leaf }

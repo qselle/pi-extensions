@@ -313,6 +313,25 @@ describe("first request draft", () => {
     expect(h.notifications.at(-1)!.message).toContain(`last fallback: ${fallback}`);
   });
 
+  test("warns again when the fallback route changes, and after the preferred model recovers", async () => {
+    const h = setup({
+      results: [
+        { title: "A Title", fallback: "a/one unavailable; used b/two" },
+        { title: "A Title", fallback: "a/one unavailable; used b/two" },
+        { title: "A Title", fallback: "a/one unavailable; b/two failed; used active/model" },
+        { title: "A Title" },
+        { title: "A Title", fallback: "a/one unavailable; used b/two" },
+      ],
+    });
+    await firstTurn(h);
+    for (let index = 0; index < 4; index += 1) await h.pi.commands.get("title").handler("now", h.ctx);
+    expect(h.notifications.filter((notice) => notice.level === "warning").map((notice) => notice.message)).toEqual([
+      "Title model fallback: a/one unavailable; used b/two.",
+      "Title model fallback: a/one unavailable; b/two failed; used active/model.",
+      "Title model fallback: a/one unavailable; used b/two.",
+    ]);
+  });
+
   test("does nothing when disabled", async () => {
     const h = setup({ config: config({ enabled: false }) });
     await firstTurn(h);

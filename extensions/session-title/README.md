@@ -87,7 +87,8 @@ first when Pi has credentials for it, then the active session model.
 
 When a title comes from a model after the first configured one, a warning such
 as `Title model fallback: mistral/mistral-medium-3.5 unavailable; used
-openai/gpt-4.1-mini.` appears once per Pi runtime. `/title` shows the model
+openai/gpt-4.1-mini.` appears when that fallback route first becomes active,
+and again whenever the route changes. `/title` shows the model
 order and the latest fallback.
 
 The configuration is also used by [`side-chat`](../side-chat/) titles, which
