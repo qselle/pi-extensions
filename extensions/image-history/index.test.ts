@@ -50,6 +50,10 @@ test("config defaults storage on and deferral off; malformed files keep defaults
     expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false });
     await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ storage: { enabled: false }, deferral: { enabled: true } }));
     expect(loadConfig(agentDir)).toEqual({ storage: false, deferral: true });
+    await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ deferral: { batch: 1 } }));
+    expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false, batch: 1 });
+    await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ deferral: { batch: 0.5 } }));
+    expect(loadConfig(agentDir).batch).toBeUndefined();
     await writeFile(join(agentDir, CONFIG_FILE), "{oops");
     expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false });
   } finally { await rm(agentDir, { recursive: true, force: true }); }

@@ -1,7 +1,7 @@
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { STATE_TYPE, referenceOlderImages, restoreEnabled, retrieveImage } from "./history.ts";
+import { DEFERRAL_BATCH, STATE_TYPE, referenceOlderImages, restoreEnabled, retrieveImage } from "./history.ts";
 import { ImageStore, ORIGINAL_IMAGE, originalReference } from "./storage.ts";
 import { exportPortableSession, hasStorableImage, hydrateImages, restoreStorageEnabled, STORAGE_STATE_TYPE, storeMessage, storedImages } from "./pipeline.ts";
 import { inspectStorage, originalFiles, removeUnusedOriginals } from "./cleanup.ts";
@@ -86,7 +86,7 @@ export default function imageHistory(pi: ExtensionAPI, options: ImageHistoryOpti
     const version = generation;
     const entries = ctx.sessionManager.getBranch();
     const messages = restoreLegacyMessages(event.messages, legacy, legacyWarning(ctx, version));
-    const result = enabled ? referenceOlderImages(messages, entries) : { messages, replaced: 0 };
+    const result = enabled ? referenceOlderImages(messages, entries, config.batch ?? DEFERRAL_BATCH) : { messages, replaced: 0 };
     replaced = result.replaced;
     if (enabled && ctx.hasUI) ctx.ui.setStatus("image-history", `images: ${replaced} deferred`);
     return { messages: await hydrateImages(result.messages, entries, store,

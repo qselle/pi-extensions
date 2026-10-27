@@ -26,8 +26,16 @@ function imageIdentity(part: Image): string | undefined {
   return ref ? `original:${ref.signature}` : undefined;
 }
 
-/** Rewrite only recoverable images before the latest user turn, never history. */
-export function referenceOlderImages<T>(messages: readonly T[], entries: readonly any[]): { messages: T[]; replaced: number } {
+/** Recoverable older images deferred together, so the rewritten prefix moves rarely. */
+export const DEFERRAL_BATCH = 8;
+
+/**
+ * Rewrite only recoverable images before a user-turn boundary, never history.
+ * The boundary advances to a user turn only once `batch` recoverable images
+ * precede it. It depends only on earlier messages, so each request keeps the
+ * previous request's prefix until a whole batch is deferred at once.
+ */
+export function referenceOlderImages<T>(messages: readonly T[], entries: readonly any[], batch = DEFERRAL_BATCH): { messages: T[]; replaced: number } {
   const references = new Map<string, Map<string, string>>();
   for (const entry of entries) {
     const content = entryContent(entry);
@@ -41,17 +49,25 @@ export function referenceOlderImages<T>(messages: readonly T[], entries: readonl
       if (!byData.has(identity)) byData.set(identity, `${entry.id}:${index}`);
     });
   }
-  let latestUser = -1;
-  messages.forEach((message: any, index) => { if (message.role === "user") latestUser = index; });
+  const referenceOf = (part: any) => {
+    if (!isImage(part)) return undefined;
+    const identity = imageIdentity(part);
+    return identity ? references.get(part.mimeType)?.get(identity) : undefined;
+  };
+  const deferrable = (message: any) => Array.isArray(message?.content) && ["user", "toolResult"].includes(message.role);
+  let boundary = 0;
+  let pending = 0;
+  messages.forEach((message: any, index) => {
+    if (message?.role === "user" && pending >= batch) { boundary = index; pending = 0; }
+    if (deferrable(message)) pending += message.content.filter(referenceOf).length;
+  });
   let replaced = 0;
   const output = messages.map((raw, index) => {
     const message = raw as any;
-    if (index >= latestUser || !Array.isArray(message.content) || !["user", "toolResult"].includes(message.role)) return raw;
+    if (index >= boundary || !deferrable(message)) return raw;
     let changed = false;
     const content = message.content.map((part: any) => {
-      if (!isImage(part)) return part;
-      const identity = imageIdentity(part);
-      const reference = identity ? references.get(part.mimeType)?.get(identity) : undefined;
+      const reference = referenceOf(part);
       if (!reference) return part;
       changed = true;
       replaced++;

@@ -17,6 +17,8 @@ import { ORIGINAL_GRACE_MS } from "./cleanup.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pi-image-store-native-"));
 process.env.PI_CODING_AGENT_DIR = root; process.env.PI_OFFLINE = "1"; process.env.ANTHROPIC_API_KEY = "synthetic-key";
+// Defer each older image immediately; batching has focused unit coverage.
+await writeFile(join(root, "image-history.json"), JSON.stringify({ deferral: { batch: 1 } }));
 globalThis.fetch = (() => { throw new Error("Network forbidden in image storage fixture"); }) as unknown as typeof fetch;
 const png = syntheticPng();
 const original: ImageContent = { type: "image", data: png.toString("base64"), mimeType: "image/png" };

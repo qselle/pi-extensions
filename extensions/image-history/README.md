@@ -8,7 +8,7 @@ per branch. Existing session entries are never migrated or rewritten.
 ## Usage
 
 ```text
-/image-history on      Defer images from earlier user turns
+/image-history on      Defer images from earlier user turns, in batches
 /image-history off     Restore Pi's normal image-context behavior
 /image-history status  Show mode and the last request's deferred-image count
 /image-store on        Store new large originals once, with native previews (default)
@@ -29,13 +29,14 @@ The `history_image` tool retrieves an image using the exact reference in a place
 Optional `$PI_CODING_AGENT_DIR/image-history.json`:
 
 ```json
-{ "storage": { "enabled": true }, "deferral": { "enabled": false } }
+{ "storage": { "enabled": true }, "deferral": { "enabled": false, "batch": 8 } }
 ```
 
 | Key | Default | Effect when a branch has no `/image-store` or `/image-history` choice |
 |---|---|---|
 | `storage.enabled` | `true` | Store new large originals (as `/image-store on`) |
 | `deferral.enabled` | `false` | Defer older images (as `/image-history on`) |
+| `deferral.batch` | `8` | Recoverable older images deferred together (1–100) |
 
 A branch's latest explicit choice always wins. Missing or malformed files use
 the defaults. The default alone never creates the store: it is created when the
@@ -43,7 +44,7 @@ first storable image (at least 64 KiB) arrives. Where POSIX file ownership is
 unavailable, the storage default stays off silently; an explicit
 `/image-store on` reports the limitation.
 
-All images in the latest user message and subsequent tool results remain available. Earlier user/tool-result images are replaced only when the same image can be recovered from the current branch. Unknown or extension-generated images without a stored source are preserved. Retrieval returns the original image as tool content, making it available again during the current turn.
+All images in the latest user message and subsequent tool results remain available. Earlier user/tool-result images are replaced only when the same image can be recovered from the current branch. Replacing an image rewrites an already-sent message, which costs a prompt-cache miss from that point on. Deferral therefore advances to a user turn only once `deferral.batch` recoverable images precede it, so fewer than that many older images stay in context and most requests extend the previous one. Unknown or extension-generated images without a stored source are preserved. Retrieval returns the original image as tool content, making it available again during the current turn.
 
 ### Original storage
 
