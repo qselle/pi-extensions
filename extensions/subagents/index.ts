@@ -253,7 +253,10 @@ export default function registerSubagents(
       "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
     parameters: Parameters,
-    prepareArguments: prepareSubagentArguments,
+    prepareArguments: (raw) => prepareSubagentArguments(raw, (name) => {
+      const key = name.trim().toLocaleLowerCase();
+      return coordinator.list().some((agent) => isActive(agent) && (agent.name.toLocaleLowerCase() === key || agent.id === name));
+    }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.action === "spawn") {
         const contextMode = (params.context ?? "fresh") as ContextMode;
@@ -410,14 +413,16 @@ export default function registerSubagents(
     }
   };
 
+  const completeNames = (prefix: string) => {
+    const names = coordinator.list().map((agent) => agent.name).filter((name) => name.toLowerCase().startsWith(prefix.toLowerCase()));
+    return names.length ? names.map((name) => ({ value: name, label: name })) : null;
+  };
   pi.registerCommand("subagents", {
     description: "Inspect child agents: /subagents [name], or Right from an empty editor",
-    getArgumentCompletions: (prefix) => {
-      const names = coordinator.list().map((agent) => agent.name).filter((name) => name.toLowerCase().startsWith(prefix.toLowerCase()));
-      return names.length ? names.map((name) => ({ value: name, label: name })) : null;
-    },
+    getArgumentCompletions: completeNames,
     handler: showTranscript,
   });
+  pi.registerCommand("agents", { description: "Alias for /subagents", getArgumentCompletions: completeNames, handler: showTranscript });
 
   const installNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;

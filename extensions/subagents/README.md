@@ -27,7 +27,7 @@ onto its schema:
 | Alias | Becomes |
 |---|---|
 | `action: "followup"` | `send` (steer if running, otherwise resume) |
-| `action: "message"` | `queue` |
+| `action: "message"` | `send` (steer) when the child is running, otherwise `queue` |
 | `context: "compacted"` / `"forked"` | `summary` / `fork` |
 | `agent_id` / `agent_ids` | `agent_name` / `agent_names` |
 | `name`, or a one-entry `agent_names`, on send/queue/read/interrupt/close | `agent_name` |
@@ -97,7 +97,7 @@ a provider and model.
 
 The child viewer uses the same Markdown, code rendering, search and navigation as `/transcript`. `/` searches, `n`/`N` steps through matches, `t` toggles thinking, Home goes to the task, and End resumes following. Scrolling pauses following. The full-width panel fits narrow terminals, and saved fallback results remain readable when a detailed transcript is unavailable.
 
-Use `/subagents <name>` to open a child directly; command completion offers current names. With no name, `/subagents` opens the picker.
+Use `/subagents <name>` (alias `/agents`) to open a child directly; command completion offers current names. With no name, `/subagents` opens the picker.
 
 From a completely empty editor, Right opens the first active child, or the first
 retained open child when none are active. Inside the viewer, Left/Right move

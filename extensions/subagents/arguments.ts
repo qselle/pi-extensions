@@ -15,13 +15,16 @@ export function waitTimeout(value: unknown): number {
 /**
  * Accepts argument shapes models commonly carry over from similar agent tools
  * without widening the published schema: action and context synonyms, agent id
- * fields, `return_when`, and out-of-range wait timeouts.
+ * fields, `return_when`, and out-of-range wait timeouts. `message` steers a
+ * running child (`send`) and otherwise only queues.
  */
-export function prepareSubagentArguments(raw: unknown): any {
+export function prepareSubagentArguments(raw: unknown, isRunning: (name: string) => boolean = () => false): any {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const { agent_id, agent_ids, return_when, ...args } = raw as Record<string, unknown>;
+  let message = false;
   if (typeof args.action === "string") {
     const action = args.action.trim().toLowerCase();
+    message = action === "message";
     args.action = ACTION_ALIASES[action] ?? action;
   }
   if (typeof args.context === "string") {
@@ -45,5 +48,6 @@ export function prepareSubagentArguments(raw: unknown): any {
     if (typeof args.name === "string") args.agent_name = args.name;
     else if (Array.isArray(args.agent_names) && args.agent_names.length === 1) args.agent_name = args.agent_names[0];
   }
+  if (message && typeof args.agent_name === "string" && isRunning(args.agent_name)) args.action = "send";
   return args;
 }

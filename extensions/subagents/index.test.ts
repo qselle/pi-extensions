@@ -40,7 +40,8 @@ class MockPi {
   events = { emit() {}, on() { return () => {}; } };
   on(event: string, handler: Handler) { this.handlers.set(event, [...this.handlers.get(event) ?? [], handler]); }
   registerTool(tool: any) { this.tools.set(tool.name, tool); }
-  registerCommand() {}
+  commands = new Map<string, any>();
+  registerCommand(name: string, command: unknown) { this.commands.set(name, command); }
   registerMessageRenderer() {}
   appendEntry(customType: string, data: unknown) { this.entries.push({ type: "custom", customType, data }); }
   sendMessage(message: unknown, options: unknown) { this.sent.push({ message, options }); }
@@ -130,11 +131,14 @@ test("aliases from other agent tool sets map onto the published schema", async (
   expect(tool.parameters.properties.timeout_ms.maximum).toBe(3_600_000);
 });
 
-test("followup steers or resumes and message only queues", async () => {
-  const { call, clients } = await setup();
+test("followup steers or resumes; message steers a running child and otherwise queues", async () => {
+  const { pi, call, clients } = await setup();
   await call({ action: "spawn", name: "Worker", task: "Work" });
   await call({ action: "followup", agent_name: "Worker", message: "Also check tests" });
-  expect(clients[0]!.steers).toEqual(["Also check tests"]);
+  const steered = await call({ action: "message", agent_id: "worker", message: "Prefer the new API" });
+  expect(steered.details.action).toBe("send");
+  expect(clients[0]!.steers).toEqual(["Also check tests", "Prefer the new API"]);
+  expect(pi.commands.get("agents").handler).toBe(pi.commands.get("subagents").handler);
   clients[0]!.finish("done");
   await Bun.sleep(0);
   const queued = await call({ action: "message", agent_id: "Worker", message: "Context for later" });
