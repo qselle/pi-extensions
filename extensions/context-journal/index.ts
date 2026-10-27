@@ -26,9 +26,11 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
   let state = emptyJournal();
   const rollover = installRollover(pi, () => state);
   const syncNotes = (ctx: AnchorContext) => { if (state.enabled) notesAnchor.sync(pi, ctx, state); };
+  // Additive: restore never reorders active tools, which would change the cached prefix.
   const activate = () => {
-    const active = pi.getActiveTools().filter((name) => !TOOLS.includes(name));
-    pi.setActiveTools(state.enabled ? [...active, ...TOOLS] : active);
+    const active = pi.getActiveTools();
+    const next = state.enabled ? [...active, ...TOOLS.filter((name) => !active.includes(name))] : active.filter((name) => !TOOLS.includes(name));
+    if (next.length !== active.length) pi.setActiveTools(next);
   };
   const requireEnabled = () => { if (!state.enabled) throw new Error("Session context journal is disabled. Enable it with /context-journal on."); };
   pi.registerCommand("context-journal", {
