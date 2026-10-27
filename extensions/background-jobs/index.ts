@@ -147,6 +147,8 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   /** Jobs whose final state the model has seen in a result. */
   const reported = new Set<string>();
   const unreported = new Set<string>();
+  /** Active jobs that outlived their yield window. */
+  const backgrounded = new Set<string>();
   const allJobs = () => {
     const jobs = new Map(history.list().map((job) => [job.id, job]));
     for (const job of service.list()) jobs.set(job.id, job);
@@ -178,6 +180,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       if (closing) return;
       // `stopped` always means a requested stop (job_stop, /jobs stop, cancellation,
       // shutdown), which needs no report; hard timeouts are `timed-out`.
+      if (!output && !isActive(job.status)) backgrounded.delete(job.id);
       if (!output && !isActive(job.status) && handedOff.delete(job.id) && job.status !== "stopped" && !reported.has(job.id)) {
         unreported.add(job.id);
         setTimeout(flushNotices, 0);
@@ -316,7 +319,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       finally { stopProgress(); }
       // Like Pi's built-in bash, cancelling the initial wait stops the command.
       if (end === "interrupted") { jobs.stop(job.id); throw new Error("Command cancelled; the job was stopped."); }
-      if (isActive(jobs.get(job.id).status)) controls.activate(JOB_CONTROLS);
+      if (isActive(jobs.get(job.id).status)) { controls.activate(JOB_CONTROLS); backgrounded.add(job.id); card?.invalidate(); }
       return result(job.id, { budget: outputBudget(params.max_chars) }, jobs);
   };
 
@@ -498,14 +501,16 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     historyReady = true;
     closing = false;
     historyError = undefined;
-    activeCtx = ctx; handedOff.clear(); reported.clear(); unreported.clear();
+    activeCtx = ctx; handedOff.clear(); reported.clear(); unreported.clear(); backgrounded.clear();
     service = new JobService(3000, knownSecretValues); listen();
     if (ctx.mode !== "tui") return;
+    // Commands still inside their yield window are foreground work, shown by their own cards.
+    const yielded = () => service.list().filter((job) => isActive(job.status) && backgrounded.has(job.id));
     card = registerOverlayCard({ id: "background-jobs", order: 40, minTerminalWidth: 90, minTerminalHeight: 12,
-      visible: () => service.list().some((job) => isActive(job.status)),
-      title: (theme) => theme.fg("accent", " Jobs · /jobs "),
+      visible: () => yielded().length > 0,
+      title: (theme) => `${theme.bold(" Jobs ")}${theme.fg("accent", `● ${yielded().length} running `)}${theme.fg("dim", "· /jobs ")}`,
       renderBody: (_width, height, theme) => {
-        const active = service.list().filter((job) => isActive(job.status));
+        const active = yielded();
         const count = Math.min(3, Math.max(0, height - (active.length > height ? 1 : 0)));
         return [...active.slice(0, count).map((job) => theme.fg("muted", `${icons[job.status]} ${job.name}`)),
           ...(active.length > count && height > count ? [theme.fg("dim", `+${active.length - count} more · /jobs`)] : [])];
@@ -516,7 +521,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     unsubscribeOwner();
     generation++; clearRefresh(); viewer?.close(); viewer = undefined; viewerOpen = false;
     closing = true;
-    activeCtx = undefined; handedOff.clear(); reported.clear(); unreported.clear();
+    activeCtx = undefined; handedOff.clear(); reported.clear(); unreported.clear(); backgrounded.clear();
     completionViews.clear();
     card?.unregister(); card = undefined;
     await service.shutdown();

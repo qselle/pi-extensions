@@ -93,8 +93,9 @@ The agent can also use:
 Run the command in the foreground; do not use `&`, `nohup`, `disown`, or
 `setsid` to escape management. The bash guidelines say so and keep Pi's note about
 `PI_*` environment variables. Sixteen jobs can run concurrently; the most recent
-50 jobs are retained. The shared overlay shows active job names on sufficiently
-large terminals. The panel shares the transcript viewer's scrolling/search controls
+50 jobs are retained. On sufficiently large terminals, the shared overlay titled
+“● N running” lists jobs that outlived their yield window; a command still inside
+it shows only in its own card. The panel shares the transcript viewer's scrolling/search controls
 and shows the latest 2000 characters per job.
 
 ### Completion notices

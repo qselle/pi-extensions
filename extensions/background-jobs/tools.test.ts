@@ -348,3 +348,17 @@ test("notices skip stopped, already-read and in-run jobs, and wait for an idle a
   expect(content).toContain(`Job: ${later}`);
   for (const id of [seen, stopped, quick]) expect(content).not.toContain(id);
 });
+
+test("the overlay shows only yielded jobs under a running count", async () => {
+  const { run } = await session("tui");
+  const card = ((globalThis as any)[Symbol.for("@qselle/pi-extensions.overlay-stack.v1")].cards.get("background-jobs")).definition;
+  const pending = run("bash", { command: "sleep 5", purpose: "Serve the fixture", yield_ms: 400 });
+  await sleep(150);
+  expect(card.visible()).toBe(false);
+  const { details } = await pending;
+  expect(card.visible()).toBe(true);
+  expect(card.title({ ...plain, bold: (text: string) => text })).toBe(" Jobs ● 1 running · /jobs ");
+  expect(card.renderBody(60, 5, plain)).toEqual(["● Serve the fixture"]);
+  await run("job_wait", { id: (await run("job_stop", { id: details.id })).details.id, wait_ms: 3000 });
+  expect(card.visible()).toBe(false);
+});
