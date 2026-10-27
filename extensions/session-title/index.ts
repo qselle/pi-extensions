@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildTitlePrompt, normalizeManualTitle, provisionalTitle } from "./engine.ts";
 import { requestTitle, type TitleResult } from "./request.ts";
@@ -9,6 +10,7 @@ const CONFIG_FILE = "session-title.json";
 const MAX_TRACKED_PROMPTS = 6;
 const FOOTER_BADGE_EVENT = "footer:badge";
 const TITLE_BADGE_ID = "session-title";
+const THINKING_LEVELS = new Set<unknown>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface SessionTitleConfig {
   enabled: boolean;
@@ -16,6 +18,8 @@ export interface SessionTitleConfig {
   model?: string;
   /** Ordered "provider/model" preferences, tried before the active session model. */
   models?: string[];
+  /** Thinking level per "provider/model"; unset models think as little as they can. */
+  thinking?: Record<string, ModelThinkingLevel>;
   /** Follow Pi names in Herdr when the tab is empty or already linked. */
   tabLink?: boolean;
 }
@@ -28,12 +32,21 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
   try {
     const parsed = JSON.parse(readFileSync(join(directory, CONFIG_FILE), "utf8")) as Record<string, unknown>;
     const valid = (value: unknown): value is string => typeof value === "string" && value.indexOf("/") > 0;
-    const models = Array.isArray(parsed?.models) ? [...new Set(parsed.models.filter(valid))] : [];
+    const models: string[] = [];
+    const thinking: Record<string, ModelThinkingLevel> = {};
+    // Entries are "provider/model" or { "model": "provider/model", "thinkingLevel": "minimal" }.
+    for (const entry of Array.isArray(parsed?.models) ? parsed.models : []) {
+      const name = typeof entry === "string" ? entry : entry?.model;
+      if (!valid(name) || models.includes(name)) continue;
+      models.push(name);
+      if (THINKING_LEVELS.has(entry?.thinkingLevel)) thinking[name] = entry.thinkingLevel;
+    }
     return {
       enabled: parsed?.enabled !== false,
       // `models` takes precedence; `model` remains a one-entry shorthand.
       model: models[0] ?? (valid(parsed?.model) ? parsed.model : undefined),
       ...(models.length > 0 ? { models } : {}),
+      ...(Object.keys(thinking).length > 0 ? { thinking } : {}),
       ...(typeof parsed?.tabLink === "boolean" ? { tabLink: parsed.tabLink } : {}),
     };
   } catch {
@@ -116,6 +129,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
         prompt: buildTitlePrompt(sourcePrompts),
         override: config.model,
         overrides: config.models,
+        thinking: config.thinking,
         signal: controller.signal,
       });
     } catch (error) {

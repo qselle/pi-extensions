@@ -67,8 +67,13 @@ Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 ```
 
 `models` is an ordered preference list of `provider/model-id` entries. Each is
-tried in turn when unavailable, unauthenticated, failing, or returning no usable
-title; the active session model is always the last fallback. Without `models`,
+tried in turn when unavailable, unauthenticated, failing, slower than 20 seconds,
+or returning no usable title; the active session model is always the last fallback.
+An entry can also be `{ "model": "provider/model-id", "thinkingLevel": "minimal" }`
+(`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`) for a reasoning
+model; otherwise titles request no optional thinking. Reasoning models get a
+larger output budget (512 tokens, or 2,048 with a thinking level) because some
+think even when asked not to. Without `models`,
 the single `model` key is still honored as a one-entry list; when both are
 present, `models` wins. With neither, the active session model is used.
 

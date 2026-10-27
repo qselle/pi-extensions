@@ -137,6 +137,19 @@ describe("loadConfig", () => {
     expect(loadConfig(dir)).toEqual({ enabled: true, model: "openai/gpt-4.1-mini" });
   });
 
+  test("reads per-model thinking levels from object entries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "title-thinking-"));
+    writeFileSync(join(dir, "session-title.json"), JSON.stringify({
+      models: [{ model: "mistral/mistral-medium-3.5", thinkingLevel: "high" }, { model: "openai/o4", thinkingLevel: "loud" }, "openai/gpt-4.1-mini"],
+    }));
+    expect(loadConfig(dir)).toEqual({
+      enabled: true,
+      model: "mistral/mistral-medium-3.5",
+      models: ["mistral/mistral-medium-3.5", "openai/o4", "openai/gpt-4.1-mini"],
+      thinking: { "mistral/mistral-medium-3.5": "high" },
+    });
+  });
+
   test("reads the independent Tab link switch", () => {
     const dir = mkdtempSync(join(tmpdir(), "session-title-config-"));
     writeFileSync(join(dir, "session-title.json"), JSON.stringify({ enabled: false, tabLink: true }));

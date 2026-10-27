@@ -46,7 +46,8 @@ describe("requestTitle", () => {
     expect(seen.model).toEqual({ provider: "amazon-bedrock", id: "opus-5", reasoning: true });
     expect(seen.request.systemPrompt).toContain("Reply only with a specific noun phrase");
     expect(seen.request.messages[0].content[0].text).toBe("p");
-    expect(seen.options.maxTokens).toBe(24);
+    // The active model reasons, so the cap leaves room for unavoidable thinking.
+    expect(seen.options.maxTokens).toBe(24 + 512);
     expect(seen.options.reasoning).toBeUndefined();
     // Must not share the main session's prompt cache.
     expect(seen.options.sessionId).toBe("sess-1:title");
@@ -62,7 +63,7 @@ describe("requestTitle", () => {
     }) as never;
     const result = await requestTitle({ ctx, prompt: "p" });
     expect(result.title).toBe("Configured provider title");
-    expect(seen.options).toMatchObject({ maxTokens: 24, sessionId: "sess-1:title" });
+    expect(seen.options).toMatchObject({ maxTokens: 536, sessionId: "sess-1:title" });
     expect(seen.options.reasoning).toBeUndefined();
     expect(seen.options.apiKey).toBeUndefined();
     expect(seen.request.systemPrompt).toContain("Reply only with a specific noun phrase");
@@ -209,5 +210,60 @@ describe("requestTitle", () => {
       completion: (async () => ({ content: "Plain title" })) as never,
     });
     expect(result.title).toBe("Plain title");
+  });
+
+  test("keeps the small cap for non-reasoning models and passes configured thinking to reasoning models", async () => {
+    const seen: Array<{ model: string; maxTokens: number; reasoning?: string }> = [];
+    const ctx = context(["openai/gpt-4.1-mini"]);
+    await requestTitle({
+      ctx,
+      overrides: ["openai/gpt-4.1-mini"],
+      thinking: { "openai/gpt-4.1-mini": "high", "amazon-bedrock/opus-5": "minimal" },
+      prompt: "p",
+      completion: (async (model: any, _request: any, options: any) => {
+        seen.push({ model: `${model.provider}/${model.id}`, maxTokens: options.maxTokens, reasoning: options.reasoning });
+        return model.provider === "openai" ? { stopReason: "error", content: [] } : { content: [{ type: "text", text: "T" }] };
+      }) as never,
+    });
+    expect(seen).toEqual([
+      { model: "openai/gpt-4.1-mini", maxTokens: 24, reasoning: undefined },
+      { model: "amazon-bedrock/opus-5", maxTokens: 24 + 2_048, reasoning: "minimal" },
+    ]);
+  });
+
+  test("moves to the next model when one exceeds the deadline", async () => {
+    const used: string[] = [];
+    const result = await requestTitle({
+      ctx: context(["openai/gpt-4.1-mini"]),
+      overrides: ["openai/gpt-4.1-mini"],
+      prompt: "p",
+      timeoutMs: 5,
+      completion: (async (model: any, _request: any, options: any) => {
+        used.push(model.provider);
+        if (model.provider === "amazon-bedrock") return { content: [{ type: "text", text: "Prompt Title" }] };
+        await new Promise((resolve) => options.signal.addEventListener("abort", resolve));
+        return { stopReason: "aborted", content: [] };
+      }) as never,
+    });
+    expect(used).toEqual(["openai", "amazon-bedrock"]);
+    expect(result).toMatchObject({ title: "Prompt Title", fallback: "openai/gpt-4.1-mini timed out; used amazon-bedrock/opus-5" });
+  });
+
+  test("structured requests use their own prompt, budget, and parser", async () => {
+    let seen: any;
+    const result = await requestTitle({
+      ctx: context(),
+      prompt: "{}",
+      systemPrompt: "structured",
+      maxTokens: 400,
+      parse: (text) => JSON.parse(text),
+      completion: (async (_model: any, request: any, options: any) => {
+        seen = { request, options };
+        return { content: [{ type: "text", text: '{"title":"Fix Pi Footer","turn":"t","focus":"f"}' }] };
+      }) as never,
+    });
+    expect(seen.request.systemPrompt).toBe("structured");
+    expect(seen.options.maxTokens).toBe(400 + 512);
+    expect(result).toMatchObject({ title: "Pi Footer", turn: "t", focus: "f" });
   });
 });
