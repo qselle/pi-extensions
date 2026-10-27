@@ -1,5 +1,6 @@
 import * as tui from "@earendil-works/pi-tui";
 import { VERSION, getAgentDir, getShellConfig, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { stat } from "node:fs/promises";
 import { loadTelegramConfig } from "../telegram/config.ts";
 import { SnapshotPanel } from "../../lib/transcript/snapshot-panel.ts";
 import { diagnose, formatReport } from "./checks.ts";
@@ -25,13 +26,21 @@ export default function doctorExtension(pi: ExtensionAPI, deps: { diagnose?: typ
         let shell: string | undefined;
         try { shell = getShellConfig().shell; } catch {}
         const commands = pi.getCommands().map((command) => command.name);
+        const registry = ctx.modelRegistry;
+        const sessionFile = ctx.sessionManager?.getSessionFile?.();
+        const fileBytes = sessionFile ? await stat(sessionFile).then((info) => info.size, () => undefined) : undefined;
         const findings = await inspect({ hostVersion: VERSION,
           modelAuthConfigured: ctx.model ? ctx.modelRegistry?.hasConfiguredAuth?.(ctx.model) : undefined,
           modelConfigInvalid: ctx.modelRegistry?.getError ? !!ctx.modelRegistry.getError() : undefined,
           bindingConflicts: ctx.mode === "tui" ? tui.getKeybindings?.().getConflicts().length : undefined,
           platform: process.platform, bun: !!process.versions.bun, env: process.env, agentDir: getAgentDir(),
           tools: pi.getAllTools().map((tool) => tool.name), activeTools: pi.getActiveTools(), commands, shell, model: ctx.model,
-          telegram: commands.includes("telegram") ? loadTelegramConfig({ cwd: ctx.cwd }).status : "disabled" });
+          telegram: commands.includes("telegram") ? loadTelegramConfig({ cwd: ctx.cwd }).status : "disabled",
+          modelStatus: registry?.getModelOfType ? (provider, id) => {
+            const model = registry.getModelOfType("chat", provider, id);
+            return !model ? "missing" : registry.hasConfiguredAuth(model) ? "ok" : "unauthenticated";
+          } : undefined,
+          session: ctx.sessionManager?.getEntries ? { fileBytes, entries: ctx.sessionManager.getEntries().length } : undefined });
         if (version !== generation) return;
         if (ctx.mode !== "tui" || args.trim() === "text") { ctx.ui.notify(formatReport(findings), "info"); return; }
         await panel.open(ctx, reportBlocks(findings));

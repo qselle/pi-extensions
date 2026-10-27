@@ -17,6 +17,9 @@ export interface DoctorInput {
   telegram: "enabled" | "disabled" | "invalid"; shell?: string;
   model?: { provider: string; api: string; id: string; baseUrl: string };
   now?: number;
+  /** Resolves an exact enabledModels entry against Pi's model registry. */
+  modelStatus?: (provider: string, id: string) => "ok" | "missing" | "unauthenticated";
+  session?: { fileBytes?: number; entries: number };
 }
 export interface Probe {
   executable(name: string): Promise<boolean>;
@@ -24,6 +27,26 @@ export interface Probe {
   pty(): Promise<boolean>;
   resources?(): Promise<Finding[]>;
   connectorCache?(): Promise<ConnectorCache | "absent" | "invalid">;
+  settings?(): Promise<Record<string, unknown> | undefined>;
+}
+
+const SESSION_WARN_BYTES = 25 * 1024 * 1024;
+const SESSION_WARN_ENTRIES = 5_000;
+/** `provider/model[:thinking]` without glob characters; patterns are left to Pi. */
+const EXACT_MODEL = /^([\w.-]+)\/([^*?[\]{}\s]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$/;
+
+function formatBytes(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Pi numbers extension commands registered under the same name: `name:1`, `name:2`. */
+export function duplicateCommands(commands: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const name of commands) {
+    const base = /^(.+):\d+$/.exec(name)?.[1];
+    if (base && !name.startsWith("skill:")) counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  return new Map([...counts].filter(([, count]) => count > 1));
 }
 
 /** Metadata checks only: no executable is launched and no network is contacted. */
@@ -57,6 +80,10 @@ export function localProbe(input: DoctorInput): Probe {
     async resources() {
       const result = await read("settings.json");
       return result.status === "valid" ? resourceFindings(result.data, input.agentDir) : [];
+    },
+    async settings() {
+      const result = await read("settings.json");
+      return result.status === "valid" ? result.data : undefined;
     },
     async connectorCache() {
       // The connector list can exceed the 64 KiB settings cap.
@@ -92,6 +119,25 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   const hostSettings = await probe.config("settings.json");
   add("host-settings", "Host settings", hostSettings === "invalid" ? "warn" : "ok", hostSettings === "invalid" ? "Global settings JSON is unreadable, oversized or malformed." : hostSettings === "absent" ? "No global settings file; defaults apply." : "Global settings JSON is readable; values and project overrides are not exhaustively validated.", hostSettings === "invalid" ? "Repair settings.json in the Pi agent directory." : undefined);
   if (probe.resources) result.push(...await probe.resources());
+  const duplicates = duplicateCommands(input.commands);
+  add("duplicate-commands", "Extension commands", duplicates.size ? "warn" : "ok", duplicates.size ? `Registered more than once: ${[...duplicates].map(([name, count]) => `/${name} (${count})`).join(", ")}. Pi numbers them, for example /${duplicates.keys().next().value}:1.` : "No extension command name is registered twice. Shortcut conflicts are reported by Pi at startup.", duplicates.size ? "Disable one of the packages or extensions that register the command, then /reload." : undefined);
+  const enabled = input.modelStatus && probe.settings ? (await probe.settings())?.enabledModels : undefined;
+  if (input.modelStatus && Array.isArray(enabled)) {
+    const exact = enabled.filter((spec): spec is string => typeof spec === "string").map((spec) => [spec, EXACT_MODEL.exec(spec.trim())] as const).filter(([, match]) => match);
+    const problems = exact.map(([spec, match]) => [spec, input.modelStatus!(match![1]!, match![2]!)] as const).filter(([, status]) => status !== "ok");
+    const missing = problems.filter(([, status]) => status === "missing").map(([spec]) => spec);
+    const unauthenticated = problems.filter(([, status]) => status === "unauthenticated").map(([spec]) => spec);
+    const list = (specs: string[]) => `${specs.slice(0, 5).join(", ")}${specs.length > 5 ? ` and ${specs.length - 5} more` : ""}`;
+    add("enabled-models", "Enabled models", problems.length ? "warn" : "ok", problems.length
+      ? [missing.length ? `Not found: ${list(missing)}.` : "", unauthenticated.length ? `No configured authentication: ${list(unauthenticated)}.` : ""].filter(Boolean).join(" ")
+      : `${exact.length} exact enabledModels entr${exact.length === 1 ? "y resolves" : "ies resolve"} to authenticated models; patterns are left to Pi.`,
+    problems.length ? "Correct stale enabledModels entries in settings.json, or /login the provider." : undefined);
+  }
+  if (input.session) {
+    const { fileBytes, entries } = input.session;
+    const large = (fileBytes ?? 0) > SESSION_WARN_BYTES || entries > SESSION_WARN_ENTRIES;
+    add("session-size", "Current session", large ? "warn" : "ok", `${fileBytes === undefined ? "Not saved to a file" : `Session file ${formatBytes(fileBytes)}`}, ${entries.toLocaleString("en-US")} entries.${large ? " Large sessions load, branch and search more slowly." : ""}`, large ? "Continue in a fresh session (for example with /new) and keep this one for reference." : undefined);
+  }
   const shellFound = !!input.shell && await probe.executable(input.shell);
   add("shell", "Shell", shellFound ? "ok" : "warn", shellFound ? "Pi resolved an available shell executable." : "Pi could not resolve an available shell executable.", shellFound ? undefined : "Install bash and make it available to Pi, then restart.");
   for (const [name, label] of [["web_search", "Web search"], ["web_read", "Page reader"], ["job_start", "Managed jobs"]]) {

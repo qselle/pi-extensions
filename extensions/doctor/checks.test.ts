@@ -181,3 +181,19 @@ test("connector cache probe reads caches beyond the settings size cap", async ()
     expect(await probe.connectorCache!()).toBe("invalid");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("duplicate extension commands, stale enabled models and large sessions are reported", async () => {
+  const settings: Probe = { ...good, settings: async () => ({ enabledModels: ["anthropic/claude:high", "gone/model", "openai/gpt", "anthropic/*", "sonnet", 42] }) };
+  const status = (provider: string, id: string) => provider === "gone" ? "missing" as const : provider === "openai" ? "unauthenticated" as const : (expect(id).toBe("claude"), "ok" as const);
+  const report = await diagnose({ ...input, commands: ["plan:1", "plan:2", "skill:review", "review", "notify"], modelStatus: status, session: { fileBytes: 30 * 1024 * 1024, entries: 12 } }, settings);
+  expect(report.find((row) => row.id === "duplicate-commands")).toMatchObject({ status: "warn", detail: expect.stringContaining("/plan (2)") });
+  expect(report.find((row) => row.id === "enabled-models")).toMatchObject({ status: "warn", detail: "Not found: gone/model. No configured authentication: openai/gpt." });
+  expect(report.find((row) => row.id === "session-size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Session file 30.0 MB, 12 entries") });
+
+  const healthy = await diagnose({ ...input, commands: ["plan"], modelStatus: () => "ok", session: { entries: 3 } }, { ...good, settings: async () => ({ enabledModels: ["anthropic/claude"] }) });
+  expect(healthy.find((row) => row.id === "duplicate-commands")?.status).toBe("ok");
+  expect(healthy.find((row) => row.id === "enabled-models")).toMatchObject({ status: "ok", detail: expect.stringContaining("1 exact enabledModels entry resolves") });
+  expect(healthy.find((row) => row.id === "session-size")).toMatchObject({ status: "ok", detail: "Not saved to a file, 3 entries." });
+  // Without enabledModels or registry access, no model finding is invented.
+  expect((await diagnose({ ...input, modelStatus: () => "ok" }, { ...good, settings: async () => ({}) })).some((row) => row.id === "enabled-models")).toBe(false);
+});

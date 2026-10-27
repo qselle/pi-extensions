@@ -17,6 +17,12 @@ when loaded; disabled features are not errors. Search access reports Exa's mode:
 public access first, with the API key after rate limits or access errors when one
 is set, or the mode forced by `PI_EXA_ACCESS`.
 
+It also flags extension commands registered under the same name (Pi numbers
+them `/name:1`, `/name:2`), exact `enabledModels` entries in global settings that
+Pi's registry does not know or has no authentication for (glob patterns are left
+to Pi), and a current session file over 25 MB or 5,000 entries. Extension
+shortcut conflicts have no public API and stay in Pi's startup warnings.
+
 Resource checks validate the global `packages`, `extensions`, `skills`, `prompts`,
 and `themes` list shapes, including package resource filters and `autoload`.
 They flag repeated package sources/plain resource paths and missing explicit local
