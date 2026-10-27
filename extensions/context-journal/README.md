@@ -22,6 +22,9 @@ navigation.
 | `context_budget` | Read Pi's context estimate and checkpoint budget |
 | `context_rollover` | Request fresh context from saved notes, without a generated summary |
 
+Calls render as compact cards with a one-line summary; expand them to read note
+text, history excerpts, or errors.
+
 Record the objective, constraints, decisions, evidence, and unfinished work.
 The model sees notes through its own `context_notes` calls, the rollover
 summary, and a hidden anchor saved once after resume, tree navigation, native

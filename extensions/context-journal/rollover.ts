@@ -4,7 +4,7 @@ import { redactText } from "../../lib/redact.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { journalPrompt, type Journal } from "./state.ts";
 import { CHECKPOINT_ENTRY, currentCheckpoint, ROLLOVER_BOUNDARY } from "./checkpoint.ts";
-import type { BoundaryData, RolloverReason } from "./render.ts";
+import { journalRenderers, type BoundaryData, type RolloverReason } from "./render.ts";
 
 export { ROLLOVER_BOUNDARY } from "./checkpoint.ts";
 export const BUDGET_REMINDER = "context-journal-budget";
@@ -84,7 +84,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     } catch (error) { if (version === generation) throw error; }
     finally { if (version === generation) { requested = false; compacting = false; activeContext = undefined; acceptedCheckpoint = undefined; staleAccepted = false; } }
   };
-  pi.registerTool({ name: "context_rollover", label: "Roll context window",
+  pi.registerTool({ name: "context_rollover", label: "Roll context window", ...journalRenderers("context_rollover"),
     description: "Request no-summary context rollover after saving complete, current context_notes. During an active tool chain, end this response after requesting; Pi commits the boundary before settlement and continues with saved notes, or rolls over at its next safe automatic compaction boundary. History stays retrievable. This does not finish the task.",
     parameters: Type.Object({ checkpoint_ready: Type.Literal(true) }),
     async execute(_id, _params, signal, _update, ctx) {

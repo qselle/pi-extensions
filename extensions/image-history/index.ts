@@ -1,4 +1,4 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { STATE_TYPE, referenceOlderImages, restoreEnabled, retrieveImage } from "./history.ts";
@@ -8,6 +8,20 @@ import { inspectStorage, originalFiles, removeUnusedOriginals } from "./cleanup.
 import { OriginalImageViewer, prepareImageForViewer } from "./viewer.ts";
 import { loadConfig, storageSupported, type ImageHistoryConfig } from "./config.ts";
 import { LEGACY_PREVIEW_ENTRY, LegacyImagePreview, LegacyImageStore, legacyReference, restoreLegacyMessages, restoreLegacyTranscript } from "./legacy.ts";
+import { PlainOutput } from "../../lib/output.ts";
+import { toolHeadline, toolText } from "../../lib/tool-ui.ts";
+
+const oneLine = (value: unknown) => new PlainOutput().push(typeof value === "string" ? value : "").replace(/\s+/g, " ").trim().slice(0, 256);
+/** A one-line card; Pi still renders the retrieved image natively below it. */
+export const historyImageRenderers = {
+  renderShell: "self" as const,
+  renderCall: (args: unknown, theme: Theme, context?: { isPartial?: boolean; isError?: boolean }) =>
+    toolHeadline(context?.isError ? "Image retrieval failed" : context?.isPartial ? "Retrieving image" : "Retrieved image", oneLine((args as { reference?: unknown } | undefined)?.reference), theme, context?.isError),
+  renderResult: (result: { content: readonly { type: string; text?: string }[] }, options: { isPartial: boolean }, theme: Theme, context?: { isError?: boolean }) => {
+    const error = context?.isError && !options.isPartial ? oneLine(result.content.find((part) => part.type === "text")?.text) : "";
+    return error ? toolText(`${theme.fg("dim", "  └ ")}${theme.fg("error", error)}`, true) : { invalidate() {}, render: () => [] };
+  },
+};
 
 export interface ImageHistoryOptions { agentDir?: string; config?: ImageHistoryConfig }
 
@@ -187,6 +201,7 @@ export default function imageHistory(pi: ExtensionAPI, options: ImageHistoryOpti
   pi.registerTool({
     name: "history_image",
     label: "Retrieve history image",
+    ...historyImageRenderers,
     description: "Retrieve one earlier image by the exact reference shown in a model-context placeholder. Requires image-history mode.",
     parameters: { type: "object", properties: { reference: { type: "string", minLength: 3, maxLength: 256 } }, required: ["reference"], additionalProperties: false } as any,
     async execute(_id, params: { reference: string }, signal, _update, ctx) {

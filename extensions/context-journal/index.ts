@@ -4,7 +4,7 @@ import { createContextAnchor, type AnchorContext } from "../../lib/context-ancho
 import { redactText } from "../../lib/redact.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { contextBudget, installRollover, notesContext, ROLLOVER_BOUNDARY } from "./rollover.ts";
-import { boundaryDivider, type BoundaryData } from "./render.ts";
+import { boundaryDivider, journalRenderers, type BoundaryData } from "./render.ts";
 import { emptyJournal, historyMatches, JOURNAL_CONTEXT, JOURNAL_ENTRY, JOURNAL_HEADER, restoreJournal, updateNote, type Journal } from "./state.ts";
 
 /**
@@ -51,7 +51,7 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
       ctx.ui.notify(`Context journal ${state.enabled ? "enabled" : "disabled"} · ${Object.keys(state.notes).length}/32 notes · ${Object.values(state.notes).join("").length}/16000 characters. Disabling keeps saved notes.`, "info");
     },
   });
-  pi.registerTool({ name: "context_notes", label: "Session notes",
+  pi.registerTool({ name: "context_notes", label: "Session notes", ...journalRenderers("context_notes"),
     description: "List, read, replace or delete durable keyed working notes on the current session branch. Preserve the full objective, constraints, decisions, verified evidence and unfinished work. Notes enter future model context while enabled. No secrets. Limits: 32 notes, 4000 characters each, 16000 total.",
     parameters: Type.Object({ action: Type.Union([Type.Literal("list"), Type.Literal("read"), Type.Literal("write"), Type.Literal("delete")]), key: Type.Optional(Type.String({ maxLength: 64 })), text: Type.Optional(Type.String({ maxLength: 4000 })) }),
     async execute(_id, params, signal) {
@@ -72,7 +72,7 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
       return { content: [{ type: "text", text }], details: {} };
     },
   });
-  pi.registerTool({ name: "context_history", label: "Retrieve session history",
+  pi.registerTool({ name: "context_history", label: "Retrieve session history", ...journalRenderers("context_history"),
     description: "Search messages and tool calls across the complete current session branch, including messages before compaction. Returns newest matches with stable entry IDs and excerpts around the match. Use nextBefore as before to page older results. includeReasoning also searches thinking. Hidden extension messages and image data are excluded.",
     parameters: Type.Object({ query: Type.Optional(Type.String({ maxLength: 500 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })), before: Type.Optional(Type.String()), includeReasoning: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, _update, ctx) {
@@ -83,7 +83,7 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
       return { content: [{ type: "text", text: `${matches}\n\n${continuation}` }], details: { nextBefore: result.nextBefore, count: result.matches.length } };
     },
   });
-  pi.registerTool({ name: "context_budget", label: "Inspect context budget", description: "Report Pi's current context estimate; unknown usage is not treated as zero.", parameters: Type.Object({}),
+  pi.registerTool({ name: "context_budget", label: "Inspect context budget", ...journalRenderers("context_budget"), description: "Report Pi's current context estimate; unknown usage is not treated as zero.", parameters: Type.Object({}),
     async execute(_id, _params, _signal, _update, ctx) {
       requireEnabled(); const usage = ctx.getContextUsage();
       return { content: [{ type: "text", text: usage ? JSON.stringify({ ...usage, budget: contextBudget(usage) }) : "Context usage is currently unknown." }], details: {} };

@@ -22,7 +22,7 @@ per branch. Existing session entries are never migrated or rewritten.
 /image-store gc /absolute/path/archived-sessions
 ```
 
-The `history_image` tool retrieves an image using the exact reference in a placeholder. It is active only while this mode is enabled. Each `on`/`off` choice persists as a branch-local custom session entry, restores after reopening or navigation, and overrides the global default.
+The `history_image` tool retrieves an image using the exact reference in a placeholder. It is active only while this mode is enabled and renders as a one-line card above Pi's native image preview. Each `on`/`off` choice persists as a branch-local custom session entry, restores after reopening or navigation, and overrides the global default.
 
 ## Configuration
 
