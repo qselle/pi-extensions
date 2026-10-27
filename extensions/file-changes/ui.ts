@@ -17,6 +17,11 @@ export function fileChangesTitle(display: FileChangesDisplay, theme: Theme): str
   return `${theme.bold(" Changed files ")}${theme.fg("dim", `· ${phase} `)}`;
 }
 
+/** Rows that show every listed file (or the overflow line), the spacer and totals. */
+export function fileChangesBodyHeight(display: FileChangesDisplay): number {
+  return display.files.length ? Math.min(display.files.length, MAX_VISIBLE_FILES) + 2 : 0;
+}
+
 export function renderFileChangesBody(
   display: FileChangesDisplay,
   width: number,

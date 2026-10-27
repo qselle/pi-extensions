@@ -37,7 +37,7 @@ mock.module("@earendil-works/pi-tui", () => ({
   wrapTextWithAnsi: (value: string, width: number) => value.length <= width ? [value] : [value.slice(0, width), value.slice(width)],
 }));
 
-const { compactFilePath, fileChangesTitle, renderFileChangesBody } = await import("./ui.ts");
+const { compactFilePath, fileChangesBodyHeight, fileChangesTitle, renderFileChangesBody } = await import("./ui.ts");
 const { setHyperlinkMode, hasDanglingLink } = await import("../../lib/links.ts");
 
 const theme = {
@@ -118,4 +118,17 @@ test("links each row to its file when hyperlinks are enabled", () => {
   } finally {
     setHyperlinkMode("auto");
   }
+});
+
+test("requests exactly the rows that show the whole list, overflow line and totals", () => {
+  const files = (count: number): FileChange[] => Array.from({ length: count }, (_, index) => ({ path: `f${index}.ts`, kind: "modified", additions: 1, removals: 0 }));
+  for (const count of [1, 3, 8, 11]) {
+    const display = { phase: "last" as const, files: files(count) };
+    const height = fileChangesBodyHeight(display);
+    expect(height).toBe(Math.min(count, 8) + 2);
+    const lines = renderFileChangesBody(display, 40, height, theme);
+    expect(lines).toHaveLength(height);
+    expect(lines.filter((line) => line.includes(".ts"))).toHaveLength(count > 8 ? 7 : count);
+  }
+  expect(fileChangesBodyHeight({ phase: "live", files: [] })).toBe(0);
 });

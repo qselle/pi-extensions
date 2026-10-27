@@ -16,6 +16,8 @@ The extension records a file before its first mutation in a run and compares tha
 
 Home-relative tool paths (`~/…`) resolve against the user home directory.
 
+The card asks the overlay stack for enough rows to list up to eight files plus the totals; longer lists end with `… N more`. Other cards keep their minimum rows, so the list shortens on crowded or short terminals.
+
 Hiding the card does not stop tracking. Visibility itself resets on reload.
 
 ## Dependencies and limitations

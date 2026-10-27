@@ -16,7 +16,7 @@ import {
   type FileChange,
   type StoredFileChanges,
 } from "./changes.ts";
-import { fileChangesTitle, renderFileChangesBody, type FileChangesDisplay } from "./ui.ts";
+import { fileChangesBodyHeight, fileChangesTitle, renderFileChangesBody, type FileChangesDisplay } from "./ui.ts";
 
 const CARD_ID = "file-changes";
 const countContentChanges = (path: string, before: string, after: string) =>
@@ -41,6 +41,8 @@ export default function fileChangesExtension(
     order: 20,
     width: 58,
     minBodyHeight: 3,
+    // Ask the stack for the whole list so files are not traded for even row shares.
+    requiredBodyHeight: () => fileChangesBodyHeight(display),
     minTerminalWidth: 72,
     minTerminalHeight: 12,
     visible: () => enabled && display.files.length > 0,
