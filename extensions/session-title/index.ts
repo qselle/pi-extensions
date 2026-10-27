@@ -1,14 +1,32 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildTitlePrompt, normalizeManualTitle, provisionalTitle } from "./engine.ts";
-import { requestTitle, type TitleResult } from "./request.ts";
+import {
+  buildFocusPrompt,
+  buildTitleContext,
+  buildTitlePrompt,
+  FOCUS_SYSTEM_PROMPT,
+  lastMessageId,
+  latestTitleState,
+  normalizeManualTitle,
+  parseFocusResponse,
+  provisionalTitle,
+  STATE_ENTRY,
+  userRequests,
+  type TitleState,
+} from "./engine.ts";
+import { DEFAULT_TITLE_MODEL, requestTitle, type TitleResult } from "./request.ts";
 import { registerTabLink, type TabLinkOptions } from "./tab-link.ts";
 
 const CONFIG_FILE = "session-title.json";
-const MAX_TRACKED_PROMPTS = 6;
+/** Room for the JSON turn summary, focus, and title. */
+const FOCUS_TOKENS = 400;
+const NO_AUTO_FLAG = "no-auto-title";
+const CONFIG_CHECK_MS = 5_000;
 const FOOTER_BADGE_EVENT = "footer:badge";
 const TITLE_BADGE_ID = "session-title";
+const THINKING_LEVELS = new Set<unknown>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface SessionTitleConfig {
   enabled: boolean;
@@ -16,6 +34,10 @@ export interface SessionTitleConfig {
   model?: string;
   /** Ordered "provider/model" preferences, tried before the active session model. */
   models?: string[];
+  /** Thinking level per "provider/model"; unset models think as little as they can. */
+  thinking?: Record<string, ModelThinkingLevel>;
+  /** "turn" (default) retitles after each finished turn; "once" names only the first request. */
+  refresh?: "turn" | "once";
   /** Follow Pi names in Herdr when the tab is empty or already linked. */
   tabLink?: boolean;
 }
@@ -28,17 +50,48 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
   try {
     const parsed = JSON.parse(readFileSync(join(directory, CONFIG_FILE), "utf8")) as Record<string, unknown>;
     const valid = (value: unknown): value is string => typeof value === "string" && value.indexOf("/") > 0;
-    const models = Array.isArray(parsed?.models) ? [...new Set(parsed.models.filter(valid))] : [];
+    const models: string[] = [];
+    const thinking: Record<string, ModelThinkingLevel> = {};
+    // Entries are "provider/model" or { "model": "provider/model", "thinkingLevel": "minimal" }.
+    for (const entry of Array.isArray(parsed?.models) ? parsed.models : []) {
+      const name = typeof entry === "string" ? entry : entry?.model;
+      if (!valid(name) || models.includes(name)) continue;
+      models.push(name);
+      if (THINKING_LEVELS.has(entry?.thinkingLevel)) thinking[name] = entry.thinkingLevel;
+    }
     return {
       enabled: parsed?.enabled !== false,
       // `models` takes precedence; `model` remains a one-entry shorthand.
       model: models[0] ?? (valid(parsed?.model) ? parsed.model : undefined),
       ...(models.length > 0 ? { models } : {}),
+      ...(Object.keys(thinking).length > 0 ? { thinking } : {}),
+      ...(parsed?.refresh === "turn" || parsed?.refresh === "once" ? { refresh: parsed.refresh } : {}),
       ...(typeof parsed?.tabLink === "boolean" ? { tabLink: parsed.tabLink } : {}),
     };
   } catch {
     return { enabled: true };
   }
+}
+
+/** Config edits apply within a few seconds: the file is re-read only when its mtime changes. */
+export function watchConfig(directory = agentDirectory(), now = Date.now): () => SessionTitleConfig {
+  const path = join(directory, CONFIG_FILE);
+  const stamp = () => {
+    try { return statSync(path).mtimeMs; } catch { return -1; }
+  };
+  let mtime = stamp();
+  let config = loadConfig(directory);
+  let checkedAt = now();
+  return () => {
+    if (now() - checkedAt < CONFIG_CHECK_MS) return config;
+    checkedAt = now();
+    const current = stamp();
+    if (current !== mtime) {
+      mtime = current;
+      config = loadConfig(directory);
+    }
+    return config;
+  };
 }
 
 export interface SessionTitleOptions {
@@ -49,24 +102,57 @@ export interface SessionTitleOptions {
   tabLink?: Omit<TabLinkOptions, "enabled">;
 }
 
+type Entries = Parameters<typeof latestTitleState>[0];
+
+interface TitleJob {
+  prompt: string;
+  /** First-request title from user text alone; uses the plain prompt. */
+  draft?: boolean;
+  /** Last message covered by a finished-turn refresh; persisted with its focus. */
+  leaf?: string;
+  explicit?: boolean;
+}
+
+const sameTitle = (left: string | undefined, right: string | undefined) =>
+  (left ?? "").replace(/\s+/g, " ").trim().toLowerCase() === (right ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
 export default function sessionTitleExtension(pi: ExtensionAPI, options: SessionTitleOptions = {}): void {
-  const config = options.config ?? loadConfig();
+  const fixed = options.config;
+  const config = fixed ? () => fixed : watchConfig();
   const run = options.request ?? requestTitle;
   const env = options.env ?? process.env;
   const child = env.PI_SUBAGENT_CHILD === "1";
-  const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config.tabLink });
+  const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config().tabLink });
+  pi.registerFlag(NO_AUTO_FLAG, { description: "Disable automatic session titles for this run", type: "boolean", default: false });
 
-  let prompts: string[] = [];
-  /** True once the session has a name, from any source. Titling stops for good. */
-  let named = false;
-  /** Automatic generation is attempted at most once, even when it fails. */
-  let autoAttempted = false;
+  /** Set by /rename, /title set, or a name from elsewhere; /title now clears it. */
+  let manualLock = false;
+  /** The name this extension last set or found, so its own change events are not manual renames. */
+  let managedTitle: string | undefined;
+  /** Last message a refresh was started for, so repeated settles do not retitle. */
+  let titledLeaf: string | undefined;
+  /** One draft per session; in "once" mode it is the only automatic attempt, even when it fails. */
+  let attempted = false;
+  let focus: string | undefined;
   let last: TitleResult | undefined;
   let requestGeneration = 0;
   let activeRequest: AbortController | undefined;
   let titleBadge: string | undefined;
-  /** The first fallback is announced once per runtime; /title status keeps the latest. */
-  let fallbackNoticed = false;
+  /** A fallback route is announced when it first appears; /title status keeps the latest. */
+  let fallbackRoute: string | undefined;
+
+  const branchOf = (ctx: ExtensionContext): Entries => (ctx.sessionManager?.getBranch?.() ?? []) as Entries;
+  // Names are session-wide, so ownership checks use every entry; focus follows the branch.
+  const entriesOf = (ctx: ExtensionContext): Entries => (ctx.sessionManager?.getEntries?.() as Entries | undefined) ?? branchOf(ctx);
+  const substantive = (entries: Entries) => userRequests(entries).some((text) => Boolean(provisionalTitle(text)));
+  const refreshMode = () => config().refresh ?? "turn";
+  const automatic = (): string | undefined => {
+    if (child) return "off (child agent)";
+    if (!config().enabled) return "off";
+    if (pi.getFlag(NO_AUTO_FLAG) === true) return `off (--${NO_AUTO_FLAG})`;
+    if (manualLock) return "paused (manual title; /title now resumes)";
+    return undefined;
+  };
 
   const setTitleBadge = (text?: string) => {
     if (text === titleBadge) return;
@@ -85,38 +171,41 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
 
   const load = (ctx: ExtensionContext) => {
     cancelRequest();
-    prompts = [];
-    named = Boolean(pi.getSessionName());
+    titledLeaf = undefined;
     last = undefined;
-    // Existing branches have already passed their first-request boundary. They
-    // remain untouched unless the user explicitly runs `/title now`.
-    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
-      if (entry.type !== "message" || entry.message.role !== "user") continue;
-      const text = userText(entry.message.content);
-      if (text) prompts.push(text);
-    }
-    if (prompts.length > MAX_TRACKED_PROMPTS) prompts = prompts.slice(-MAX_TRACKED_PROMPTS);
-    autoAttempted = named || prompts.some((prompt) => Boolean(provisionalTitle(prompt)));
+    const name = pi.getSessionName();
+    managedTitle = name;
+    // A name that differs from the last title this extension saved was set by hand.
+    manualLock = Boolean(name) && !sameTitle(name, latestTitleState(entriesOf(ctx))?.title);
+    focus = buildTitleContext(branchOf(ctx)).focus;
+    attempted = Boolean(name) || substantive(branchOf(ctx));
   };
 
-  const generate = async (
-    ctx: ExtensionContext,
-    sourcePrompts: readonly string[],
-    force: boolean,
-  ): Promise<TitleResult> => {
+  const save = (state: TitleState, ctx: ExtensionContext) => {
+    if (!state.focus && sameTitle(state.title, latestTitleState(entriesOf(ctx))?.title)) return;
+    pi.appendEntry(STATE_ENTRY, state);
+    if (state.focus) focus = state.focus;
+  };
+
+  const generate = async (ctx: ExtensionContext, job: TitleJob): Promise<TitleResult> => {
     cancelRequest();
     const generation = requestGeneration;
     const controller = new AbortController();
     activeRequest = controller;
-    setTitleBadge(pi.getSessionName() ? "renaming…" : "naming…");
+    // Only the first title is announced; later refreshes stay quiet unless requested.
+    if (!pi.getSessionName()) setTitleBadge("naming…");
+    else if (job.explicit) setTitleBadge("renaming…");
+    const { model, models, thinking } = config();
     let result: TitleResult;
     try {
       result = await run({
         ctx: ctx as never,
-        prompt: buildTitlePrompt(sourcePrompts),
-        override: config.model,
-        overrides: config.models,
+        prompt: job.prompt,
+        override: model,
+        overrides: models,
+        thinking,
         signal: controller.signal,
+        ...(job.draft ? {} : { systemPrompt: FOCUS_SYSTEM_PROMPT, maxTokens: FOCUS_TOKENS, parse: parseFocusResponse }),
       });
     } catch (error) {
       result = { error: error instanceof Error ? error.message : String(error) };
@@ -125,40 +214,78 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     activeRequest = undefined;
     setTitleBadge();
     last = result;
-    if (result.fallback && !fallbackNoticed) {
-      fallbackNoticed = true;
+    if (result.fallback && result.fallback !== fallbackRoute) {
       ctx.ui?.notify(`Title model fallback: ${result.fallback}.`, "warning");
     }
-    if (result.title && (force || !pi.getSessionName())) {
+    if (result.title) fallbackRoute = result.fallback;
+    if (!result.title) return result;
+    save(job.leaf && result.focus && result.turn
+      ? { version: 1, title: result.title, focus: result.focus, turn: result.turn, leaf: job.leaf }
+      : { version: 1, title: result.title }, ctx);
+    if (!sameTitle(result.title, pi.getSessionName())) {
+      managedTitle = result.title;
       pi.setSessionName(result.title);
-      named = true;
-    } else if (pi.getSessionName()) {
-      named = true;
     }
     return result;
   };
 
-  const generateAutomatically = (ctx: ExtensionContext, prompt: string) => {
-    autoAttempted = true;
-    void generate(ctx, [prompt], false);
+  /** Retitle from the branch: requests since the last focus, the latest answer, and the saved focus. */
+  const refresh = (ctx: ExtensionContext, explicit = false): Promise<TitleResult> | undefined => {
+    if (!explicit && automatic()) return undefined;
+    const branch = branchOf(ctx);
+    if (explicit ? userRequests(branch).length === 0 : !substantive(branch)) return undefined;
+    const leaf = lastMessageId(branch);
+    if (!explicit && leaf && (leaf === titledLeaf || leaf === latestTitleState(branch)?.leaf)) return undefined;
+    titledLeaf = leaf;
+    if (explicit) manualLock = false;
+    const context = buildTitleContext(branch);
+    const saved = latestTitleState(entriesOf(ctx));
+    const name = pi.getSessionName();
+    // A draft came from the first request alone; it is not evidence of the session focus.
+    const previous = saved && !saved.focus && sameTitle(saved.title, name) ? undefined : name;
+    return generate(ctx, {
+      prompt: buildFocusPrompt(context, previous),
+      ...(context.outcome ? { leaf } : {}),
+      explicit,
+    });
   };
 
-  pi.on("session_start", (_event, ctx) => load(ctx));
+  const setManualTitle = (title: string) => {
+    cancelRequest();
+    manualLock = true;
+    managedTitle = title;
+    attempted = true;
+    pi.setSessionName(title);
+  };
+
+  pi.on("session_start", (event, ctx) => {
+    load(ctx);
+    // Retitle once after /reload when turns finished since the last saved title.
+    if (event?.reason === "reload" && refreshMode() === "turn") void refresh(ctx);
+  });
   pi.on("session_tree", (_event, ctx) => load(ctx));
 
   pi.on("before_agent_start", (event, ctx) => {
     const prompt = event.prompt.trim();
-    if (!prompt) return undefined;
-    prompts.push(prompt);
-    if (prompts.length > MAX_TRACKED_PROMPTS) prompts = prompts.slice(-MAX_TRACKED_PROMPTS);
-
-    // The extraction helper is only a substantive-request check here; its text
-    // is never shown. Titling runs beside the main request and is not awaited.
-    if (pi.getSessionName()) named = true;
-    if (config.enabled && !child && !named && !autoAttempted && provisionalTitle(prompt)) {
-      generateAutomatically(ctx, prompt);
-    }
+    // A draft title from the first meaningful request shows while the turn runs;
+    // the extraction helper is only a substantive-request check here.
+    if (!prompt || automatic() || pi.getSessionName() || attempted || !provisionalTitle(prompt)) return undefined;
+    if (substantive(branchOf(ctx))) return undefined;
+    attempted = true;
+    void generate(ctx, { prompt: buildTitlePrompt([prompt]), draft: true });
     return undefined;
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    if (refreshMode() === "turn") void refresh(ctx);
+  });
+
+  pi.on("session_info_changed", (event) => {
+    // Pi re-emits names it already knows; only a different name is a rename.
+    if (!event.name || sameTitle(event.name, managedTitle)) return;
+    managedTitle = event.name;
+    manualLock = true;
+    cancelRequest();
   });
 
   pi.registerCommand("title", {
@@ -184,20 +311,17 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
           ctx.ui.notify("Usage: /title set <text>", "error");
           return;
         }
-        cancelRequest();
-        pi.setSessionName(title);
-        named = true;
-        autoAttempted = true;
+        setManualTitle(title);
         ctx.ui.notify(`Title set to “${title}”.`, "info");
         return;
       }
 
       if (action === "now") {
-        if (prompts.length === 0) {
+        const pending = refresh(ctx, true);
+        if (!pending) {
           ctx.ui.notify("Nothing to title yet.", "info");
           return;
         }
-        const pending = generate(ctx, prompts, true);
         const generation = requestGeneration;
         const result = await pending;
         if (generation !== requestGeneration) return;
@@ -214,7 +338,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
         ctx.ui.notify("Usage: /title [status|now|set <text>|tab]", "error");
         return;
       }
-      ctx.ui.notify(`${statusText(config, pi.getSessionName(), prompts.length, last, autoAttempted, child)}\n${tabLink.status()}`, "info");
+      const status = statusText({ config: config(), title: pi.getSessionName(), automatic: automatic(), focus, last });
+      ctx.ui.notify(`${status}\n${tabLink.status()}`, "info");
     },
   });
 
@@ -233,10 +358,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
       }
       const title = normalizeManualTitle(raw);
       if (!title) return;
-      cancelRequest();
-      pi.setSessionName(title);
-      named = true;
-      autoAttempted = true;
+      setManualTitle(title);
       ctx.ui.notify(`Title set to “${title}”.`, "info");
     },
   });
@@ -244,42 +366,29 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   pi.on("session_shutdown", () => cancelRequest());
 }
 
-/** Plain text of a user message, ignoring images and other non-text blocks. */
-function userText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
-    .map((part: any) => part.text)
-    .join(" ")
-    .trim();
+export interface StatusInput {
+  config: SessionTitleConfig;
+  title?: string;
+  /** Why automatic titling is inactive; undefined when it runs. */
+  automatic?: string;
+  focus?: string;
+  last?: TitleResult;
 }
 
-export function statusText(
-  config: SessionTitleConfig,
-  title: string | undefined,
-  promptCount: number,
-  last: TitleResult | undefined,
-  autoAttempted = Boolean(last),
-  child = false,
-): string {
-  const automatic = child
-    ? "off (child agent)"
-    : !config.enabled
-    ? "off"
-    : title
-      ? "done (named)"
-      : autoAttempted
-        ? "attempted (unnamed)"
-        : "pending";
+export function statusText({ config, title, automatic, focus, last }: StatusInput): string {
   const lines = [
     `title: ${title ?? "(none)"}`,
-    `automatic: ${automatic}`,
-    `model: ${[...(config.models ?? (config.model ? [config.model] : [])), "active session model"].join(" → ")}`,
-    `prompts tracked: ${promptCount}`,
+    `automatic: ${automatic ?? ((config.refresh ?? "turn") === "turn" ? "after each turn" : "first request only")}`,
+    `model: ${[...modelOrder(config), "active session model"].join(" → ")}`,
   ];
+  if (focus) lines.push(`focus: ${focus}`);
   if (last?.usage) lines.push(`last request: ${last.model ?? "?"} · $${last.usage.cost.toFixed(4)}`);
   if (last?.fallback) lines.push(`last fallback: ${last.fallback}`);
   if (last?.error) lines.push(`last error: ${last.error}`);
   return lines.join("\n");
+}
+
+function modelOrder(config: SessionTitleConfig): string[] {
+  const configured = config.models ?? (config.model ? [config.model] : []);
+  return configured.length > 0 ? configured : [`${DEFAULT_TITLE_MODEL} (if authenticated)`];
 }

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { TITLE_SYSTEM_PROMPT, normalizeGeneratedTitle } from "./engine.ts";
@@ -7,6 +7,14 @@ export type TitleCompletion = (...args: Parameters<ModelRegistry["streamSimple"]
 
 /** Titles are a few words; anything longer is the model ignoring instructions. */
 const MAX_OUTPUT_TOKENS = 24;
+/** Reasoning models can spend output tokens thinking even with thinking off. */
+const REASONING_TOKENS = 512;
+/** Extra room when a model is configured to think. */
+const THINKING_TOKENS = 2_048;
+/** A stalled model must not hold the title; the next model gets a turn. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+/** Used before the active model when no title model is configured and it has credentials. */
+export const DEFAULT_TITLE_MODEL = "mistral/mistral-medium-3.5";
 
 export interface TitleUsage {
   input: number;
@@ -21,12 +29,23 @@ export interface TitleResult {
   error?: string;
   /** Set when a configured preferred model was skipped, e.g. "x unavailable; used y". */
   fallback?: string;
+  /** Structured requests: one-sentence summary of the latest turn. */
+  turn?: string;
+  /** Structured requests: the session's durable objective. */
+  focus?: string;
+}
+
+export interface ParsedTitle {
+  title?: string;
+  turn?: string;
+  focus?: string;
 }
 
 export interface TitleRequestContext {
   model?: { provider: string; id: string; reasoning?: boolean };
   modelRegistry: {
     find(provider: string, id: string): unknown;
+    hasConfiguredAuth?(model: never): boolean;
     streamSimple: ModelRegistry["streamSimple"];
   };
   sessionManager?: { getSessionId?: () => string | undefined };
@@ -41,6 +60,14 @@ export interface RequestTitleOptions {
   overrides?: readonly string[];
   signal?: AbortSignal;
   completion?: TitleCompletion;
+  /** Thinking level per "provider/model"; unset or "off" requests no optional thinking. */
+  thinking?: Readonly<Record<string, ModelThinkingLevel>>;
+  /** Structured requests replace the plain-title prompt, budget, and parser. */
+  systemPrompt?: string;
+  maxTokens?: number;
+  parse?: (text: string) => ParsedTitle;
+  /** Per-model deadline; defaults to REQUEST_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /** Return failures for /title status without interrupting the main turn. */
@@ -56,6 +83,11 @@ export async function requestTitle(options: RequestTitleOptions): Promise<TitleR
     if (!model) failures.push(`${name} unavailable`);
     else if (!models.some((known) => sameModel(known, model as any))) models.push(model);
   }
+  if (preferred.length === 0) {
+    const [provider, id] = DEFAULT_TITLE_MODEL.split("/") as [string, string];
+    const fallback = ctx.modelRegistry.find(provider, id) as never;
+    if (fallback && ctx.modelRegistry.hasConfiguredAuth?.(fallback)) models.push(fallback);
+  }
   const activeModel = ctx.model;
   if (activeModel && !models.some((model) => sameModel(model, activeModel))) models.push(activeModel);
   if (models.length === 0) return { error: "no model available for titling" };
@@ -66,47 +98,69 @@ export async function requestTitle(options: RequestTitleOptions): Promise<TitleR
 
   for (const model of models) {
     if (options.signal?.aborted) return { error: "aborted" };
+    const name = `${model.provider}/${model.id}`;
+    const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
+    const timedOut = () => {
+      lastError = `title request timed out: ${name}`;
+      failures.push(`${name} timed out`);
+    };
+    // Pi maps an omitted level to each model's Off behavior ("off" is not a stream level).
+    const configured = options.thinking?.[name];
+    const reasoning = model.reasoning && configured && configured !== "off" ? configured as ThinkingLevel : undefined;
+    const base = options.maxTokens ?? MAX_OUTPUT_TOKENS;
     try {
       const response: any = await run(
         model,
         {
-          systemPrompt: TITLE_SYSTEM_PROMPT,
+          systemPrompt: options.systemPrompt ?? TITLE_SYSTEM_PROMPT,
           messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
         },
         {
-          signal: options.signal,
-          maxTokens: MAX_OUTPUT_TOKENS,
-          // Omit reasoning to request no optional thinking; Pi maps this to
-          // each model's supported Off behavior ("off" is not a stream level).
+          signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+          maxTokens: model.reasoning ? base + (reasoning ? THINKING_TOKENS : REASONING_TOKENS) : base,
+          ...(reasoning ? { reasoning } : {}),
           // A distinct routing id keeps this one-off prompt out of the main
           // session's prompt cache.
           sessionId: `${ctx.sessionManager?.getSessionId?.() ?? "session"}:title`,
         },
       );
 
-      if (options.signal?.aborted || response?.stopReason === "aborted") return { error: "aborted" };
+      if (options.signal?.aborted) return { error: "aborted" };
+      if (timeout.aborted) {
+        timedOut();
+        continue;
+      }
+      if (response?.stopReason === "aborted") return { error: "aborted" };
       if (response?.stopReason === "error") {
-        lastError = response.errorMessage || `title request failed for ${model.provider}/${model.id}`;
-        failures.push(`${model.provider}/${model.id} failed`);
+        lastError = response.errorMessage || `title request failed for ${name}`;
+        failures.push(`${name} failed`);
         continue;
       }
 
-      const title = normalizeGeneratedTitle(responseText(response));
+      const text = responseText(response);
+      const parsed = options.parse ? options.parse(text) : { title: text };
+      const title = normalizeGeneratedTitle(parsed.title);
       if (!title) {
-        lastError = `model returned no usable title: ${model.provider}/${model.id}`;
-        failures.push(`${model.provider}/${model.id} gave no usable title`);
+        lastError = `model returned no usable title: ${name}`;
+        failures.push(`${name} gave no usable title`);
         continue;
       }
-      const used = `${model.provider}/${model.id}`;
       return {
         title,
         usage: usageOf(response),
-        model: used,
-        ...(preferred.length && used !== preferred[0] ? { fallback: `${failures.join("; ")}; used ${used}` } : {}),
+        model: name,
+        ...(preferred.length && name !== preferred[0] ? { fallback: `${failures.join("; ")}; used ${name}` } : {}),
+        ...(parsed.turn ? { turn: parsed.turn } : {}),
+        ...(parsed.focus ? { focus: parsed.focus } : {}),
       };
     } catch (error) {
+      if (options.signal?.aborted) return { error: "aborted" };
+      if (timeout.aborted) {
+        timedOut();
+        continue;
+      }
       lastError = error instanceof Error ? error.message : String(error);
-      failures.push(`${model.provider}/${model.id} failed`);
+      failures.push(`${name} failed`);
     }
   }
 

@@ -12,7 +12,7 @@ async function environment() {
   const directory = await mkdtemp(join(tmpdir(), "pi-reload-runtime-"));
   cleanup.unshift(() => rm(directory, { recursive: true, force: true }));
   let time = 1_800_000_000_000;
-  return { directory, now: () => time, advance: (ms: number) => { time += ms; }, store: new Registry(directory, () => time) };
+  return { directory, now: () => time, advance: (ms: number) => { time += ms; }, store: new Registry(directory, () => time, () => true) };
 }
 async function runtime(env: Awaited<ReturnType<typeof environment>>, options: { mode?: string; refusal?: number; failure?: boolean; collision?: boolean; dropDispatch?: boolean; child?: boolean; identity?: ReturnType<typeof identityFor> } = {}) {
   const identity = options.identity ?? identityFor(++pid, randomUUID());
@@ -38,7 +38,7 @@ async function runtime(env: Awaited<ReturnType<typeof environment>>, options: { 
     const previousChild = process.env.PI_SUBAGENT_CHILD;
     if (options.child) process.env.PI_SUBAGENT_CHILD = "1";
     try {
-      createReloadAllExtension({ directory: env.directory, now: env.now, identity, runtimeNonce: nonce, intervalMs: 1_000_000,
+      createReloadAllExtension({ directory: env.directory, now: env.now, identity, runtimeNonce: nonce, intervalMs: 1_000_000, alive: () => true,
         onRuntime: value => { tick = value; } })({
           on: (name: string, handler: Function) => events.set(name, handler), registerCommand: (name: string, command: any) => commands.set(name, command),
           getCommands: () => [...commands.keys()].map(name => ({ name: collision ? `${name}:1` : name, source: "extension" })),

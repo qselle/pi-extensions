@@ -13,6 +13,8 @@ export interface ReloadOptions {
   intervalMs?: number;
   runtimeNonce?: string;
   onRuntime?: (runtime: ReloadRuntime) => void;
+  /** Process liveness check; tests with synthetic PIDs replace it. */
+  alive?: (pid: number) => boolean;
 }
 
 export function createReloadAllExtension(options: ReloadOptions = {}) {
@@ -192,7 +194,7 @@ export function createReloadAllExtension(options: ReloadOptions = {}) {
       if (ctx.mode !== "tui") return;
       context = ctx;
       try {
-        registry ??= new Registry(options.directory ?? runtimeDirectory(), now);
+        registry ??= new Registry(options.directory ?? runtimeDirectory(), now, options.alive);
         await registry.initialize();
         const [stored, generation] = await Promise.all([registry.target(identity.key), registry.generation()]);
         const completing = generation && stored?.state === "requested" && stored.requestRuntimeNonce === stored.runtimeNonce

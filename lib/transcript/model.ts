@@ -1,3 +1,5 @@
+import { commandPurpose, purposeArgument, withoutPurpose } from "../tool-purpose.ts";
+
 export interface TranscriptBlock {
   id: string;
   label: string;
@@ -18,12 +20,48 @@ export function plainText(value: unknown): string {
     .replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
+const MAX_ARGUMENT_CHARS = 600;
+
+function compactValue(value: unknown): string {
+  let text: string;
+  if (typeof value === "string") text = plainText(value);
+  else {
+    try { text = plainText(JSON.stringify(value) ?? ""); }
+    catch { return "[could not be serialized]"; }
+  }
+  return text.length > MAX_ARGUMENT_CHARS ? `${text.slice(0, MAX_ARGUMENT_CHARS)}… (${text.length} chars)` : text;
+}
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/** Purpose first, then one bounded line per argument; edit and write bodies are summarized. */
+function toolArguments(name: string, args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return compactValue(args ?? {});
+  const lines: string[] = [];
+  const purpose = commandPurpose(purposeArgument(args));
+  if (purpose) lines.push(purpose);
+  for (const [key, value] of Object.entries(withoutPurpose(args as RecordValue))) {
+    if (key === "edits" && Array.isArray(value)) lines.push(`${key}  ${plural(value.length, "replacement")}`);
+    else if (name === "write" && key === "content" && typeof value === "string") {
+      lines.push(`${key}  ${plural(value.split("\n").length, "line")} · ${plural(value.length, "char")}`);
+    } else {
+      const formatted = compactValue(value);
+      if (formatted) lines.push(`${key}  ${formatted}`);
+    }
+  }
+  return lines.join("\n") || "(no arguments)";
+}
+
+/** Hidden source markers that web search leaves in message text. */
+const WEB_SEARCH_MARKER = /<!-- pi:web-search(?:-(?:query(?:-count)?|source(?:-count)?))?:[^>]* -->/gi;
+const messageText = (value: unknown) => plainText(value).replace(WEB_SEARCH_MARKER, "");
+
 function contentText(content: unknown): string {
-  if (typeof content === "string") return plainText(content);
+  if (typeof content === "string") return messageText(content);
   if (!Array.isArray(content)) return "";
   return content.map((value) => {
     const part = record(value);
-    if (part.type === "text") return plainText(part.text);
+    if (part.type === "text") return messageText(part.text);
     if (part.type === "image") return `[Image${typeof part.mimeType === "string" ? ` · ${plainText(part.mimeType)}` : ""}]`;
     return "";
   }).filter(Boolean).join("\n");
@@ -42,6 +80,14 @@ export function transcriptBlocks(entries: readonly unknown[]): TranscriptBlock[]
       add("summary", entry.type === "compaction" ? "Context summary" : "Branch summary", plainText(entry.summary), { markdown: true });
       continue;
     }
+    if (entry.type === "model_change") {
+      add("custom", "Model", `${plainText(entry.provider)}/${plainText(entry.modelId)}`);
+      continue;
+    }
+    if (entry.type === "thinking_level_change") {
+      add("custom", "Thinking level", plainText(entry.thinkingLevel));
+      continue;
+    }
     if (entry.type === "custom_message") {
       if (entry.display === true) add("custom", plainText(entry.customType) || "Extension message", contentText(entry.content));
       continue;
@@ -49,16 +95,14 @@ export function transcriptBlocks(entries: readonly unknown[]): TranscriptBlock[]
     if (entry.type !== "message") continue;
     const message = record(entry.message);
     if (message.role === "assistant") {
-      if (typeof message.content === "string") add("assistant", "Assistant", plainText(message.content), { markdown: true });
+      if (typeof message.content === "string") add("assistant", "Assistant", messageText(message.content), { markdown: true });
       else if (Array.isArray(message.content)) for (const raw of message.content) {
         const part = record(raw);
-        if (part.type === "text") add("assistant", "Assistant", plainText(part.text), { markdown: true });
+        if (part.type === "text") add("assistant", "Assistant", messageText(part.text), { markdown: true });
         else if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking) add("thinking", "Thinking", plainText(part.thinking));
         else if (part.type === "toolCall") {
-          let args: string;
-          try { args = JSON.stringify(part.arguments ?? {}, null, 2); }
-          catch { args = "[Arguments could not be serialized]"; }
-          add("tool", `Tool call · ${plainText(part.name) || "unknown"}`, plainText(args));
+          const name = plainText(part.name) || "unknown";
+          add("tool", `Tool call · ${name}`, toolArguments(name, part.arguments));
         }
       }
       if (message.errorMessage) add("assistant", "Assistant error", plainText(message.errorMessage), { failed: true });

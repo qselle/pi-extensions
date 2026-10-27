@@ -66,12 +66,21 @@ export function validGeneration(value: any): value is Generation {
     && new Set(value.targets.map((target: Recipient) => target.key)).size === value.targets.length
     && value.targets.some((target: Recipient) => target.key === value.issuer);
 }
+/** Signal 0 checks existence only; EPERM means the process exists under another user. */
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
 export const matches = (left: Recipient, right: Recipient) => left.key === right.key && left.processNonce === right.processNonce && left.runtimeNonce === right.runtimeNonce;
 
 export class Registry {
   readonly targetsDirectory: string;
   readonly generationPath: string;
-  constructor(readonly root: string, private readonly now = Date.now) {
+  constructor(readonly root: string, private readonly now = Date.now, readonly alive = processAlive) {
     this.targetsDirectory = join(root, "targets");
     this.generationPath = join(root, "generation.json");
   }
@@ -143,7 +152,8 @@ export class Registry {
       if (!/^[a-f0-9]{64}\.json$/.test(file.name)) continue;
       const key = file.name.slice(0, -5);
       const target = await this.target(key);
-      if (!target || this.now() - target.updatedAt > MAX_AGE) { await this.remove(key); continue; }
+      // A terminal that crashed or was killed cannot reload; drop it instead of waiting on it.
+      if (!target || this.now() - target.updatedAt > MAX_AGE || !this.alive(target.pid)) { await this.remove(key); continue; }
       result.push(target);
       if (result.length > MAX_TARGETS) throw new Error(`Reload supports at most ${MAX_TARGETS} registered sessions`);
     }
@@ -160,7 +170,7 @@ export async function describeStatus(registry: Registry, now: number): Promise<s
     if (!target || target.processNonce !== recipient.processNonce) { counts.missing++; continue; }
     if (target.generation === generation.id && target.state === "applied") { counts.applied++; continue; }
     if (target.generation === generation.id && target.state === "failed") { counts.failed++; continue; }
-    if (target.runtimeNonce !== recipient.runtimeNonce) { counts.missing++; continue; }
+    if (target.runtimeNonce !== recipient.runtimeNonce || !registry.alive(target.pid)) { counts.missing++; continue; }
     if (now - target.updatedAt > FRESH_FOR) { counts.unresponsive++; continue; }
     if (target.generation === generation.id && target.state === "requested") counts.requested++;
     else if (target.generation === generation.id && target.state === "dispatching") counts.dispatching++;

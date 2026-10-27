@@ -38,6 +38,8 @@ function setup(options: { label?: string; name?: string; mode?: string; env?: No
   const pi: any = {
     on: (event: string, handler: Function) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
     registerCommand: (command: string, spec: any) => commands.set(command, spec),
+    registerFlag: () => {},
+    getFlag: () => undefined,
     getSessionName: () => name,
     setSessionName: (value: string) => { name = value; void emit("session_info_changed", { name }); },
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
