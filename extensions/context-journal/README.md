@@ -28,8 +28,9 @@ text, history excerpts, or errors.
 Record the objective, constraints, decisions, evidence, and unfinished work.
 The model sees notes through its own `context_notes` calls, the rollover
 summary, and a hidden anchor saved once after resume, tree navigation, native
-compaction, or enabling, when nothing visible shows the current notes. Notes are
-never appended to each request, so the prompt cache keeps covering history. Keys allow 1–64 letters, digits, dots,
+compaction, or enabling, unless an earlier anchor or rollover summary already
+shows the current notes. Notes are never appended to each request, so the
+prompt cache keeps covering history. Keys allow 1–64 letters, digits, dots,
 underscores, or hyphens. Limits: 32 keys, 4,000 characters per value, 16,000 total.
 Deleting a note leaves older versions in the session file and backups.
 
