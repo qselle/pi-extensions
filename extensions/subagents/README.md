@@ -163,7 +163,7 @@ Tasks and follow-ups are limited to 16,000 characters; wait timeouts to 1 hour (
 
 RPC records above 2 MiB are discarded while streaming instead of failing the child. Pi's `agent_end` repeats every message of a run, so long runs exceed this routinely. The child's activity notes each skipped record type and size; an oversized assistant `message_end` replaces the retained result with a note pointing to the child session file, and an oversized command response rejects only that command.
 
-`close`, reload, session replacement, and Pi shutdown terminate child process trees. One process-wide exit handler, shared across `/reload`, kills remaining child process groups and is removed when none are live. Reload/quit retain durable session checkpoints; close removes the current child copy. RPC dialogs are declined because children have no interactive UI.
+`close`, reload, session replacement, and Pi shutdown terminate child process trees. Reload, quit and tree navigation first ask running children to abort, waiting at most 500 ms, so they record the interrupted turn. One process-wide exit handler, shared across `/reload`, kills remaining child process groups and is removed when none are live. Reload/quit retain durable session checkpoints; close removes the current child copy. RPC dialogs are declined because children have no interactive UI.
 
 ## Dependencies and limitations
 

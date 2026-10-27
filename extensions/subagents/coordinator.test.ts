@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   PROGRESS_CHECKPOINT_MS,
+  SUSPEND_ABORT_MS,
   SubagentCoordinator,
   isProviderLimitError,
   type AgentSnapshot,
@@ -671,6 +672,23 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+
+test("suspend aborts running children within a bounded grace before stopping them", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Stuck"));
+  await coordinator.spawn(request("Idle"));
+  clients.get("Idle")!.emit({ type: "agent_settled" });
+  const calls: string[] = [];
+  const stuck = clients.get("Stuck")!;
+  stuck.abort = () => { calls.push("abort"); return new Promise<void>(() => {}); };
+  stuck.stop = async () => { calls.push("stop"); };
+  const started = performance.now();
+  const saved = await coordinator.suspend();
+  expect(performance.now() - started).toBeGreaterThanOrEqual(SUSPEND_ABORT_MS - 50);
+  expect(calls).toEqual(["abort", "stop"]);
+  expect(clients.get("Idle")!.abortCalls, "settled children are not aborted").toBe(0);
+  expect(saved.find((row) => row.agent.name === "Stuck")!.agent.status).toBe("stopped");
+});
 
 test("retained stopped conversations are bounded separately from running process capacity", async () => {
   const { coordinator } = harness(16);

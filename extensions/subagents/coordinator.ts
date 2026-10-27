@@ -9,6 +9,8 @@ export const MAX_MESSAGE_CHARS = 16_000;
 export const MAX_RESULT_BYTES = 24 * 1024;
 /** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
 export const PROGRESS_CHECKPOINT_MS = 60_000;
+/** Suspending waits this long for a running child to record its aborted turn before terminating it. */
+export const SUSPEND_ABORT_MS = 500;
 
 export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "interrupted" | "stopped" | "closed";
 /** Settled statuses that carry a final result for the parent. */
@@ -324,7 +326,10 @@ export class SubagentCoordinator {
     const outcomes = await Promise.allSettled(agents.map(async (agent) => {
       await agent.resuming?.catch(() => undefined);
       await agent.hibernating;
-      if (agent.client) { await agent.client.stop(); agent.client = undefined; }
+      if (agent.client) {
+        if (isActive(agent)) await abortWithin(agent.client, SUSPEND_ABORT_MS);
+        await agent.client.stop(); agent.client = undefined;
+      }
       this.captureTranscript(agent);
       if (!agent.checkpoint && !agent.cleanupDone) { await agent.cleanup(); agent.cleanupDone = true; }
       if (isActive(agent)) agent.status = "stopped";
@@ -1066,6 +1071,16 @@ function positive(value: unknown): number {
 
 function unique(agents: ManagedAgent[]): ManagedAgent[] {
   return [...new Map(agents.map((agent) => [agent.id, agent])).values()];
+}
+
+/** A stuck or failing abort must not delay termination beyond `ms`. */
+async function abortWithin(client: AgentClient, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    client.abort().catch(() => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+  ]);
+  clearTimeout(timer);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
