@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sessionTitleExtension, { agentDirectory, loadConfig, statusText, type SessionTitleConfig } from "./index.ts";
+import sessionTitleExtension, { agentDirectory, loadConfig, statusText, watchConfig, type SessionTitleConfig } from "./index.ts";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { TitleResult } from "./request.ts";
 
@@ -184,6 +184,23 @@ describe("loadConfig", () => {
     expect(loadConfig(dir).refresh).toBe("once");
     writeFileSync(join(dir, "session-title.json"), JSON.stringify({ refresh: "always" }));
     expect(loadConfig(dir).refresh).toBeUndefined();
+  });
+
+  test("picks up edits within five seconds, re-reading only a changed file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "title-watch-"));
+    const file = join(dir, "session-title.json");
+    let clock = 1_000;
+    const current = watchConfig(dir, () => clock);
+    expect(current()).toEqual({ enabled: true });
+    writeFileSync(file, JSON.stringify({ enabled: false }));
+    utimesSync(file, 1, 1);
+    clock += 4_999;
+    expect(current().enabled).toBe(true);
+    clock += 1;
+    expect(current().enabled).toBe(false);
+    const cached = current();
+    clock += 5_000;
+    expect(current()).toBe(cached);
   });
 
   test("reads the independent Tab link switch", () => {

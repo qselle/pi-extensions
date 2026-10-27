@@ -70,8 +70,9 @@ Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 { "enabled": true, "refresh": "turn", "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
 ```
 
-Start Pi with `--no-auto-title` to turn automatic titles off for that run;
-`/title now` still works.
+Edits apply within five seconds without `/reload`, except `tabLink`, which is
+read at startup. Start Pi with `--no-auto-title` to turn automatic titles off
+for that run; `/title now` still works.
 
 `refresh` is `turn` (default) to retitle after each finished turn, or `once` to
 keep only the first-request title: one attempt, no retry after a failure.
@@ -83,16 +84,15 @@ An entry can also be `{ "model": "provider/model-id", "thinkingLevel": "minimal"
 (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`) for a reasoning
 model; otherwise titles request no optional thinking. Reasoning models get a
 larger output budget (512 tokens, or 2,048 with a thinking level) because some
-think even when asked not to. Without `models`,
-the single `model` key is still honored as a one-entry list; when both are
-present, `models` wins. With neither, `mistral/mistral-medium-3.5` is tried
+think even when asked not to. Without `models`, the single `model` key is
+still honored as a one-entry list; when both are present, `models` wins. With neither, `mistral/mistral-medium-3.5` is tried
 first when Pi has credentials for it, then the active session model.
 
 When a title comes from a model after the first configured one, a warning such
 as `Title model fallback: mistral/mistral-medium-3.5 unavailable; used
 openai/gpt-4.1-mini.` appears when that fallback route first becomes active,
-and again whenever the route changes. `/title` shows the model
-order and the latest fallback.
+and again whenever the route changes. `/title` shows the model order and the
+latest fallback.
 
 The configuration is also used by [`side-chat`](../side-chat/) titles, which
 currently receive the first preferred model (`model`), or the default model,

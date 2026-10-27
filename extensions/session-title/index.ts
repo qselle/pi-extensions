@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,7 @@ const CONFIG_FILE = "session-title.json";
 /** Room for the JSON turn summary, focus, and title. */
 const FOCUS_TOKENS = 400;
 const NO_AUTO_FLAG = "no-auto-title";
+const CONFIG_CHECK_MS = 5_000;
 const FOOTER_BADGE_EVENT = "footer:badge";
 const TITLE_BADGE_ID = "session-title";
 const THINKING_LEVELS = new Set<unknown>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -72,6 +73,27 @@ export function loadConfig(directory = agentDirectory()): SessionTitleConfig {
   }
 }
 
+/** Config edits apply within a few seconds: the file is re-read only when its mtime changes. */
+export function watchConfig(directory = agentDirectory(), now = Date.now): () => SessionTitleConfig {
+  const path = join(directory, CONFIG_FILE);
+  const stamp = () => {
+    try { return statSync(path).mtimeMs; } catch { return -1; }
+  };
+  let mtime = stamp();
+  let config = loadConfig(directory);
+  let checkedAt = now();
+  return () => {
+    if (now() - checkedAt < CONFIG_CHECK_MS) return config;
+    checkedAt = now();
+    const current = stamp();
+    if (current !== mtime) {
+      mtime = current;
+      config = loadConfig(directory);
+    }
+    return config;
+  };
+}
+
 export interface SessionTitleOptions {
   config?: SessionTitleConfig;
   /** Defaults to process.env; child agents (PI_SUBAGENT_CHILD=1) never title automatically. */
@@ -95,11 +117,12 @@ const sameTitle = (left: string | undefined, right: string | undefined) =>
   (left ?? "").replace(/\s+/g, " ").trim().toLowerCase() === (right ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
 export default function sessionTitleExtension(pi: ExtensionAPI, options: SessionTitleOptions = {}): void {
-  const config = options.config ?? loadConfig();
+  const fixed = options.config;
+  const config = fixed ? () => fixed : watchConfig();
   const run = options.request ?? requestTitle;
   const env = options.env ?? process.env;
   const child = env.PI_SUBAGENT_CHILD === "1";
-  const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config.tabLink });
+  const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config().tabLink });
   pi.registerFlag(NO_AUTO_FLAG, { description: "Disable automatic session titles for this run", type: "boolean", default: false });
 
   /** Set by /rename, /title set, or a name from elsewhere; /title now clears it. */
@@ -122,10 +145,10 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   // Names are session-wide, so ownership checks use every entry; focus follows the branch.
   const entriesOf = (ctx: ExtensionContext): Entries => (ctx.sessionManager?.getEntries?.() as Entries | undefined) ?? branchOf(ctx);
   const substantive = (entries: Entries) => userRequests(entries).some((text) => Boolean(provisionalTitle(text)));
-  const refreshMode = () => config.refresh ?? "turn";
+  const refreshMode = () => config().refresh ?? "turn";
   const automatic = (): string | undefined => {
     if (child) return "off (child agent)";
-    if (!config.enabled) return "off";
+    if (!config().enabled) return "off";
     if (pi.getFlag(NO_AUTO_FLAG) === true) return `off (--${NO_AUTO_FLAG})`;
     if (manualLock) return "paused (manual title; /title now resumes)";
     return undefined;
@@ -172,14 +195,15 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
     // Only the first title is announced; later refreshes stay quiet unless requested.
     if (!pi.getSessionName()) setTitleBadge("naming…");
     else if (job.explicit) setTitleBadge("renaming…");
+    const { model, models, thinking } = config();
     let result: TitleResult;
     try {
       result = await run({
         ctx: ctx as never,
         prompt: job.prompt,
-        override: config.model,
-        overrides: config.models,
-        thinking: config.thinking,
+        override: model,
+        overrides: models,
+        thinking,
         signal: controller.signal,
         ...(job.draft ? {} : { systemPrompt: FOCUS_SYSTEM_PROMPT, maxTokens: FOCUS_TOKENS, parse: parseFocusResponse }),
       });
@@ -314,7 +338,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
         ctx.ui.notify("Usage: /title [status|now|set <text>|tab]", "error");
         return;
       }
-      const status = statusText({ config, title: pi.getSessionName(), automatic: automatic(), focus, last });
+      const status = statusText({ config: config(), title: pi.getSessionName(), automatic: automatic(), focus, last });
       ctx.ui.notify(`${status}\n${tabLink.status()}`, "info");
     },
   });
