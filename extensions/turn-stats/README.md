@@ -43,7 +43,10 @@ Expanded `prompt` sums fresh input, cache reads and cache writes across the run.
 prompt volume, including `0%` when nothing was cached; it shows `?` for partial
 prompt data. A known empty prompt omits cache hit in compact and shows `—` in full.
 Unknown usage values show `?`,
-partially reported totals show `≥`, and known zero remains zero. Expand for exact
+partially reported totals show `≥`, and known zero remains zero. When a provider
+records tokens with a cost of exactly zero, the response is priced from the model's
+configured rates in Pi's model registry, as in the footer, and the cost shows `≈`.
+Unknown and free models keep the recorded zero; response records are not modified. Expand for exact
 missing-data counts and measurement explanations. Errors, interruptions and
 failed tools stay visible in compact mode.
 `/turn-stats` reports the current run or the latest recorded summary on the current
@@ -90,7 +93,7 @@ counts and outcomes were not recorded, and timing comes from stored averages.
 - Main-agent responses, tool-reported usage and in-run compactions. Child-agent
   usage records and independent title/side-chat requests are excluded; use
   usage-export for recorded child-agent accounting.
-- Recorded costs depend on the provider adapter and are not authoritative billing.
+- Recorded and `≈` estimated costs depend on the provider adapter and model rates; they are not authoritative billing.
 - A crash or session change before settlement does not fabricate a completed
   summary. Interrupted responses are counted when the run subsequently settles.
 - Cross-platform; compact receipts fit one row and expanded details wrap within
