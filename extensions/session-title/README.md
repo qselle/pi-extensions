@@ -70,6 +70,9 @@ Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 { "enabled": true, "refresh": "turn", "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
 ```
 
+Start Pi with `--no-auto-title` to turn automatic titles off for that run;
+`/title now` still works.
+
 `refresh` is `turn` (default) to retitle after each finished turn, or `once` to
 keep only the first-request title: one attempt, no retry after a failure.
 

@@ -22,6 +22,7 @@ import { registerTabLink, type TabLinkOptions } from "./tab-link.ts";
 const CONFIG_FILE = "session-title.json";
 /** Room for the JSON turn summary, focus, and title. */
 const FOCUS_TOKENS = 400;
+const NO_AUTO_FLAG = "no-auto-title";
 const FOOTER_BADGE_EVENT = "footer:badge";
 const TITLE_BADGE_ID = "session-title";
 const THINKING_LEVELS = new Set<unknown>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -99,6 +100,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   const env = options.env ?? process.env;
   const child = env.PI_SUBAGENT_CHILD === "1";
   const tabLink = registerTabLink(pi, { env, ...options.tabLink, enabled: config.tabLink });
+  pi.registerFlag(NO_AUTO_FLAG, { description: "Disable automatic session titles for this run", type: "boolean", default: false });
 
   /** Set by /rename, /title set, or a name from elsewhere; /title now clears it. */
   let manualLock = false;
@@ -124,6 +126,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   const automatic = (): string | undefined => {
     if (child) return "off (child agent)";
     if (!config.enabled) return "off";
+    if (pi.getFlag(NO_AUTO_FLAG) === true) return `off (--${NO_AUTO_FLAG})`;
     if (manualLock) return "paused (manual title; /title now resumes)";
     return undefined;
   };

@@ -21,6 +21,9 @@ class MockPi {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
   }
   registerCommand(name: string, command: any) { this.commands.set(name, command); }
+  flags = new Map<string, unknown>();
+  registerFlag(name: string, options: { default?: unknown }) { this.flags.set(name, options.default); }
+  getFlag(name: string) { return this.flags.get(name); }
   appendEntry(customType: string, data: unknown) {
     this.entries.push({ type: "custom", id: `e${this.entries.length}`, customType, data: structuredClone(data) });
   }
@@ -338,6 +341,19 @@ describe("first request draft", () => {
     await settle(h, "done");
     expect(h.calls).toHaveLength(0);
     expect(h.pi.name).toBeUndefined();
+  });
+
+  test("--no-auto-title disables automatic titles but keeps /title now", async () => {
+    const h = setup();
+    expect(h.pi.flags.has("no-auto-title")).toBe(true);
+    h.pi.flags.set("no-auto-title", true);
+    await firstTurn(h);
+    await settle(h, "done");
+    expect(h.calls).toHaveLength(0);
+    await h.pi.commands.get("title").handler("status", h.ctx);
+    expect(h.notifications.at(-1)!.message).toContain("automatic: off (--no-auto-title)");
+    await h.pi.commands.get("title").handler("now", h.ctx);
+    expect(h.pi.name).toBe("Generated Title");
   });
 
   test("ignores empty prompts", async () => {
