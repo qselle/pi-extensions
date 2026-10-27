@@ -1,3 +1,4 @@
+import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
 import { assertGoalIdentity, assertGoalReconciled, reconcileGoal, RECONCILIATION_STALL_REASON, requireGoalReconciliation, resumeGoalForRequest } from "./reconciliation.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -42,12 +43,16 @@ import {
   createGoalCompletedEvent,
 } from "./events.ts";
 import {
-  CONTINUATION_MARKER_TEXT,
   CONTINUATION_MARKER_TYPE,
-  GOAL_CONTEXT_MARKER_TEXT,
-  GOAL_CONTEXT_MARKER_TYPE,
+  GOAL_ANCHOR_TYPE,
+  GOAL_CLEARED_CONTEXT,
+  GOAL_GUIDELINES,
+  GOAL_RECONCILIATION_TYPE,
+  LEGACY_GOAL_CONTEXT_TYPE,
   buildBudgetLimitMessage,
+  buildContinuationPrompt,
   buildGoalContext,
+  buildReconciliationMessage,
   goalResponse,
 } from "./prompts.ts";
 import { OVERLAY_MODAL_EVENT, registerOverlayCard } from "../overlay-stack/index.ts";
@@ -60,15 +65,7 @@ import {
 
 const ENTRY_TYPE = "goal-state";
 const BUDGET_MESSAGE_TYPE = "goal-budget-limit";
-
-interface GoalContextMessage {
-  role: "custom";
-  customType: string;
-  content: string;
-  display: boolean;
-  details?: unknown;
-  timestamp: number;
-}
+const GOAL_TOOLS = new Set(["get_goal", "create_goal", "report_goal_progress", "update_goal", "reconcile_goal", "resume_goal", "clear_goal"]);
 
 interface GoalToolDetails {
   action: "get" | "create" | "progress" | "update" | "reconcile" | "resume" | "clear";
@@ -114,6 +111,24 @@ const UpdateGoalParameters = Type.Object({
   next_input: Type.Optional(Type.String({ description: "User input or external change needed to unblock progress." })),
 });
 
+/**
+ * Hidden goal anchors restate only transition-stable state. Goal tool results
+ * already show the state they return, so an anchor is appended only when the
+ * visible conversation stops showing the current goal.
+ */
+const goalAnchor = createContextAnchor<GoalState | undefined>({
+  customType: GOAL_ANCHOR_TYPE,
+  render: buildGoalContext,
+  readMessage: (message) => {
+    if (message.role !== "toolResult" || message.isError || !GOAL_TOOLS.has(message.toolName as string)) return undefined;
+    const details = message.details as Partial<GoalToolDetails> | undefined;
+    if (details?.action === "clear") return GOAL_CLEARED_CONTEXT;
+    const state = details?.goal ? decodeGoalEntry({ version: 2, goal: details.goal })?.goal : undefined;
+    return state ? buildGoalContext(state) : undefined;
+  },
+  emptyText: GOAL_CLEARED_CONTEXT,
+});
+
 export default function goalExtension(pi: ExtensionAPI) {
   const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal", "reconcile_goal", "resume_goal", "clear_goal"]);
   let goal: GoalState | undefined;
@@ -126,6 +141,8 @@ export default function goalExtension(pi: ExtensionAPI) {
   let currentRunHadToolCall = false;
   let currentRunReportedBlocker = false;
   let currentRunRepeatedAssistant = false;
+  // Pi may retry or compact after a provider error, so it decides only at settle.
+  let lastTerminalError: string | undefined;
   let lastAssistantText: string | undefined;
   let agentRunning = false;
   let runGoalId: string | undefined;
@@ -163,6 +180,8 @@ export default function goalExtension(pi: ExtensionAPI) {
     pi.appendEntry<GoalEntry>(ENTRY_TYPE, { version: 2, goal: goal ?? null });
     pi.events.emit(GOAL_CHANGED_EVENT, { version: 1, status: goal?.status ?? "none" });
   };
+
+  const syncAnchor = (ctx: AnchorContext) => goalAnchor.sync(pi, ctx, goal, goal ? { goalId: goal.id, status: goal.status } : { status: "cleared" });
 
   const save = (ctx?: ExtensionContext) => {
     persist();
@@ -224,14 +243,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 
       nextRunIsContinuation = true;
       try {
-        // Persist only a hidden wake marker. The context hook must replace this
-        // marker with the full prompt; dropping it would leave Codex with no input.
+        // A short persisted wake message; the goal anchor already shows the
+        // objective, so history stays append-only and cacheable.
         pi.sendMessage(
           {
             customType: CONTINUATION_MARKER_TYPE,
-            content: CONTINUATION_MARKER_TEXT,
+            content: buildContinuationPrompt(goal),
             display: false,
-            details: { goalId: expectedGoalId, transient: true },
+            details: { goalId: expectedGoalId },
           },
           { triggerTurn: true },
         );
@@ -437,7 +456,10 @@ export default function goalExtension(pi: ExtensionAPI) {
           }
         }
       } finally {
-        if (generation === sessionGeneration && goal?.status === "active") scheduleContinuation(ctx);
+        if (generation === sessionGeneration) {
+          syncAnchor(ctx);
+          if (goal?.status === "active") scheduleContinuation(ctx);
+        }
       }
     },
   });
@@ -449,7 +471,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     parameters: GetGoalParameters,
     async execute() {
       return {
-        content: [{ type: "text", text: goalResponse(goal) }],
+        content: [{ type: "text", text: goalResponse(goal, currentRequestId) }],
         details: { action: "get", goal } satisfies GoalToolDetails,
       };
     },
@@ -572,6 +594,7 @@ export default function goalExtension(pi: ExtensionAPI) {
     name: "update_goal",
     label: "Update Goal",
     description: `Mark the existing goal complete or report a genuine repeated blocker. Complete requires every non-cancelled progress check to be finished and a requirement-by-requirement verification showing no work remains. For blocked, provide blocker, evidence, and next_input; the same blocker must be reported in ${BLOCKED_AUDIT_TURNS} separate consecutive goal runs before the loop stops. Difficulty, uncertainty, or a preference for clarification is not a blocker.`,
+    promptGuidelines: GOAL_GUIDELINES,
     parameters: UpdateGoalParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!goal) throw new Error("No goal is currently set.");
@@ -634,91 +657,54 @@ export default function goalExtension(pi: ExtensionAPI) {
     renderResult: (result, _options, theme) => renderGoalToolResult(result.details as GoalToolDetails | undefined, theme),
   });
 
+  // Reconciliation reaches the model as one append-only message per request.
   pi.on("before_agent_start", () => {
-    if (!goal || goal.status === "complete") return;
+    if (goal?.status !== "active" || !goal.reconciliation || goal.reconciliation.requestId !== currentRequestId) return;
     return {
       message: {
-        customType: GOAL_CONTEXT_MARKER_TYPE,
-        content: GOAL_CONTEXT_MARKER_TEXT,
+        customType: GOAL_RECONCILIATION_TYPE,
+        content: buildReconciliationMessage(goal),
         display: false,
-        details: { goalId: goal.id, transient: true },
+        details: { goalId: goal.id, requestId: goal.reconciliation.requestId },
       },
     };
   });
 
   pi.on("context", (event) => {
-    const messages = event.messages as Array<{ customType?: string }>;
-    let latestGoalMarker = -1;
-    let latestContinuationWake = -1;
-    for (let index = 0; index < messages.length; index++) {
-      const message = messages[index];
-      const customType = message?.customType;
-      if (customType === CONTINUATION_MARKER_TYPE || customType === GOAL_CONTEXT_MARKER_TYPE) {
-        latestGoalMarker = index;
-      }
-      if (currentRunIsContinuation && isContinuationWakeMessage(message)) {
-        latestContinuationWake = index;
-      }
-    }
-    if (latestGoalMarker === -1 && latestContinuationWake === -1) return;
-
-    const contextGoal = goal && goal.status !== "complete" ? goal : undefined;
-    const transformed: typeof event.messages = [];
-    for (let index = 0; index < event.messages.length; index++) {
-      const message = event.messages[index]!;
-      if (index === latestContinuationWake && contextGoal) {
-        const wake = message as unknown as { content: unknown };
-        const content = buildGoalContext(contextGoal, true);
-        transformed.push({
-          ...message,
-          content: typeof wake.content === "string" ? content : [{ type: "text", text: content }],
-        } as typeof message);
-        continue;
-      }
-
-      const customType = (message as { customType?: string }).customType;
-      if (customType !== CONTINUATION_MARKER_TYPE && customType !== GOAL_CONTEXT_MARKER_TYPE) {
-        transformed.push(message);
-        continue;
-      }
-      if (latestContinuationWake !== -1 || !contextGoal || index !== latestGoalMarker) continue;
-      const marker = message as unknown as GoalContextMessage;
-      transformed.push({
-        ...marker,
-        customType: GOAL_CONTEXT_MARKER_TYPE,
-        content: buildGoalContext(contextGoal, currentRunIsContinuation),
-        details: { goalId: contextGoal.id, transient: true },
-      } as unknown as typeof message);
-    }
-    return { messages: transformed };
+    const legacy = (message: unknown) => (message as { customType?: unknown }).customType === LEGACY_GOAL_CONTEXT_TYPE;
+    if (!event.messages.some(legacy)) return;
+    return { messages: event.messages.filter((message) => !legacy(message)) };
   });
 
   pi.on("input", (event, ctx) => {
     stopContinuationTimer();
-    if (event.source === "interactive" || event.source === "rpc") {
-      nextRunIsContinuation = false;
-      if (goal && goal.status !== "complete") {
-        goal = requireGoalReconciliation(goal);
-        currentRequestId = goal.reconciliation!.requestId;
-        save(ctx);
-      }
+    if (event.source !== "interactive" && event.source !== "rpc") return { action: "continue" };
+    nextRunIsContinuation = false;
+    if (!goal || goal.status === "complete") return { action: "continue" };
+    if (goal.status === "active" || goal.reconciliation) {
+      goal = requireGoalReconciliation(goal);
+      currentRequestId = goal.reconciliation!.requestId;
+      save(ctx);
+    } else {
+      // Inactive goals stay out of unrelated requests. resume_goal turns this
+      // request into a reconciliation only when the user asks to continue.
+      currentRequestId = crypto.randomUUID();
     }
     return { action: "continue" };
   });
 
-  pi.on("agent_start", (_event, ctx) => {
+  pi.on("agent_start", () => {
+    // Retries, compaction and queued work start more runs before agent_settled;
+    // they all belong to the settled run that started first.
+    if (agentRunning) return;
     agentRunning = true;
     currentRunIsContinuation = nextRunIsContinuation;
     nextRunIsContinuation = false;
-    currentRunHadToolCall = false;
-    currentRunReportedBlocker = false;
-    currentRunRepeatedAssistant = false;
     runGoalId = goal?.status === "active" ? goal.id : undefined;
     runStartedAt = runGoalId ? Date.now() : undefined;
-
     if (goal && runGoalId === goal.id) {
       goal = beginGoalRun(goal, currentRunIsContinuation);
-      save(ctx);
+      overlayCard.invalidate();
     }
   });
 
@@ -738,14 +724,18 @@ export default function goalExtension(pi: ExtensionAPI) {
       }
       lastAssistantText = text;
     }
+    lastTerminalError = message.stopReason === "error" ? message.errorMessage?.trim() || "Unknown provider error" : undefined;
 
     if (!runGoalId || !goal || goal.id !== runGoalId) return;
 
+    // Usage is persisted when the run settles; only transitions save here.
     const previousStatus = goal.status;
     goal = accountGoalUsage(goal, { tokens: message.usage.totalTokens });
-    save(ctx);
+    overlayCard.invalidate();
 
     if (previousStatus === "active" && goal.status === "budget_limited") {
+      // A failed response may still become usage-limited at settle; report only the final state.
+      if (message.stopReason !== "error") save(ctx);
       pi.sendMessage(
         {
           customType: BUDGET_MESSAGE_TYPE,
@@ -760,23 +750,21 @@ export default function goalExtension(pi: ExtensionAPI) {
       goal = setGoalStatus(goal, "paused");
       save(ctx);
       ctx.ui.notify("Goal paused because the agent run was interrupted.", "warning");
-    } else if (message.stopReason === "error") {
-      const usageLimited = isUsageLimitError(message.errorMessage);
-      const canStop = goal.status === "active" || (goal.status === "budget_limited" && usageLimited);
-      if (canStop) {
-        const detail = message.errorMessage?.trim() || "Unknown provider error";
-        goal = usageLimited
-          ? { ...setGoalStatus(goal, "usage_limited"), stallReason: `Provider unavailable: ${detail}` }
-          : stallGoal(goal, `Agent run failed: ${detail}`);
-        save(ctx);
-        ctx.ui.notify(`Goal ${usageLimited ? "waiting for provider capacity" : "stalled after an agent error"}.`, "warning");
-      }
     }
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    const settledGoalId = runGoalId;
     if (runStartedAt !== undefined && runGoalId && goal?.id === runGoalId) {
       goal = accountGoalUsage(goal, { timeMs: Date.now() - runStartedAt });
+      const error = lastTerminalError;
+      const usageLimited = isUsageLimitError(error);
+      if (error && (goal.status === "active" || (goal.status === "budget_limited" && usageLimited))) {
+        goal = usageLimited
+          ? { ...setGoalStatus(goal, "usage_limited"), stallReason: `Provider unavailable: ${error}` }
+          : stallGoal(goal, `Agent run failed: ${error}`);
+        ctx.ui.notify(`Goal ${usageLimited ? "waiting for provider capacity" : "stalled after an agent error"}.`, "warning");
+      }
       if (goal.status === "active" && !goal.reconciliation) {
         if (currentRunIsContinuation) {
           goal = recordRunTools(goal, currentRunHadToolCall);
@@ -806,18 +794,21 @@ export default function goalExtension(pi: ExtensionAPI) {
       goal = stallGoal(goal, RECONCILIATION_STALL_REASON);
       save(ctx);
       ctx.ui.notify("Goal stalled: the latest request was not reconciled. Use /goal resume to keep this objective, or /goal edit or clear.", "warning");
-    } else if (goal?.reconciliation) {
+    } else if (goal?.reconciliation && settledGoalId === goal.id) {
       ctx.ui.notify("Goal reconciliation is still pending. Use /goal resume to keep this objective, or /goal edit or clear.", "info");
     }
 
     agentRunning = false;
     runGoalId = undefined;
     runStartedAt = undefined;
+    lastTerminalError = undefined;
     currentRunIsContinuation = false;
     currentRunHadToolCall = false;
     currentRunReportedBlocker = false;
     currentRunRepeatedAssistant = false;
     overlayCard.invalidate();
+    // Commands and clear_goal results already show a removed goal.
+    if (goal) syncAnchor(ctx);
     scheduleContinuation(ctx);
   });
 
@@ -854,18 +845,23 @@ export default function goalExtension(pi: ExtensionAPI) {
     runGoalId = undefined;
     runStartedAt = undefined;
     pendingCompletion = undefined;
+    lastTerminalError = undefined;
     nextRunIsContinuation = false;
     currentRunIsContinuation = false;
     currentRunHadToolCall = false;
     currentRunReportedBlocker = false;
     currentRunRepeatedAssistant = false;
     overlayCard.invalidate();
+    syncAnchor(ctx);
     scheduleContinuation(ctx);
   };
 
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
-  pi.on("session_compact", () => overlayCard.invalidate());
+  pi.on("session_compact", (_event, ctx) => {
+    overlayCard.invalidate();
+    syncAnchor(ctx);
+  });
   pi.on("session_shutdown", () => {
     sessionGeneration++;
     sessionOpen = false;
@@ -924,21 +920,6 @@ function assistantMessageText(message: unknown): string | undefined {
     .join("\n")
     .trim();
   return text || undefined;
-}
-
-function isContinuationWakeMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") return false;
-  const candidate = message as { role?: unknown; content?: unknown };
-  if (candidate.role !== "user") return false;
-  if (candidate.content === CONTINUATION_MARKER_TEXT) return true;
-  if (!Array.isArray(candidate.content) || candidate.content.length !== 1) return false;
-  const part = candidate.content[0];
-  return Boolean(
-    part
-    && typeof part === "object"
-    && (part as { type?: unknown }).type === "text"
-    && (part as { text?: unknown }).text === CONTINUATION_MARKER_TEXT
-  );
 }
 
 function isUsageLimitError(message: string | undefined): boolean {
