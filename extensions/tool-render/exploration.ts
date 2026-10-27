@@ -1,5 +1,5 @@
 /** The first call renders the group; followers render empty until expanded. */
-import { firstLine, labelText, resultText, searchTarget, shortPath, summarize, type ToolName } from "./render.ts";
+import { firstLine, grepSnippet, labelText, resultText, searchTarget, shortPath, summarize, type ToolName } from "./render.ts";
 import { purposeArgument, toolPurpose } from "../../lib/tool-purpose.ts";
 
 export const EXPLORATION_TOOLS = new Set<string>(["read", "grep", "find", "ls"]);
@@ -22,6 +22,8 @@ export interface DisplayRow {
 	status: Status;
 	filePath?: string;
 	purpose?: string;
+	/** Leading output lines of a search. */
+	snippet?: string[];
 }
 
 interface Call extends Activity {
@@ -29,12 +31,15 @@ interface Call extends Activity {
 	index: number;
 	status: Status;
 	count?: string; // result summary, e.g. "42 lines"
+	snippet?: string[];
 }
 interface Group {
 	id: string;
 	leaderId: string;
 	calls: Call[];
 	accepting: boolean;
+	/** Changes whenever this group's rows or activity can render differently. */
+	revision: number;
 	rerender?: () => void;
 }
 
@@ -42,11 +47,19 @@ const groups = new Map<string, Group>();
 const callToGroup = new Map<string, string>();
 let currentId: string | undefined;
 let seq = 0;
-let revision = 0;
+let epoch = 0;
 
-/** Changes whenever any group's rows or activity can render differently. */
-export function explorationRevision(): number {
-	return revision;
+/**
+ * Rows of a call depend on its group, which siblings change without recreating
+ * the call's card. Only that group's changes, or a reset, invalidate it.
+ */
+export function explorationRevision(id: string | undefined): string {
+	return `${epoch}:${groupOf(id)?.revision ?? -1}`;
+}
+
+function changed(g: Group): void {
+	g.revision++;
+	g.rerender?.();
 }
 
 export function readRange(args: any): string | undefined {
@@ -77,24 +90,23 @@ export function noteStart(id: string, name: string, args: any): void {
 	if (!act) return;
 	let g = currentId ? groups.get(currentId) : undefined;
 	if (!g || !g.accepting) {
-		g = { id: `explore-${++seq}`, leaderId: id, calls: [], accepting: true };
+		g = { id: `explore-${++seq}`, leaderId: id, calls: [], accepting: true, revision: 0 };
 		groups.set(g.id, g);
 		currentId = g.id;
 	}
 	g.calls.push({ ...act, id, status: "pending", index: g.calls.length });
 	callToGroup.set(id, g.id);
-	revision++;
-	g.rerender?.();
+	changed(g);
 }
 
-export function noteEnd(id: string, isError: boolean, count?: string): void {
+export function noteEnd(id: string, isError: boolean, count?: string, snippet?: string[]): void {
 	const g = groupOf(id);
 	const c = g?.calls.find((x) => x.id === id);
 	if (g && c) {
 		c.status = isError ? "error" : "done";
 		if (count) c.count = count;
-		revision++;
-		g.rerender?.();
+		if (snippet?.length) c.snippet = snippet;
+		changed(g);
 	}
 }
 
@@ -104,8 +116,7 @@ export function closeGroup(): void {
 	currentId = undefined;
 	if (g) {
 		g.accepting = false;
-		revision++;
-		g.rerender?.();
+		changed(g);
 	}
 }
 
@@ -145,7 +156,7 @@ export function toDisplayRows(calls: Call[]): DisplayRow[] {
 	for (let i = 0; i < calls.length; ) {
 		const c = calls[i]!;
 		if (c.verb !== "Read") {
-			rows.push({ verb: c.verb, detail: c.detail, suffix: c.count, status: c.status, filePath: c.filePath, purpose: c.purpose });
+			rows.push({ verb: c.verb, detail: c.detail, suffix: c.count, status: c.status, filePath: c.filePath, purpose: c.purpose, snippet: c.snippet });
 			i += 1;
 			continue;
 		}
@@ -240,10 +251,15 @@ export function restoreExploration(entries: readonly unknown[]): void {
 			const count = failed
 				? `failed: ${labelText(firstLine(resultText(saved.message).text)).slice(0, 240) || "unknown error"}`
 				: summarize(call.name as ToolName, saved.message, args);
-			noteEnd(call.id, failed, count);
+			noteEnd(call.id, failed, count, failed ? undefined : resultSnippet(call.name, saved.message));
 		}
 		closeGroup();
 	}
+}
+
+/** Search rows keep a few output lines; other tools show only their counts. */
+export function resultSnippet(name: string, result: unknown): string[] | undefined {
+	return name === "grep" ? grepSnippet(result) : undefined;
 }
 
 export function resetExploration(): void {
@@ -251,5 +267,5 @@ export function resetExploration(): void {
 	callToGroup.clear();
 	currentId = undefined;
 	seq = 0;
-	revision++;
+	epoch++;
 }

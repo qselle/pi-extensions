@@ -54,6 +54,36 @@ the full added and removed counts. New files, and files over 512 KiB or 5,000
 lines before or after the change, show their content as added; binary files do
 too.
 
+### Codemode scripts
+
+When Pi's built-in `codemode` tool is enabled, its calls render as one card:
+
+```text
+• Ran script to collect repo stats · 3 calls · ✓ in 2s
+  │ const rows = await Promise.all(…)
+  ├ bash Count commits $ git log --oneline ×2 · ✓
+  ├ read Read the readme README.md · ✓
+  └ | Repo | Commits |
+```
+
+A prompt guideline asks each script to start with a `// <intent>` comment,
+after any `// @options:` line; the headline shows it as `Ran script to <intent>`.
+The collapsed script panel hides both lines and shows eight rows. Each nested
+call gets a row with its `purpose` (or saved `reasoning`) and its dimmed main
+argument (`$ command`, path, pattern, query, URL or action). Credential-like
+`NAME=value` assignments show as `NAME=***`. Collapsed, consecutive calls with
+the same tool and purpose join into one row: `×N` when identical, or the first
+argument and `(+N)` when they differ. Up to six rows show; earlier calls are
+counted, including failures. Pi keeps 200 characters of each call's arguments,
+so a long argument written before the purpose hides the purpose. Output follows
+the calls without Pi's `Script completed` header, with the bash output limits.
+Expand to see the full script, every call and nested call errors.
+
+Only the renderers change: the definition, settings and default activation stay
+Pi's. The card is registered at session start, which shadows the built-in without
+a replaced-extension warning. Disabled and third-party `codemode` tools keep
+their own cards.
+
 ### Action purpose
 
 Tools accept an optional brief, factual purpose, such as "Check the renderer
@@ -61,7 +91,9 @@ tests" or "Find the session configuration". Bash, reads, edits, writes, director
 listings, and searches expose this field in their ordinary tool schemas. The
 guidance asks for a purpose on every bash, edit and write call, and allows
 omitting it only for self-evident reads and searches. The field stays optional,
-so a call without it never fails validation.
+so a call without it never fails validation. Every override keeps Pi's strict
+schema sampling opt-in; `grep`, `find` and `ls`, which have none natively,
+prefer strict sampling so models do not misname the added field.
 This appears after the action on the existing header, in normal text
 color. It describes the intended action; the output below reports what actually
 happened. The command panel stays separate and retains the exact shell source.
@@ -112,7 +144,8 @@ action; completed rows become quiet and failures retain their error color.
 Search rows include their directory and glob, and reserve space for match/file
 counts when a long subject needs clipping. Counts exclude grep context and
 continuation notices, empty results report zero, and bounded results are marked
-`limited`. Read and directory targets stay clickable within groups. Read counts
+`limited`. Successful searches show their first three output lines dimmed below
+the row, and a non-zero match count in the success color. Read and directory targets stay clickable within groups. Read counts
 include blank lines; requested read ranges remain visible for chunked reads.
 Long file targets shorten their middle while preserving the filename and full
 clickable destination, so similar directory prefixes remain distinguishable.
@@ -122,6 +155,9 @@ Expanded exploration calls show their individual output, including calls hidden 
 `Ctrl+O` expands output. File targets use the shared helpers from [`hyperlinks`](../hyperlinks/). Enabling that extension is optional; it adds `/hyperlinks` mode controls and `/open-path`. Every rendered line is width-bounded; rendering errors fall back to a plain line.
 
 Shell command lines wrap to the panel's inner width, including long tokens.
+Lines that do not fit break after top-level `&&`, `||`, `|` and `;`, then
+between words, outside quotes and `$(…)`, with a two-space continuation indent.
+Lines that fit and heredoc bodies keep their source layout.
 Collapsed commands show four visual rows, expanded commands up to 128, followed
 by an omitted-row count when needed. Tabs display as four spaces; the executed
 argument and saved source remain unchanged. Very narrow widths shed indentation
@@ -132,13 +168,22 @@ when you need the complete content for copying.
 Omission rows offer expansion only while it can reveal more content; after the
 expanded limit, they say `preview limit`. Diffs follow the same convention.
 
+### Search roots
+
+`grep` and `find` refuse recursive searches rooted at the home directory, its
+ancestors, or, on macOS, `~/Library`, iCloud Drive and `~/Library/CloudStorage`,
+where a scan can download every cloud file. Their descriptions say so. The
+path is checked as written and after resolving symlinks; specific projects and
+subdirectories, including cloud subfolders, remain allowed.
+
 ### Render cache
 
 Pi repaints every card on each frame. Settled cards build their rows once per
 width (up to four widths) and repaint them byte-identically; command and diff
 highlighting runs once per card. Pi recreates a card when its arguments, result,
 expansion or theme change. Group membership, syntax highlighter readiness and the
-hyperlink mode are also checked, so changes there rebuild affected cards. Running
+hyperlink mode are also checked, so changes there rebuild affected cards. A change
+to one exploration group rebuilds only that group's cards. Running
 and streaming cards rebuild on every frame.
 
 ### Saved-history benchmark
@@ -162,7 +207,8 @@ The setting is stored in `$PI_CODING_AGENT_DIR/tool-render.json` as `{"enabled":
 
 Long or multiline shell commands wrap into a bounded block; expand it for more lines.
 
-- Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs.
+- Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs,
+  and `createCodemodeExtension()` for the codemode card.
 - Uses the package's `shiki` dependency and shared [`lib/syntax.ts`](../../lib/syntax.ts)
   implementation. Each extension caches its own highlighter during interactive
   session startup and disposes it on shutdown. It retains foreground

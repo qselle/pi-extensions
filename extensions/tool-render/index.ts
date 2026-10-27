@@ -8,7 +8,6 @@ import {
 	createWriteToolDefinition,
 	getAgentDir,
 	getLanguageFromPath,
-	highlightCode,
 	type ExtensionAPI,
 	type Theme,
 	type ToolDefinition,
@@ -16,7 +15,7 @@ import {
 import { visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { expansionHint } from "../../lib/tool-ui.ts";
 import { PlainOutput } from "../../lib/output.ts";
-import { disposeSyntax, highlightSyntax, initializeSyntax } from "../../lib/syntax.ts";
+import { disposeSyntax, initializeSyntax } from "../../lib/syntax.ts";
 import {
 	changePurposeParameter,
 	commandPurpose,
@@ -28,10 +27,10 @@ import {
 	withoutPurpose,
 } from "../../lib/tool-purpose.ts";
 import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
+import { assertSearchRoot, BROAD_ROOT_NOTE } from "../../lib/search-root.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-	boundTail,
 	compactPath,
 	fileLink,
 	firstLine,
@@ -45,10 +44,12 @@ import {
 	type ToolName,
 } from "./render.ts";
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
-import { commandPanel } from "./command-panel.ts";
+import { codemodeRestyler } from "./codemode.ts";
+import { shellPanel } from "./command-panel.ts";
 import { baseRevision, fit, Lines } from "./lines.ts";
 import { executeWriteWithDiff } from "./write-diff.ts";
-import { bashOutcome, formatElapsed, type BashOutcome } from "./bash-status.ts";
+import { bashOutcome, type BashOutcome } from "./bash-status.ts";
+import { BULLET, bashBody, bashStatus, branchBody, clearBashTimes, highlightPreview, noteBashTime, sourceHighlighter, wrapRows } from "./card.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -61,15 +62,16 @@ import {
 	resetExploration,
 	previewRows,
 	restoreExploration,
+	resultSnippet,
 	type DisplayRow,
 } from "./exploration.ts";
 
-const BULLET = "•";
-const BRANCH = "└";
 const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
+/** Calls whose headline shows a live elapsed time while running. */
+const TIMED_TOOLS = new Set(["bash", "codemode"]);
 
 /** Grouped rows also depend on sibling calls, which change without recreating the leader. */
-const groupedRevision = (): string => `${baseRevision()}:${explorationRevision()}`;
+const groupedRevision = (id: string | undefined) => (): string => `${baseRevision()}:${explorationRevision(id)}`;
 
 function bullet(theme: Theme, ctx: any): string {
 	return theme.fg(ctx?.isError ? "error" : ctx?.executionStarted && ctx?.isPartial ? "accent" : "muted", BULLET);
@@ -80,57 +82,6 @@ const runningVerbs: Record<string, string> = { Read: "Reading", Wrote: "Writing"
 function actionVerb(name: ToolName, ctx: any): string {
 	if (ctx?.isError) return `${name === "bash" ? "Command" : name[0]!.toUpperCase() + name.slice(1)} failed`;
 	return ctx?.executionStarted && ctx?.isPartial ? runningVerbs[verbFor(name)]! : verbFor(name);
-}
-
-function branchBody(theme: Theme, contentLines: string[], width: number): string[] {
-	const inner = Math.max(1, width - 4);
-	const first = `${theme.fg("dim", `  ${BRANCH} `)}`;
-	const rest = "    ";
-	return contentLines.map((line, i) => (i === 0 ? first : rest) + fit(line, inner));
-}
-
-/** Keep other themes, unsupported grammars and startup fallback native. */
-function highlightPreview(code: string, language: string, theme: Theme): string[] | undefined {
-	try {
-		return (theme.name === "gruvbox-dark" ? highlightSyntax(code, language) : undefined)
-			?? highlightCode(code, language);
-	} catch {
-		return undefined;
-	}
-}
-
-function bashBody(result: any, opts: any, theme: Theme, width: number, isError = false, language?: string): string[] {
-	const { text } = resultText(result);
-	if (text.trim().length === 0) return isError ? branchBody(theme, [theme.fg("error", "failed")], width) : [];
-	const managed = result?.details?.managed === true;
-	const boundary = managed ? text.indexOf("\n\n") : -1;
-	let header = boundary >= 0 ? text.slice(0, boundary).split("\n") : [];
-	const output = boundary >= 0 ? text.slice(boundary + 2) : text;
-	if (managed && !opts?.expanded) {
-		const details = result.details;
-		const quietSuccess = !isError && details.status === "completed" && details.exitCode === 0 && !details.signal
-			&& !details.more && !details.lost && header.length === 2;
-		if (quietSuccess) {
-			header = []; // status and elapsed time are on the headline
-		} else {
-			// The job ID remains actionable; output cursors and the model's
-			// job_wait/job_stop hint are only useful expanded.
-			header = header.filter((line) => !line.startsWith("Still running — "))
-				.map((line) => line.replace(/^(Job: \S+) · cursor: \d+/, "$1"));
-		}
-	}
-	const { lines, omitted } = boundTail(output, opts?.expanded ? 200 : 8);
-	const failed = isError || ["failed", "timed-out", "interrupted"].includes(result?.details?.status);
-	const body: string[] = header.map((line) => theme.fg(failed ? "error" : "muted", line));
-	if (omitted > 0) body.push(theme.fg("dim", `… +${omitted} lines · ${opts?.expanded ? "preview limit" : expansionHint()}`));
-	const highlighted = !isError && language ? highlightPreview(lines.join("\n"), language, theme) : undefined;
-	// Errors and expanded output wrap; collapsed previews keep one row per line.
-	const wrap = isError || opts?.expanded;
-	for (const [index, l] of lines.entries()) {
-		const colored = highlighted?.[index] ?? theme.fg(isError ? "error" : "toolOutput", l);
-		body.push(...(wrap ? wrapRows(colored, width - 4, isError) : [colored]));
-	}
-	return branchBody(theme, body, width);
 }
 
 /** Width-independent work runs once per card, not once per width or frame. */
@@ -167,13 +118,6 @@ function diffView(rows: DiffRow[], path: string, theme: Theme, expanded: boolean
 			return out?.length === shown.length ? out : contents;
 		}),
 	};
-}
-
-/** Below this width, wrapping multiplies rows without making text readable. */
-const MIN_WRAP_WIDTH = 12;
-
-function wrapRows(text: string, width: number, always = false): string[] {
-	return always || width >= MIN_WRAP_WIDTH ? wrapTextWithAnsi(text, Math.max(1, width)) : [text];
 }
 
 function diffBody(view: DiffView, theme: Theme, width: number, expanded: boolean): string[] {
@@ -250,13 +194,20 @@ function diffHeadline(
 	return parts.join(" ") + caption;
 }
 
+/** Search counts stand out when a search found something; other suffixes stay quiet. */
+function styledSuffix(text: string, row: DisplayRow, theme: Theme): string {
+	if (row.status === "error") return theme.fg("error", text);
+	const found = row.verb === "Searched" ? text.match(/^( · )([1-9]\d* match(?:es)?)(.*)$/s) : null;
+	return found ? theme.fg("dim", found[1]!) + theme.fg("success", found[2]!) + theme.fg("dim", found[3]!) : theme.fg("dim", text);
+}
+
 /** Reserve result counts before clipping the subject, so long paths remain useful. */
 function explorationRow(row: DisplayRow, theme: Theme, width: number, cwd: string): string {
 	const verbText = row.status === "pending" ? runningVerbs[row.verb] ?? row.verb : row.verb;
 	const verb = theme.fg(row.status === "pending" ? "accent" : row.status === "error" ? "error" : "muted", verbText);
 	const available = Math.max(0, width - visibleWidth(verbText) - 1);
 	const suffixWidth = Math.max(0, Math.min(visibleWidth(row.suffix ?? "") + 3, Math.floor(available * 0.65)));
-	const suffix = row.suffix && suffixWidth >= 5 ? theme.fg(row.status === "error" ? "error" : "dim", fit(` · ${row.suffix}`, suffixWidth)) : "";
+	const suffix = row.suffix && suffixWidth >= 5 ? styledSuffix(fit(` · ${row.suffix}`, suffixWidth), row, theme) : "";
 	const detailWidth = Math.max(0, available - visibleWidth(suffix));
 	const caption = purposeSuffix(row.purpose, Math.floor(detailWidth * 0.55), theme);
 	const targetWidth = Math.max(0, detailWidth - visibleWidth(caption));
@@ -273,8 +224,11 @@ function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, wid
 	const lines = [fit(`${dot} ${title}${purposeSuffix(sharedPurpose, Math.max(0, width - visibleWidth(title) - 2), theme)}`, width)];
 	const preview = previewRows(rows);
 	preview.rows.forEach((row, i) => {
-		const connector = theme.fg("dim", `  ${!preview.omitted && i === preview.rows.length - 1 ? "└" : "├"} `);
-		lines.push(connector + explorationRow(sharedPurpose ? { ...row, purpose: undefined } : row, theme, inner, cwd));
+		const last = !preview.omitted && i === preview.rows.length - 1;
+		lines.push(theme.fg("dim", `  ${last ? "└" : "├"} `) + explorationRow(sharedPurpose ? { ...row, purpose: undefined } : row, theme, inner, cwd));
+		for (const line of row.status === "done" ? row.snippet ?? [] : []) {
+			lines.push(theme.fg("dim", last ? "      " : "  │   ") + theme.fg("dim", fit(line, Math.max(1, width - 6))));
+		}
 	});
 	if (preview.omitted) {
 		const counts = [preview.failed ? `${preview.failed} failed` : "", preview.pending ? `${preview.pending} running` : ""].filter(Boolean);
@@ -304,55 +258,6 @@ function bindExploration(ctx: any): void {
 	bindLeaderRerender(ctx?.toolCallId, () => { try { ctx.invalidate(); } catch { /* detached view */ } });
 }
 
-/** Start and end times of live shell calls; saved results carry their own duration. */
-const bashTimes = new Map<string, { start: number; end?: number }>();
-const MAX_BASH_TIMES = 256;
-
-function noteBashTime(id: unknown, phase: "start" | "end"): void {
-	if (typeof id !== "string") return;
-	if (phase === "end") {
-		const entry = bashTimes.get(id);
-		if (entry) entry.end = Date.now();
-		return;
-	}
-	if (bashTimes.size >= MAX_BASH_TIMES) bashTimes.delete(bashTimes.keys().next().value!);
-	bashTimes.set(id, { start: Date.now() });
-}
-
-/**
- * `✓ in 3s`, `✗ exit 2 in 3s` or a live `3s` while running. Running cards are
- * rebuilt on every frame Pi paints, so no timer of our own drives the clock.
- */
-function bashStatus(theme: Theme, outcome: BashOutcome | undefined, running: boolean, id: string | undefined): string {
-	const times = id ? bashTimes.get(id) : undefined;
-	if (running) {
-		const start = times?.start ?? outcome?.startedAt;
-		const elapsed = start !== undefined ? formatElapsed(Date.now() - start) : "";
-		return elapsed ? theme.fg("dim", ` · ${elapsed}`) : "";
-	}
-	if (!outcome) return "";
-	if (outcome.state === "running") return theme.fg("dim", " · ") + theme.fg("accent", "running");
-	const elapsed = outcome.elapsed ?? (times?.end !== undefined ? formatElapsed(times.end - times.start) : "");
-	const mark = outcome.state === "ok" ? theme.fg("success", "✓")
-		: theme.fg("error", outcome.reason ? `✗ ${outcome.reason}` : "✗");
-	return theme.fg("dim", " · ") + mark + (elapsed ? theme.fg("dim", ` in ${elapsed}`) : "");
-}
-
-/** Highlight before wrapping so strings and heredocs retain their shell context. */
-function highlightCommand(command: string, theme: Theme): string {
-	let colored = command;
-	// Bound parser work for unusually large native Bash calls. The managed tool
-	// already limits commands to this size; longer commands keep a plain preview.
-	if (command.length <= 16_000) {
-		try { colored = highlightPreview(command, "bash", theme)?.join("\n") ?? command; }
-		catch { /* A highlighting failure must not hide the command. */ }
-	}
-	// Restore the base foreground after highlighted tokens, without painting over
-	// their colors or allowing a token color to leak into the following output.
-	const base = theme.getFgAnsi?.("text") ?? "\x1b[39m";
-	return theme.fg("text", colored.replace(/\x1b\[39m/g, base));
-}
-
 function makeRenderCall(name: ToolName) {
 	return (args: any, theme: Theme, ctx: any): Component => {
 		// Native Pi has no result slot before the first result. The call slot owns
@@ -365,7 +270,7 @@ function makeRenderCall(name: ToolName) {
 			const state = groupState(ctx?.toolCallId)!;
 			bindExploration(ctx);
 			return explorationBlock(state.rows, state.active, theme, width, ctx?.cwd ?? process.cwd());
-		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision });
+		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision(ctx?.toolCallId) });
 		// Completed edit/write counts need the result patch. Streaming and running
 		// cards show the intended size without claiming any change succeeded.
 		if (name === "edit" || name === "write") return new Lines((width) => ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "", { volatile: !!ctx?.isPartial });
@@ -375,7 +280,8 @@ function makeRenderCall(name: ToolName) {
 		const command = name === "bash"
 			? new PlainOutput().push(String(a?.command ?? "")).replace(/\t/g, "    ").replace(/^\n+|\n+$/g, "")
 			: "";
-		const highlighted = memo(() => highlightCommand(command, theme));
+		// The layout depends on width; each layout is highlighted once.
+		const highlight = sourceHighlighter("bash", theme);
 		const build = (width: number): string[] => {
 			const verbText = actionVerb(name, ctx);
 			const verb = theme.bold(theme.fg("text", verbText));
@@ -393,7 +299,7 @@ function makeRenderCall(name: ToolName) {
 				// Clip the caption, never the status.
 				const header = status ? fit(left, Math.max(1, width - visibleWidth(status))) + status : left;
 				if (!command.trim()) return [header];
-				return [header, ...commandPanel(highlighted(), width, theme, !!ctx?.expanded)];
+				return [header, ...shellPanel(command, width, theme, !!ctx?.expanded, highlight)];
 			}
 			const target = targetFor(name, a);
 			if (!target) return [`${bullet(theme, ctx)} ${verb}`];
@@ -432,7 +338,7 @@ function makeRenderResult(name: ToolName) {
 				const st = groupState(ctx?.toolCallId)!;
 				bindExploration(ctx);
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
-			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision });
+			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision(ctx?.toolCallId) });
 		}
 		// Pi creates the call component first and renders both later, so the
 		// call headline can show the outcome recorded here.
@@ -480,6 +386,8 @@ async function executeTimedBash(definition: ToolDefinition<any>, ...[id, args, s
 	return { ...result, details: { ...details, durationMs: Math.round(performance.now() - started),
 		...(Number.isSafeInteger(exitCode) ? { exitCode } : {}) } };
 }
+
+const STRICT_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
 
 const configPath = () => join(getAgentDir(), "tool-render.json");
 
@@ -533,13 +441,19 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 					// alias) to the native executor.
 					const purposeParameter = name === "bash" ? commandPurposeParameter
 						: name === "edit" || name === "write" ? changePurposeParameter : toolPurposeParameter;
+					const search = name === "grep" || name === "find";
 					const purposeMetadata: Partial<ToolDefinition<any>> = {
 						parameters: { ...definition.parameters, properties: { purpose: purposeParameter, ...definition.parameters.properties } },
+						// Pi sends strict schemas only to tools that opt in; keep native
+						// opt-ins and prefer strict sampling for the added field.
+						constrainedSampling: definition.constrainedSampling ?? STRICT_SAMPLING,
+						...(search ? { description: `${definition.description} ${BROAD_ROOT_NOTE}` } : {}),
 						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
-						execute: (id, args, signal, update, context) => {
+						execute: async (id, args, signal, update, context) => {
 							const toolArgs = withoutPurpose(args as Record<string, unknown>);
 							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
 							if (name === "bash") return executeTimedBash(definition, id, toolArgs, signal, update, context);
+							if (search) await assertSearchRoot(name, toolArgs.path, context?.cwd || cwd);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},
 					};
@@ -560,6 +474,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		// Register other overrides immediately before the first session event,
 		// then rebind to the authoritative session cwd (which /resume can change).
 		registerOverrides(process.cwd());
+		const restyleCodemode = codemodeRestyler(pi);
 
 		// Exploration grouping: track runs of read/grep/find/ls, broken by any
 		// other tool or a new assistant message.
@@ -575,23 +490,24 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		};
 		pi.on("session_start", async (_event: any, ctx: any) => {
 			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd, true);
+			restyleCodemode();
 			restoreGroups(ctx);
 			// Pi awaits public lifecycle handlers. Registration stays synchronous;
 			// repeated starts reuse this extension's cached highlighter.
 			if (ctx?.mode === "tui") await initializeSyntax();
 		});
 		pi.on("tool_execution_start", (event: any) => {
-			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "start");
+			if (TIMED_TOOLS.has(event?.toolName)) noteBashTime(event.toolCallId, "start");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) noteStart(event.toolCallId, event.toolName, event.args);
 			else closeGroup();
 		});
 		pi.on("tool_execution_end", (event: any) => {
-			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "end");
+			if (TIMED_TOOLS.has(event?.toolName)) noteBashTime(event.toolCallId, "end");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) {
 				const count = event.isError
 					? `failed: ${labelText(firstLine(resultText(event.result).text)).slice(0, 240) || "unknown error"}`
 					: summarize(event.toolName as ToolName, event.result, undefined);
-				noteEnd(event.toolCallId, !!event.isError, count);
+				noteEnd(event.toolCallId, !!event.isError, count, event.isError ? undefined : resultSnippet(event.toolName, event.result));
 			}
 		});
 		pi.on("message_start", (event: any) => {
@@ -603,7 +519,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		pi.on("session_shutdown", () => {
 			unsubscribeStyle?.();
 			resetExploration();
-			bashTimes.clear();
+			clearBashTimes();
 			disposeSyntax();
 		});
 	}

@@ -3,6 +3,7 @@ import {
 	activityFor,
 	bindLeaderRerender,
 	closeGroup,
+	explorationRevision,
 	groupState,
 	isLeader,
 	noteEnd,
@@ -198,11 +199,42 @@ describe("saved exploration", () => {
 		expect(isLeader("a")).toBe(true);
 		expect(isLeader("b")).toBe(true);
 	});
+	test("restored searches keep their leading output lines; reads and failures do not", () => {
+		restoreExploration([
+			assistant([call("g", "grep", { pattern: "x" }), call("r"), call("f", "grep", { pattern: "y" })]),
+			result("g", { toolName: "grep", content: "a.ts:1: x\n\tb.ts:2: x\nc.ts:3: x\nd.ts:4: x\n\n[100 matches limit reached]" }),
+			result("r"), result("f", { toolName: "grep", isError: true, content: "bad regex" }),
+		]);
+		const rows = groupState("g")!.rows;
+		expect(rows[0]!.snippet).toEqual(["a.ts:1: x", "    b.ts:2: x", "c.ts:3: x"]);
+		expect(rows[1]!.snippet).toBeUndefined();
+		expect(rows[2]!.snippet).toBeUndefined();
+	});
 	test("changing branches discards stale and dangling group membership", () => {
 		restoreExploration([assistant([call("a"), call("b")]), result("a"), result("b")]);
 		restoreExploration([result("a"), assistant([call("new")]), result("new")]);
 		expect(groupState("a")).toBeUndefined();
 		expect(groupState("b")).toBeUndefined();
 		expect(isLeader("new")).toBe(true);
+	});
+});
+
+describe("explorationRevision", () => {
+	test("changes only for the affected group, and for every card on reset", () => {
+		noteStart("a1", "read", { path: "a.ts" });
+		closeGroup();
+		noteStart("b1", "read", { path: "b.ts" });
+		const settled = explorationRevision("a1");
+		const before = explorationRevision("b1");
+		noteStart("b2", "grep", { pattern: "x" });
+		noteEnd("b2", false, "1 match");
+		closeGroup();
+		expect(explorationRevision("a1")).toBe(settled);
+		expect(explorationRevision("b1")).not.toBe(before);
+		expect(explorationRevision("b2")).toBe(explorationRevision("b1"));
+		const loose = explorationRevision("unknown");
+		resetExploration();
+		expect(explorationRevision("a1")).not.toBe(settled);
+		expect(explorationRevision("unknown")).not.toBe(loose);
 	});
 });

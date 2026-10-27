@@ -12,8 +12,9 @@ public filename-to-language mapping. Common aliases and mixed-case language name
 are normalized (`TS` → `typescript`, `shell` → `bash`).
 
 Code contents are preserved byte for byte beneath the display colors. Stored
-messages, model context, `/copy` and exported source are unchanged. The same
-formatting applies to code inside expanded thinking; user messages are untouched.
+messages, model context, `/copy` and exported source are unchanged. Code inside
+expanded thinking gets the same captions, with darker syntax colors in italics
+to match the thinking text; user messages are untouched.
 Selecting a theme other than `gruvbox-dark` keeps Pi's native theme-aware syntax
 colors and filename captions. Disable this extension through Pi's extension
 configuration to return to the host presentation.

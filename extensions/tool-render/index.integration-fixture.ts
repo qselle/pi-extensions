@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -63,6 +63,19 @@ for (const entry of rebound) {
   assert.equal(typeof entry.definition.renderResult, "function");
 }
 
+// Every override keeps strict schema sampling, including the added purpose field.
+for (const entry of rebound) {
+  assert.deepEqual(entry.definition.constrainedSampling, { type: "json_schema", strict: "prefer" }, entry.name);
+  assert.equal(entry.definition.description.endsWith("choose a specific project or subdirectory."), ["grep", "find"].includes(entry.name), entry.name);
+}
+
+// Recursive searches refuse broad roots before the native executor runs.
+for (const name of ["grep", "find"]) {
+  const search = rebound.find((entry) => entry.name === name)!.definition;
+  const args = name === "grep" ? { pattern: "x", path: "~" } : { pattern: "*.txt", path: homedir() };
+  await assert.rejects(search.execute("call-0", args, undefined, undefined, { cwd: sessionDir }), /broad root/);
+}
+
 // The rebound ls override resolves a relative path against the session cwd.
 const ls = rebound.find((entry) => entry.name === "ls");
 assert(ls, "expected an ls override");
@@ -116,6 +129,10 @@ const rows = call.render(24);
 assert(rows.join("\n").includes("first-line"));
 assert(rows.join("").includes("second-line"));
 assert(rows.length > 2, "long commands must wrap instead of collapsing to the first line");
+const chain = "cd /a/long/project/path && bun test --coverage && git diff --check";
+const chained = bash.renderCall({ command: chain }, theme, { args: { command: chain }, executionStarted: true, isPartial: true, expanded: true })
+  .render(40).map((row: string) => stripVTControlCharacters(row).trimEnd());
+assert.deepEqual(chained.slice(1), ["  │ cd /a/long/project/path &&", "  │ bun test --coverage &&", "  │ git diff --check"]);
 const detail = "The operation failed because the requested source cannot be read. Check the final permission setting.";
 const wrapped = read.renderResult({ content: [{ type: "text", text: detail }] }, {}, theme, ctx).render(30).join("\n");
 assert(wrapped.includes("setting."), wrapped);
@@ -165,4 +182,28 @@ for (const value of [managed("running"), managed("failed"), managed("completed",
   assert(compact.includes("Job: abc123"), "actionable jobs keep their IDs");
   assert(!compact.includes("cursor:"), "cursor values belong in expanded output");
   assert(compact.includes("2 checks passed"));
+}
+
+// Grouped searches show their first matches dimmed and their match count in color.
+{
+  const tagged = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: identity };
+  const grep = registered.filter((entry) => entry.name === "grep").at(-1)!.definition;
+  const found = { content: [{ type: "text", text: "a.ts:1: foo\na.ts:2: foo bar\nb.ts:3: foo\nc.ts:4: foo" }] };
+  const searching = { toolCallId: "grep-lead", args: { pattern: "foo" }, cwd: otherDir, isError: false, invalidate() {} };
+  fire("tool_execution_start", {}, { toolName: "grep", toolCallId: "grep-lead", args: searching.args });
+  fire("tool_execution_end", {}, { toolName: "grep", toolCallId: "grep-lead", isError: false, result: found });
+  fire("tool_execution_start", {}, { toolName: "grep", toolCallId: "grep-none", args: { pattern: "zzz" } });
+  fire("tool_execution_end", {}, { toolName: "grep", toolCallId: "grep-none", isError: false, result: { content: [{ type: "text", text: "No matches found" }] } });
+  fire("agent_end", {});
+  const rows = grep.renderResult(found, {}, theme, searching).render(100).map(stripVTControlCharacters);
+  assert.deepEqual(rows.slice(1), [
+    '  ├ Searched "foo" · 4 matches · 3 files',
+    "  │   a.ts:1: foo",
+    "  │   a.ts:2: foo bar",
+    "  │   b.ts:3: foo",
+    '  └ Searched "zzz" · 0 matches',
+  ]);
+  const colored = grep.renderResult(found, {}, tagged, searching).render(100).join("\n");
+  assert(colored.includes("<success>4 matches</success>"), colored);
+  assert(!colored.includes("<success>0 matches</success>"), "empty searches stay quiet");
 }
