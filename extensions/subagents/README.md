@@ -59,7 +59,7 @@ replacements.
 - `summary`: a bounded model-generated parent handoff.
 - `fork`: a compaction-aware copy of the active parent conversation.
 
-Children inherit the working directory, active tools except `subagents`, project instructions, model, and thinking level. They also receive the child-only `report_to_parent` tool. `model` and `thinking` may be overridden per spawn. Recursive child spawning is disabled.
+Children inherit the working directory, active tools except `subagents`, project instructions, model, and thinking level. They also receive the child-only `report_to_parent` tool. `model` and `thinking` may be overridden per spawn. Recursive child spawning is disabled. Child sessions are named `Subagent · <name>`, and the child process receives the parent session id in `PI_SUBAGENT_PARENT_SESSION_ID`.
 
 Children share the working tree. Parallel writers must use disjoint files; the parent is responsible for reviewing their changes.
 

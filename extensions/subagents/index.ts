@@ -136,14 +136,14 @@ export default function registerSubagents(
       );
     }
 
-    const childContext = await createContext(ctx, request.contextMode, summary, request.resume);
+    const childContext = await createContext(ctx, request.contextMode, summary, request.resume, request.name);
     try {
       const invocation = getPiCommand(buildChildArgs(pi, ctx, childContext, request));
       const clientOptions = {
         command: invocation.command,
         args: invocation.args,
         cwd: request.cwd,
-        env: subagentEnvironment(request.name),
+        env: subagentEnvironment(request.name, ctx.sessionManager.getSessionId?.()),
       };
       const client = createClient(clientOptions);
       return {

@@ -79,6 +79,7 @@ export async function createChildContext(
   mode: ContextMode,
   summary?: string,
   resume?: ChildCheckpoint,
+  name?: string,
 ): Promise<ChildContext> {
   const parentFile = ctx.sessionManager.getSessionFile();
   const root = parentFile ? `${parentFile}.subagents` : tmpdir();
@@ -109,6 +110,8 @@ export async function createChildContext(
     const session = SessionManager.create(ctx.cwd, directory, parentSession ? { parentSession } : undefined);
     const sessionFile = session.getSessionFile();
     if (!sessionFile) throw new Error("Failed to create child session file");
+    // Session pickers list the child under its subagent name; resumes copy the file and keep it.
+    if (name) session.appendSessionInfo(`Subagent · ${name}`);
 
     const parentContext = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
     if (parentContext.model) session.appendModelChange(parentContext.model.provider, parentContext.model.modelId);

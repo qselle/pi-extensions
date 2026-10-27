@@ -67,7 +67,9 @@ async function setup() {
   const pi = new MockPi();
   const clients: FakeClient[] = [];
   let checkpointReads = 0;
-  const createContext = async (_ctx: unknown, _mode: unknown, _summary?: string, resume?: unknown): Promise<ChildContext> => {
+  const contextNames: (string | undefined)[] = [];
+  const createContext = async (_ctx: unknown, _mode: unknown, _summary?: string, resume?: unknown, name?: string): Promise<ChildContext> => {
+    contextNames.push(name);
     const directory = `pi-subagent-context-${clients.length}`;
     return {
       directory,
@@ -95,8 +97,15 @@ async function setup() {
   const tool = pi.tools.get("subagents");
   const call = (args: Record<string, unknown>, signal?: AbortSignal) =>
     tool.execute("call", tool.prepareArguments ? tool.prepareArguments(args) : args, signal, undefined, ctx);
-  return { pi, ctx, tool, call, clients, coordinator, reads: () => checkpointReads };
+  return { pi, ctx, tool, call, clients, coordinator, contextNames, reads: () => checkpointReads };
 }
+
+test("child sessions carry the subagent name and link to the parent session", async () => {
+  const { call, clients, contextNames } = await setup();
+  await call({ action: "spawn", name: "Scout", task: "Look" });
+  expect(contextNames).toEqual(["Scout"]);
+  expect(clients[0]!.options.env).toMatchObject({ PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_SESSION_ID: "parent" });
+});
 
 test("aliases from other agent tool sets map onto the published schema", async () => {
   const { tool } = await setup();
