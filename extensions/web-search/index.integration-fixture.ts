@@ -62,9 +62,9 @@ assert(search.renderResult(result, { expanded: false, isPartial: false }, theme)
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("example.com/API"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("ctrl+e to expand"));
 assert.equal(search.renderShell, "self");
-const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search citations" } };
-const citationView = search.renderResult(citations, { expanded: false, isPartial: false }, theme);
-assert(citationView.render(80).join("\n").includes("model-selected citations"));
+const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search", results: [...result.details.results, { title: "Wire story", articleId: "AFP-123", snippet: "News" }] } };
+const citationView = search.renderResult(citations, { expanded: true, isPartial: false }, theme);
+assert(citationView.render(80).join("\n").includes("Wire story · article AFP-123"));
 for (const width of [1, 12, 40, 80]) assert(citationView.render(width).every((line: string) => visibleWidth(line) <= width));
 const expanded = search.renderResult(result, { expanded: true, isPartial: false }, theme).render(80).join("\n");
 assert(expanded.includes("snippet"));
@@ -80,7 +80,7 @@ for (const tool of [search, reader]) {
   assert(!component.render(80).join("\n").includes("hidden"));
   for (let width = 0; width <= 80; width++) assert(component.render(width).every((line: string) => visibleWidth(line) <= width));
 }
-for (const [provider, received, expected] of [["exa", 0, "No matches returned"], ["exa", 2, "No usable sources remain"], ["mistral", 0, "No web citations returned"]] as const) {
+for (const [provider, received, expected] of [["exa", 0, "No matches returned"], ["exa", 2, "No usable sources remain"], ["mistral", 0, "No matches returned"]] as const) {
   const empty = { ...result, details: { ...result.details, provider, results: [], diagnostics: { received, invalid: received, duplicate: 0, outsideDomains: 0, omitted: 0 } } };
   assert(search.renderResult(empty, { expanded: false, isPartial: false }, theme).render(40).join("\n").includes(expected));
 }
@@ -146,7 +146,7 @@ try {
     const plain = lines.map(stripTerminalSequences).join("\n");
     assert(plain.includes("public"), plain);
     assert(plain.includes("Searched"), plain);
-    for (const hit of sources.results) assert(plain.includes(new URL(hit.url).host));
+    for (const hit of sources.results) assert(plain.includes(new URL(hit.url!).host));
     frames.push({ name: "search", width, lines });
     card.setExpanded(true);
     const expandedLines = card.render(width);

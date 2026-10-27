@@ -15,7 +15,7 @@ test("source scopes preserve path case and enforce host and segment boundaries a
   const rows = urls.map((url) => ({ url, title: "Documentation" }));
   for (const provider of ["exa", "firecrawl", "mistral"] as const) {
     const raw = provider === "exa" ? { results: rows } : provider === "firecrawl" ? { data: { web: rows } }
-      : { outputs: [{ type: "message.output", role: "assistant", content: rows.map((row) => ({ ...row, type: "tool_reference", tool: "web_search" })) }] };
+      : Object.fromEntries(rows.map((row, rank) => [`id${rank}`, { ...row, rank, snippets: [], source: "brave" }]));
     const result = inspectResults(raw, provider, 10, ["DOCS.EXAMPLE.COM/API"], undefined, ["docs.example.com/API/old"]);
     expect(result.results.map((row) => row.url)).toEqual([urls[0]!, urls[1]!, urls[3]!]);
     expect(result.diagnostics).toMatchObject({ received: 10, outsideDomains: 5, excludedDomains: 2 });

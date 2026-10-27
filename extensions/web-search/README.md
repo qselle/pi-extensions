@@ -42,7 +42,7 @@ Empty results do not trigger another request. Cancellation stops the whole route
 
 Set `provider` explicitly to pin a provider and account, including `provider: "exa"`.
 Pinned requests preserve their original diagnostics and never fall back. Deep
-search and pinned Mistral requests retain their 60-second deadline. Alternative
+search retains its 60-second deadline. Alternative
 providers require their existing API keys; no keys or services are installed.
 When a fallback succeeds, the compact result reports its provider and attempt
 count; expansion and model output show the route and failure causes. A failed
@@ -62,7 +62,7 @@ account/key request remains visible in that history.
 
 Exa maps quality to `auto`, `fast`, and `deep`. Keyless access supports balanced
 and fast; deep requires a key and may cost more. Firecrawl and Mistral
-support balanced only. Mistral rejects date filters. Unsupported combinations
+support balanced only. Unsupported combinations
 fail before a request is sent.
 
 Both Exa paths request highlights guided by the search query, bounded to 1,200
@@ -102,8 +102,10 @@ title and a reserved visible origin; narrow terminals prioritize origins.
 URL-only titles show the origin once. Expanded results wrap
 full URLs and excerpts, and show dates, exclusion reasons, and provider warnings.
 Excerpts remain available to the agent even when the UI is collapsed. Mistral
-returns model-selected citation metadata; generated answer prose is discarded.
-No citations does not establish that no matches exist. Treat retrieved content
+search uses the `web_search` connector
+(`<api>/v1/connectors-gateway/web_search/mcp`): ranked results with snippets
+and native date filters; domain constraints are applied locally. News results
+without a URL are listed by article ID, which `web_read` opens. Treat retrieved content
 as untrusted data, verify claims on source pages, and cite their URLs.
 
 ### Page reading
@@ -140,13 +142,12 @@ cached or incomplete, especially for PDF tables and images.
 | `EXA_API_KEY` | Paid fallback after free-tier rejections; required for deep search and freshness reads |
 | `PI_EXA_ACCESS` | `keyless` or `api-key` forces one Exa access mode; default is keyless first |
 | `FIRECRAWL_API_KEY` | Credentials for explicit Firecrawl searches |
-| `MISTRAL_API_KEY` | Credentials for explicit Mistral searches |
+| `MISTRAL_API_KEY` | Mistral search when Pi's `mistral` provider has no key in `models.json` |
 
 Public access has provider-controlled rate limits; keyed requests may incur
 charges, and a key is spent only when the free tier rejects a request. The extension
-cannot inspect balances or enforce spending caps. Mistral uses
-`mistral-medium-latest` with `store: false` and can incur model and search charges;
-provider retention policies still apply. Keys are read from Pi's environment,
+cannot inspect balances or enforce spending caps. Mistral uses the key and API root of Pi's `mistral` provider;
+connector searches may incur charges and provider retention policies apply. Keys are read from Pi's environment,
 not project `.env` files, and are not persisted.
 
 For local reading, install [ax](https://ax.yusuke.run/) separately on Pi's PATH.
@@ -163,7 +164,7 @@ Provider references: [Exa MCP](https://exa.ai/docs/get-started/exa-mcp),
 
 - Uses public Pi APIs, host TypeBox, and Node.js built-ins; no runtime npm packages.
   Cross-platform with outbound HTTPS and, for local reading, a compatible ax binary.
-- Search timeouts: 30 seconds, or 60 seconds for deep Exa/Mistral. Responses are
+- Search timeouts: 30 seconds, or 60 seconds for deep Exa. Responses are
   capped at 2 MB; redirects are rejected. Keyless MCP sends only the query/options,
   with short-lived connections and cancellation cleanup capped at 1.5 seconds.
 - Exa retries HTTP 429 after 1, 2, 4, 8, 16, and 32 seconds plus up to 0.5 s of

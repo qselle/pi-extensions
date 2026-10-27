@@ -18,8 +18,15 @@ function wrapped(text: string, width: number, prefix = "    "): string[] {
 function sourceRows(hit: SearchHit, index: number, width: number, theme: Theme, expanded: boolean): string[] {
   const prefix = `    ${index + 1}. `;
   const indent = " ".repeat(visibleWidth(prefix));
+  if (hit.url === undefined && hit.articleId) {
+    const label = `${cleanText(hit.title, 240)} · article ${cleanText(hit.articleId, 128)}`;
+    if (!expanded) return [theme.fg("dim", prefix) + theme.fg("text", truncateToWidth(label, Math.max(0, width - visibleWidth(prefix)), "…"))];
+    const rows = wrapped(theme.fg("text", label), width, indent);
+    const snippet = cleanText(hit.snippet);
+    return [theme.fg("dim", prefix) + rows[0]!.slice(indent.length), ...rows.slice(1), ...(snippet ? wrapped(theme.fg("muted", snippet), width, indent) : [])];
+  }
   let url: string;
-  try { url = webUrl(hit.url); }
+  try { url = webUrl(hit.url ?? ""); }
   catch { return [theme.fg("warning", `${prefix}Invalid source URL`)]; }
   const host = new URL(url).host;
   const title = cleanText(hit.title, 240);
@@ -90,7 +97,6 @@ export function searchPreview(details: SearchResult, theme: Theme, expanded = fa
       lines[0] = theme.fg("dim", "  └ ") + lines[0]!.slice(4);
       const filters = compactFilters(details);
       if (filters) lines.push(...wrapped(theme.fg("dim", cleanText(filters, 1200)), width));
-      if (details.provider === "mistral") lines.push(...wrapped(theme.fg("dim", "model-selected citations"), width));
       if (details.warning) lines.push(...wrapped(theme.fg("warning", expanded ? `Provider warning: ${cleanText(details.warning, 500)}` : "Provider warning · expand for details"), width));
       const visible = expanded ? details.results : details.results.slice(0, PREVIEW_SOURCES);
       visible.forEach((hit, index) => {
@@ -100,7 +106,7 @@ export function searchPreview(details: SearchResult, theme: Theme, expanded = fa
       if (!count) {
         const empty = details.diagnostics?.received ? "No usable sources remain · check filters"
           : details.warning ? "No sources returned · see warning"
-          : details.provider === "mistral" ? "No web citations returned" : "No matches returned · try a broader query";
+          : "No matches returned · try a broader query";
         lines.push(...wrapped(theme.fg("muted", empty), width));
       }
       const stats = details.diagnostics;
