@@ -12,11 +12,14 @@ import { JOB_HISTORY_ENTRY, JobHistory } from "./history.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
 import { commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
 import { argumentAliases, DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS, MAX_OUTPUT_CHARS, MAX_YIELD_MS, outputBudget, START_YIELD_MS, waitDuration, WRITE_WAIT_MS, yieldDuration } from "./arguments.ts";
-import { headline, lines, renderJobList, renderJobResult } from "./render.ts";
+import { headline, lines, renderJobList, renderJobNotice, renderJobResult } from "./render.ts";
 const JOB_CONTROLS = ["job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"];
 /** Pi's built-in bash guideline, kept when the managed executor replaces bash. */
 export const PI_ENV_GUIDELINE = "You can inspect PI_* environment variables for current model and session details.";
 export const FOREGROUND_GUIDELINE = "Keep commands in the foreground: bash yields a job ID after yield_ms, so do not background them with &, nohup, disown, or setsid.";
+export const NOTICE_TYPE = "background-job-finished";
+/** One completion notice shares this output budget across its jobs. */
+const NOTICE_CHARS = 8192;
 export const YIELD_GUIDELINE = "A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful.";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
@@ -138,6 +141,12 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   let historyReady = false;
   let closing = false;
   let historyError: string | undefined;
+  let activeCtx: ExtensionContext | undefined;
+  /** Jobs still running when the agent last settled: the agent relies on a notice for them. */
+  const handedOff = new Set<string>();
+  /** Jobs whose final state the model has seen in a result. */
+  const reported = new Set<string>();
+  const unreported = new Set<string>();
   const allJobs = () => {
     const jobs = new Map(history.list().map((job) => [job.id, job]));
     for (const job of service.list()) jobs.set(job.id, job);
@@ -167,6 +176,12 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
         }
       }
       if (closing) return;
+      // `stopped` always means a requested stop (job_stop, /jobs stop, cancellation,
+      // shutdown), which needs no report; hard timeouts are `timed-out`.
+      if (!output && !isActive(job.status) && handedOff.delete(job.id) && job.status !== "stopped" && !reported.has(job.id)) {
+        unreported.add(job.id);
+        setTimeout(flushNotices, 0);
+      }
       if (!output) redraw();
       else if (viewer && !refreshTimer) { refreshTimer = setTimeout(redraw, 100); refreshTimer.unref?.(); }
     });
@@ -183,6 +198,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     const budget = request.budget ?? DEFAULT_OUTPUT_CHARS;
     const output = live ? source.window(id, from, budget, newest) : outputWindow(job.tail, job.outputEnd - job.tail.length, from, budget, newest);
     if (request.track !== false && !request.partial) agentCursors.set(id, Math.max(agentCursors.get(id) ?? 0, output.cursor));
+    if (live && !request.partial && !isActive(job.status)) reported.add(id);
     // A live wait labels both timers: the wait against its limit, and the job's runtime.
     const waiting = request.wait && !request.wait.end ? request.wait : undefined;
     const status = waiting
@@ -223,6 +239,36 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     finally { stopProgress(); }
     return result(id, { ...request, wait: { startedAt, limitMs, observedAt: Date.now(), end } }, jobs);
   };
+  /**
+   * Report handed-off jobs that finished without the model seeing their final
+   * state, and start a turn so the agent can act on them. Only an idle agent
+   * with no queued message is woken; agent_settled retries otherwise.
+   */
+  function flushNotices() {
+    const ctx = activeCtx;
+    try { if (!unreported.size || closing || !ctx || !ctx.isIdle() || ctx.hasPendingMessages()) return; }
+    catch { return; } // A replaced session's context is stale.
+    const jobs = service;
+    const ids = [...unreported].filter((id) => !reported.has(id) && jobs.list().some((job) => job.id === id));
+    unreported.clear();
+    if (!ids.length) return;
+    const budget = Math.max(1024, Math.floor(NOTICE_CHARS / ids.length));
+    const reports = ids.map((id) => result(id, { budget, hint: false }, jobs));
+    const intro = ids.length === 1 ? "A background job finished after you last checked it." : `${ids.length} background jobs finished after you last checked them.`;
+    try {
+      pi.sendMessage({ customType: NOTICE_TYPE, display: true,
+        content: [`${intro} Report the result if it matters to the user's task.`, ...reports.map((report) => report.content[0]!.text)].join("\n\n"),
+        details: { jobs: reports.map((report) => ({ ...report.details, text: report.content[0]!.text })) } }, { triggerTurn: true });
+    } catch { /* The session is closing; nobody is left to notify. */ }
+  }
+  // Minimal hosts, such as other extensions' fixtures, may not render messages.
+  pi.registerMessageRenderer?.(NOTICE_TYPE, (message, options, theme) => renderJobNotice(message, options.expanded, theme));
+  pi.on("agent_settled", (_event, ctx) => {
+    activeCtx = ctx;
+    for (const job of service.list()) if (isActive(job.status)) handedOff.add(job.id);
+    setTimeout(flushNotices, 0);
+  });
+
   const renderResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext) => renderJobResult(value, options, theme, context);
   const renderStartResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext, renderer = renderResult) => {
     const id = value.details?.id;
@@ -452,6 +498,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     historyReady = true;
     closing = false;
     historyError = undefined;
+    activeCtx = ctx; handedOff.clear(); reported.clear(); unreported.clear();
     service = new JobService(3000, knownSecretValues); listen();
     if (ctx.mode !== "tui") return;
     card = registerOverlayCard({ id: "background-jobs", order: 40, minTerminalWidth: 90, minTerminalHeight: 12,
@@ -469,6 +516,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     unsubscribeOwner();
     generation++; clearRefresh(); viewer?.close(); viewer = undefined; viewerOpen = false;
     closing = true;
+    activeCtx = undefined; handedOff.clear(); reported.clear(); unreported.clear();
     completionViews.clear();
     card?.unregister(); card = undefined;
     await service.shutdown();

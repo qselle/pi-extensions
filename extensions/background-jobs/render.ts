@@ -37,6 +37,20 @@ const textOf = (value: any): string => value?.content?.filter((part: any) => par
 /** Status headline plus a short output tail under a gutter; expanded shows the full result. */
 export function renderJobResult(value: any, options: RenderOptions, theme: Palette, context?: Partial<ToolRenderContext>) {
   if (options.isPartial && !value?.content?.length) return lines(gutter([theme.fg("muted", "Waiting for job…")]).join("\n"));
+  return lines(resultRows(value, options, theme, context).join("\n"));
+}
+
+/** A completion notice: a “Finished” headline per job, then its status and unread output. */
+export function renderJobNotice(message: { content: unknown; details?: any }, expanded: boolean, theme: Palette) {
+  const jobs: { name?: unknown; status?: unknown; text?: unknown }[] = Array.isArray(message.details?.jobs) ? message.details.jobs : [];
+  if (!jobs.length) return lines(gutter([theme.fg("muted", typeof message.content === "string" ? message.content : "Background job finished.")]).join("\n"));
+  return lines(jobs.flatMap((job) => [
+    theme.fg(FAILED.has(String(job.status)) ? "error" : "success", "•") + " " + theme.fg("toolTitle", `Finished job · ${String(job.name ?? "")}`),
+    ...resultRows({ content: [{ type: "text", text: String(job.text ?? "") }], details: job }, { expanded, isPartial: false }, theme),
+  ]).join("\n"));
+}
+
+function resultRows(value: any, options: RenderOptions, theme: Palette, context?: Partial<ToolRenderContext>): string[] {
   const text = textOf(value);
   const split = text.indexOf("\n\n");
   const header = (split >= 0 ? text.slice(0, split) : text).split("\n");
@@ -49,7 +63,7 @@ export function renderJobResult(value: any, options: RenderOptions, theme: Palet
   const hidden = Math.max(0, body.length - limit);
   if (hidden) rows.push(theme.fg("dim", `… ${hidden} earlier lines${options.expanded ? "" : " · expand to view"}`));
   rows.push(...body.slice(hidden).map((row) => theme.fg("toolOutput", row)));
-  return lines(gutter(rows).join("\n"));
+  return gutter(rows);
 }
 
 /** Why a wait ended early, from the result's own timestamps so settled rows never change. */

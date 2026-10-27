@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
-import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, PI_ENV_GUIDELINE } from "./index.ts";
+import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, NOTICE_TYPE, PI_ENV_GUIDELINE } from "./index.ts";
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
 import { COLLAPSED_TAIL_ROWS } from "./render.ts";
@@ -17,7 +17,10 @@ async function session(mode = "json", extra: Record<string, unknown> = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function>();
   const entries: unknown[] = [];
+  const messages: { message: any; options: any }[] = [];
+  const renderers = new Map<string, any>();
   extension({
+    sendMessage: (message: any, options: any) => messages.push({ message, options }), registerMessageRenderer: (type: string, renderer: any) => renderers.set(type, renderer),
     registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, getThinkingLevel: () => "off",
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     events: { emit() {}, on() { return () => {}; } }, on: (name: string, handler: Function) => handlers.set(name, handler),
@@ -27,7 +30,7 @@ async function session(mode = "json", extra: Record<string, unknown> = {}) {
   await handlers.get("session_start")!({}, ctx);
   shutdowns.push(async () => { await handlers.get("session_shutdown")!({}, ctx); });
   const run = (name: string, args: Record<string, unknown>, signal?: AbortSignal, update?: (value: any) => void): Promise<any> => tools.get(name).execute("call", args, signal, update, ctx);
-  return { tools, run, ctx, handlers };
+  return { tools, run, ctx, handlers, messages, renderers };
 }
 const outputOf = (value: any): string => value.content[0].text.slice(value.content[0].text.indexOf("\n\n") + 2);
 
@@ -290,4 +293,58 @@ test("job_output waits return on the next output; wait=true waits for exit", asy
   const exit = await run("job_output", { id, wait: true });
   expect(exit.details).toMatchObject({ status: "completed", wait: { end: "exit", limitMs: MAX_WAIT_MS } });
   expect(outputOf(exit)).toBe("done");
+});
+
+const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function until(check: () => boolean, limit = 3000) {
+  const deadline = Date.now() + limit;
+  while (!check()) { if (Date.now() > deadline) throw new Error("Condition did not become true"); await sleep(10); }
+}
+
+test("a job left running when the agent settles reports its completion with a turn", async () => {
+  const { run, handlers, ctx, messages, renderers } = await session();
+  const id = (await run("bash", { command: "sleep 0.3; printf finished-output; exit 4", yield_ms: 0 })).details.id;
+  await handlers.get("agent_settled")!({}, ctx);
+  await until(() => messages.length === 1);
+  const { message, options } = messages[0]!;
+  expect(options).toEqual({ triggerTurn: true });
+  expect(message).toMatchObject({ customType: NOTICE_TYPE, display: true });
+  expect(message.content).toStartWith("A background job finished after you last checked it.");
+  expect(message.content).toContain("· failed ·");
+  expect(message.content).toContain("exit 4");
+  expect(message.content).toContain("finished-output");
+  // The notice is the model's read: nothing is unread or reported twice.
+  expect(outputOf(await run("job_output", { id }))).toBe("No new output.");
+  const rows = renderers.get(NOTICE_TYPE)(message, { expanded: false, outputPad: 1 }, plain).render(100);
+  expect(rows[0]).toMatch(/^• Finished job · /);
+  expect(rows.join("\n")).toContain("finished-output");
+  await handlers.get("agent_settled")!({}, ctx);
+  await sleep(50);
+  expect(messages).toHaveLength(1);
+});
+
+test("notices skip stopped, already-read and in-run jobs, and wait for an idle agent without queued messages", async () => {
+  let idle = false;
+  let queued = false;
+  const { run, handlers, ctx, messages } = await session("json", { isIdle: () => idle, hasPendingMessages: () => queued });
+  const start = async (command: string) => (await run("bash", { command, yield_ms: 0 })).details.id;
+  const seen = await start("sleep 0.2");
+  const stopped = await start("sleep 5");
+  const later = await start("sleep 0.2; printf later");
+  await handlers.get("agent_settled")!({}, ctx);
+  const quick = await start("sleep 0.1");
+  await run("job_wait", { id: seen });
+  await run("job_stop", { id: stopped });
+  await sleep(400);
+  idle = true;
+  queued = true;
+  await handlers.get("agent_settled")!({}, ctx);
+  await sleep(50);
+  expect(messages).toHaveLength(0);
+  queued = false;
+  await handlers.get("agent_settled")!({}, ctx);
+  await until(() => messages.length === 1);
+  const content: string = messages[0]!.message.content;
+  expect(content).toContain(`Job: ${later}`);
+  for (const id of [seen, stopped, quick]) expect(content).not.toContain(id);
 });

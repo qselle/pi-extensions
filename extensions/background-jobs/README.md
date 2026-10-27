@@ -95,9 +95,18 @@ Run the command in the foreground; do not use `&`, `nohup`, `disown`, or
 `PI_*` environment variables. Sixteen jobs can run concurrently; the most recent
 50 jobs are retained. The shared overlay shows active job names on sufficiently
 large terminals. The panel shares the transcript viewer's scrolling/search controls
-and shows the latest 2000 characters per job. Commands and control tools do not
-send completion messages to the model or trigger extra turns; use a wait when
-results are needed.
+and shows the latest 2000 characters per job.
+
+### Completion notices
+
+A job the agent left running when it went idle is handed off. When a handed-off
+job exits or times out, and the model has not already seen its final state in a
+result, the extension sends one “Finished” message that starts a turn. It holds
+the exit status and the unread output; several jobs share an 8192-character
+budget. The message waits until the agent is idle with no queued message, and
+is retried when the agent next settles. Jobs that finish during a run, and stops
+requested through `job_stop`, `/jobs stop`, cancellation, or shutdown, are never
+reported. Use a wait when a result is needed within the current run.
 
 ### Reading output
 
