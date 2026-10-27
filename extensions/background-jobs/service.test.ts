@@ -228,3 +228,17 @@ test("waits accept up to five minutes", async () => {
     await expect(service.wait(job.id, 300_001)).rejects.toThrow("0–300000");
   } finally { await service.shutdown(); }
 });
+
+test("live jobs hold one hard-exit reaper, released when they settle", async () => {
+  const reapers: Map<symbol, () => void> = (globalThis as any)[Symbol.for("@qselle/pi-extensions.process-exit-reaper.v1")].callbacks;
+  const before = reapers.size;
+  const service = new JobService(100);
+  try {
+    const job = service.start(input("setInterval(() => {}, 1000)"));
+    await until(() => service.get(job.id).status === "running");
+    expect(reapers.size).toBe(before + 1);
+    service.stop(job.id);
+    await service.wait(job.id, 3000);
+    expect(reapers.size).toBe(before);
+  } finally { await service.shutdown(); }
+});

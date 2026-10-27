@@ -178,7 +178,9 @@ Foreground waits stream output at most ten times per second, with elapsed-time u
   Managed `bash` and `job_start` use the same execution service.
 - Shutdown stops managed processes and finishes within the TERM grace period plus
   two seconds; jobs still unsettled then are killed, detached, and marked stopped.
-  Processes that escape the process group may survive cleanup.
+  Processes that escape the process group may survive cleanup. If Pi exits
+  without a shutdown, a synchronous exit hook kills live process groups; it is
+  shared across reloads and registered only while jobs run.
 - When the process group exits but an escaped daemon (for example after
   `setsid`) keeps the output pipes open, the job settles after a 500 ms drain and
   stops reading from those pipes.

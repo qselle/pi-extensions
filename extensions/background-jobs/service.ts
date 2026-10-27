@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { startProcess, terminalSize, type JobProcess } from "./transport.ts";
 import { OutputLog, PlainOutput, type OutputSlice, type OutputWindow } from "../../lib/output.ts";
 import { StreamRedactor, redactText } from "../../lib/redact.ts";
+import { registerProcessExitReaper } from "../../lib/process-exit-reaper.ts";
 
 export type JobStatus = "starting" | "running" | "stopping" | "completed" | "failed" | "stopped" | "timed-out" | "interrupted";
 export interface JobSnapshot {
@@ -34,16 +35,15 @@ interface Job {
   streamsClosed: boolean; leaderExited: boolean;
   forced: boolean; stopping?: "stopped" | "timed-out"; pendingWrites: number;
   secretValues: string[]; flush: (() => void)[];
+  /** Hard-exit cleanup for the live process group; disposed when the job settles. */
+  unreap?: () => void;
 }
 export const isActive = (status: JobStatus) => ["starting", "running", "stopping"].includes(status);
 
-const REAPER = Symbol.for("@qselle/pi-extensions.job-reaper.v1");
-const globalState = globalThis as Record<PropertyKey, unknown>;
-const reapers = (globalState[REAPER] ??= new Map<number, () => void>()) as Map<number, () => void>;
-const installed = Symbol.for("@qselle/pi-extensions.job-reaper-installed.v1");
-if (!globalState[installed]) {
-  globalState[installed] = true;
-  process.once("exit", () => { for (const reap of reapers.values()) { try { reap(); } catch {} } });
+/** Synchronous hard-exit kill of a process group; asynchronous cleanup cannot run during `exit`. */
+function reapGroup(pid: number): void {
+  if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", timeout: 1000, windowsHide: true });
+  else { try { process.kill(-pid, "SIGKILL"); } catch {} }
 }
 
 export class JobService {
@@ -107,10 +107,7 @@ export class JobService {
     child.stdin?.on("error", () => {});
     child.once("spawn", () => {
       const pid = child.pid!;
-      reapers.set(pid, () => {
-        if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", timeout: 1000, windowsHide: true });
-        else { try { process.kill(-pid, "SIGKILL"); } catch {} }
-      });
+      if (isActive(job.snapshot.status)) job.unreap = registerProcessExitReaper(() => reapGroup(pid));
       if (job.stopping) this.kill(job, "SIGTERM");
       else job.snapshot.status = "running";
       this.emit(job);
@@ -251,7 +248,7 @@ export class JobService {
     job.snapshot.status = status ?? job.stopping ?? (job.snapshot.code === 0 ? "completed" : "failed");
     job.snapshot.endedAt = Date.now();
     job.secretValues.length = 0;
-    if (job.child.pid) reapers.delete(job.child.pid);
+    job.unreap?.();
     this.emit(job);
     job.resolve();
   }
