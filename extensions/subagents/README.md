@@ -118,8 +118,9 @@ queue, interrupt, report, close and suspend. Child tool activity alone saves sta
 at most once a minute, and child session files are reread only when the child
 has produced events since the last read.
 
-Closed-child transcripts retain the latest 500 entries in memory until the parent
-runtime ends. Persisted parents keep child conversation files under
+The 20 most recently closed children stay listed and inspectable, each keeping its
+latest 500 transcript entries in memory; older closed children are dropped, and
+their names stay reserved. Persisted parents keep child conversation files under
 `<parent-session-file>.subagents/`, with state and pinned conversation leaves in
 non-context parent entries. Reload/quit stop child processes. Reopening or tree
 navigation restores stopped children and adds unread reports and final results to

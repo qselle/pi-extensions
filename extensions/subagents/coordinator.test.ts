@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  MAX_RETAINED_CLOSED,
   PROGRESS_CHECKPOINT_MS,
   SUSPEND_ABORT_MS,
   SubagentCoordinator,
@@ -688,6 +689,23 @@ test("suspend aborts running children within a bounded grace before stopping the
   expect(calls).toEqual(["abort", "stop"]);
   expect(clients.get("Idle")!.abortCalls, "settled children are not aborted").toBe(0);
   expect(saved.find((row) => row.agent.name === "Stuck")!.agent.status).toBe("stopped");
+});
+
+test("only the most recently closed children stay retained, and their names stay reserved", async () => {
+  let now = 0;
+  const coordinator = new SubagentCoordinator({ now: () => ++now, createRuntime: async () => ({ client: new FakeClient(), cleanup: async () => {} }) });
+  coordinator.startSession();
+  for (let index = 0; index < MAX_RETAINED_CLOSED + 2; index++) {
+    await coordinator.spawn(request(`child-${index}`));
+    await coordinator.close(`child-${index}`);
+  }
+  const names = coordinator.list().map((agent) => agent.name);
+  expect(names).toHaveLength(MAX_RETAINED_CLOSED);
+  expect(names).not.toContain("child-0");
+  expect(names).not.toContain("child-1");
+  expect(names).toContain("child-2");
+  await expect(coordinator.spawn(request("child-0"))).rejects.toThrow("already exists");
+  await coordinator.shutdown();
 });
 
 test("retained stopped conversations are bounded separately from running process capacity", async () => {

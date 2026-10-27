@@ -7,6 +7,8 @@ export const MAX_AGENT_NAME_CHARS = 64;
 export const MAX_TASK_CHARS = 16_000;
 export const MAX_MESSAGE_CHARS = 16_000;
 export const MAX_RESULT_BYTES = 24 * 1024;
+/** Closed children kept for list and transcript inspection; older ones are dropped, names stay reserved. */
+export const MAX_RETAINED_CLOSED = 20;
 /** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
 export const PROGRESS_CHECKPOINT_MS = 60_000;
 /** Suspending waits this long for a running child to record its aborted turn before terminating it. */
@@ -823,7 +825,15 @@ export class SubagentCoordinator {
     agent.closing = operation;
     return operation.finally(() => {
       if (agent.closing === operation) agent.closing = undefined;
+      this.trimClosed();
     });
+  }
+
+  private trimClosed(): void {
+    const closed = [...this.agents.values()]
+      .filter((agent) => agent.status === "closed" && agent.cleanupDone && !agent.client && !agent.closing)
+      .sort((left, right) => (left.endedAt ?? 0) - (right.endedAt ?? 0));
+    for (const agent of closed.slice(0, Math.max(0, closed.length - MAX_RETAINED_CLOSED))) this.agents.delete(agent.id);
   }
 
   private reserve(name: string): { generation: number; commit(): void; release(): void } {
