@@ -374,6 +374,8 @@ async function executeTimedBash(definition: ToolDefinition<any>, ...[id, args, s
 		...(Number.isSafeInteger(exitCode) ? { exitCode } : {}) } };
 }
 
+const STRICT_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
+
 const configPath = () => join(getAgentDir(), "tool-render.json");
 
 function readEnabled(): boolean {
@@ -428,6 +430,9 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 						: name === "edit" || name === "write" ? changePurposeParameter : toolPurposeParameter;
 					const purposeMetadata: Partial<ToolDefinition<any>> = {
 						parameters: { ...definition.parameters, properties: { purpose: purposeParameter, ...definition.parameters.properties } },
+						// Pi sends strict schemas only to tools that opt in; keep native
+						// opt-ins and prefer strict sampling for the added field.
+						constrainedSampling: definition.constrainedSampling ?? STRICT_SAMPLING,
 						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
 						execute: (id, args, signal, update, context) => {
 							const toolArgs = withoutPurpose(args as Record<string, unknown>);

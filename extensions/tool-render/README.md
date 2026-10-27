@@ -91,7 +91,9 @@ tests" or "Find the session configuration". Bash, reads, edits, writes, director
 listings, and searches expose this field in their ordinary tool schemas. The
 guidance asks for a purpose on every bash, edit and write call, and allows
 omitting it only for self-evident reads and searches. The field stays optional,
-so a call without it never fails validation.
+so a call without it never fails validation. Every override keeps Pi's strict
+schema sampling opt-in; `grep`, `find` and `ls`, which have none natively,
+prefer strict sampling so models do not misname the added field.
 This appears after the action on the existing header, in normal text
 color. It describes the intended action; the output below reports what actually
 happened. The command panel stays separate and retains the exact shell source.

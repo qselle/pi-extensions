@@ -63,6 +63,11 @@ for (const entry of rebound) {
   assert.equal(typeof entry.definition.renderResult, "function");
 }
 
+// Every override keeps strict schema sampling, including the added purpose field.
+for (const entry of rebound) {
+  assert.deepEqual(entry.definition.constrainedSampling, { type: "json_schema", strict: "prefer" }, entry.name);
+}
+
 // The rebound ls override resolves a relative path against the session cwd.
 const ls = rebound.find((entry) => entry.name === "ls");
 assert(ls, "expected an ls override");
