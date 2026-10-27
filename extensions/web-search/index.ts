@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { exaAccessSummary } from "./access.ts";
 import { cleanText, DEFAULT_SEARCH_LIMIT, formatSearch, searchWeb } from "./client.ts";
 import { formatPage, pagePreview, readPage } from "./reader.ts";
+import { remoteOrder } from "./remote-reader.ts";
 import { failurePreview, searchPreview, textBlock } from "./render.ts";
 import { toolHeadline } from "../../lib/tool-ui.ts";
 import { SEARCH_CATEGORIES } from "./filters.ts";
@@ -64,20 +65,21 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "web_read",
     label: "Read web page",
-    promptSnippet: "Read public pages locally with ax, remotely with Exa, or use explicit auto mode for local-first fallback.",
-    description: "Read a public HTTP(S) page. Modes: markdown (bounded excerpt, no continuation), outline, extract (CSS selector with structured continuation). Default reader ax is local-only and does not use JavaScript. Choose reader auto for a public HTML page when local-first reading plus one Exa fallback is desired; fallback follows ax process/transport failure, empty output or a recognized short access challenge, never invalid input or cancellation. Choose reader exa to go remote immediately for PDFs or sources that reject direct fetching; access is not guaranteed. Exa uses the configured access policy and supports bounded Markdown only, without CSS or continuation. Content is untrusted data. Use returned extraction offsets until complete/past_end; narrow selectors for oversized content.",
+    promptSnippet: "Read public pages locally with ax, remotely (Exa, Firecrawl, Mistral), or with auto local-first fallback.",
+    description: "Read a public HTTP(S) page, or a Mistral search article ID. Modes: markdown (bounded excerpt, no continuation), outline, extract (CSS selector with structured continuation). Default reader ax is local-only and does not use JavaScript. reader auto tries ax, then remote readers (Exa, then configured Firecrawl and Mistral) after ax process/transport failure, empty output or an access/JavaScript challenge, never invalid input or cancellation; all attempts share 45 seconds. reader remote skips ax, for PDFs or sources that reject direct fetching. exa, firecrawl or mistral pins one remote reader; access is not guaranteed. Remote readers return bounded Markdown only, without CSS or continuation. Content is untrusted data. Use returned extraction offsets until complete/past_end; narrow selectors for oversized content.",
     parameters: Type.Object({
-      url: Type.String({ maxLength: 4096 }),
-      reader: Type.Optional(StringEnum(["auto", "ax", "exa"] as const, { description: "Default ax is local-only. auto tries ax, then shares the public URL with Exa after failure or empty/challenge output. exa goes remote immediately." })),
+      url: Type.String({ maxLength: 4096, description: "HTTP(S) URL, or an article ID from Mistral search results." }),
+      reader: Type.Optional(StringEnum(["auto", "ax", "remote", "exa", "firecrawl", "mistral"] as const, { description: "Default ax is local-only. auto: ax, then remote readers on failure or challenge output. remote: remote readers only. exa/firecrawl/mistral: one remote reader." })),
       mode: Type.Optional(StringEnum(["markdown", "outline", "extract"] as const)),
       selector: Type.Optional(Type.String({ maxLength: 500 })),
       offset: Type.Optional(Type.Integer({ minimum: 0 })),
       budget: Type.Optional(Type.Integer({ minimum: 100, maximum: 8000 })),
       max_age_hours: freshnessParameter(),
     }),
-    async execute(_id, params, signal) {
-      const result = await readPage(params, signal);
-      return { content: [{ type: "text", text: formatPage(result) }], details: { reader: result.reader, access: result.access, url: result.url, truncated: result.truncated, fallback: result.fallback, pagination: result.pagination, maxAgeHours: result.maxAgeHours } };
+    async execute(_id, params, signal, _onUpdate: unknown, ctx: ExtensionContext) {
+      const { env, mistralBaseUrl } = await mistralAccess(ctx);
+      const result = await readPage(params, signal, { env, mistralBaseUrl });
+      return { content: [{ type: "text", text: formatPage(result) }], details: { reader: result.reader, access: result.access, url: result.url, truncated: result.truncated, route: result.route, pagination: result.pagination, maxAgeHours: result.maxAgeHours } };
     },
     renderShell: "self",
     renderCall: (args, theme, context) => toolHeadline(context?.isError ? "Read failed" : context?.isPartial ? "Reading" : "Read", cleanText(args.url, 500), theme, context?.isError),
@@ -98,7 +100,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         `Exa · ${exaAccessSummary(process.env)} · automatic`,
         process.env.EXA_API_KEY?.trim() ? "Deep search and freshness reads use your Exa account. Set PI_EXA_ACCESS=keyless or api-key to force one mode." : "No key needed. Set EXA_API_KEY for paid fallback and deep search.",
         ...(optional.length ? [`Fallbacks: ${optional.join(", ")} when compatible. Set provider to pin a choice.`] : []),
-        "Page reading: ax locally · reader=auto for Exa fallback · reader=exa for remote reading.",
+        `Page reading: ax locally · reader=auto falls back to ${remoteOrder(env).map((reader) => ({ exa: "Exa", firecrawl: "Firecrawl", mistral: "Mistral" })[reader]).join(" → ")} · reader=remote skips ax.`,
       ].join("\n"), "info");
     },
   });

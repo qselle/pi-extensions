@@ -116,14 +116,23 @@ as untrusted data, verify claims on source pages, and cite their URLs.
 | Reader | Behavior |
 |---|---|
 | `ax` (default) | Local GET-only HTML extraction; supports `markdown`, `outline`, and CSS `extract` |
-| `exa` | Remote excerpt, including PDFs; no selectors, outlines, or continuation |
-| `auto` | Try ax, then Exa once after a transport failure, empty text, or recognized access challenge |
+| `auto` | Try ax, then the remote chain after a transport failure, empty text, or access challenge |
+| `remote` | The remote chain only, for PDFs and sources that reject direct fetching |
+| `exa`, `firecrawl`, `mistral` | One remote reader, without fallback |
 
-`auto` supports Markdown without selectors or continuation and shares a 45-second
-deadline across attempts. Invalid input and cancellation do not trigger fallback.
-Results identify both attempts; an empty CSS selection is valid. Explicit `ax`
-never shares the URL with Exa. Remote reads use the same Exa access policy as search
-and never upload local documents.
+The remote chain is Exa, then Firecrawl scrape (JavaScript-rendered, with
+`FIRECRAWL_API_KEY`), then Mistral's `open_url` (with a Mistral key); unconfigured
+readers are skipped and `PI_WEB_OPEN_PROVIDER` moves one reader first. A reader
+whose text opens with a CAPTCHA, bot check, or JavaScript wall within its first
+2,000 characters, on a page under 10,000 characters, counts as failed. Remote
+readers return Markdown excerpts without selectors or continuation.
+
+`auto` and `remote` share a 45-second deadline across attempts. Invalid input and
+cancellation do not trigger fallback. Results show the route, such as
+`via ax → Exa → Firecrawl`, with each failure cause; an empty CSS selection is
+valid. Explicit `ax` never shares the URL with a provider. Exa reads use the same
+access policy as search; no reader uploads local documents. Article IDs from
+Mistral search results open with Mistral.
 
 A selector requires `mode: "extract"`. Follow returned extraction offsets or
 outline continuation notes. Markdown rejects nonzero offsets. When a hard output
@@ -141,8 +150,9 @@ cached or incomplete, especially for PDF tables and images.
 |---|---|
 | `EXA_API_KEY` | Paid fallback after free-tier rejections; required for deep search and freshness reads |
 | `PI_EXA_ACCESS` | `keyless` or `api-key` forces one Exa access mode; default is keyless first |
-| `FIRECRAWL_API_KEY` | Credentials for explicit Firecrawl searches |
-| `MISTRAL_API_KEY` | Mistral search when Pi's `mistral` provider has no key in `models.json` |
+| `FIRECRAWL_API_KEY` | Firecrawl search fallback and page reading |
+| `MISTRAL_API_KEY` | Mistral search and page reading when Pi's `mistral` provider has no key in `models.json` |
+| `PI_WEB_OPEN_PROVIDER` | `exa`, `firecrawl`, or `mistral` to try first in the remote reading chain |
 
 Public access has provider-controlled rate limits; keyed requests may incur
 charges, and a key is spent only when the free tier rejects a request. The extension
@@ -178,6 +188,6 @@ Provider references: [Exa MCP](https://exa.ai/docs/get-started/exa-mcp),
   cap, no ax disk cache, and a separate 40,000-character output cap.
 - ax accepts no credentials or custom headers, does not render JavaScript or
   bypass logins, and may follow redirects using the machine's network access.
-  It is not a network sandbox. Neither reader guarantees access or complete extraction.
+  It is not a network sandbox. No reader guarantees access or complete extraction.
 - Tests use provider fixtures. Live checks covered ax and keyless Exa;
   direct keyed/paid calls remain unverified.

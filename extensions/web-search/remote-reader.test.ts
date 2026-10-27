@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { readExaPage } from "./remote-reader.ts";
-import { formatPage } from "./reader.ts";
+import { readExaPage, remoteOrder } from "./remote-reader.ts";
+import { formatPage, pagePreview, readPage } from "./reader.ts";
 import { pageContentFailure } from "./page-content.ts";
 import type { Fetch } from "./client.ts";
 
@@ -63,4 +63,68 @@ test("remote text reaching the excerpt cap is marked and controls do not consume
     expect(page.truncated).toBe(true);
     expect(formatPage(page)).toContain("Increase budget");
   }
+});
+
+test("challenge and JavaScript walls near the top of short pages are failures; articles are not", () => {
+  for (const text of [
+    "example.com\n\n## Performing security verification\nThis website uses a security service.",
+    "# Verify you are human by completing the action below.",
+    "Please enable JavaScript to view this page.",
+    "- Complete the CAPTCHA to continue",
+  ]) expect(pageContentFailure(text)).toContain("access challenge");
+  for (const text of [
+    "How CAPTCHA works\n\nArticles explain that sites ask you to verify you are human.",
+    `Guide\n\n${"Long article text. ".repeat(600)}\nVerify you are human`,
+  ]) expect(pageContentFailure(text)).toBeUndefined();
+});
+
+const mcpPage = (text: string) => async (url: string, init?: RequestInit) => {
+  const message = JSON.parse(String(init?.body));
+  return Response.json({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }], ...(url.includes("mistral") ? { structuredContent: { url: message.params.arguments.url, content: text } } : {}) } });
+};
+
+test("remote reading falls back from Exa to Firecrawl to Mistral and records the route", async () => {
+  const calls: string[] = [];
+  const env = { FIRECRAWL_API_KEY: "fc", MISTRAL_API_KEY: "mi" };
+  const page = await readPage({ url: "https://example.com/js", reader: "remote" }, undefined, { env, request: async (url, init) => {
+    calls.push(new URL(url).host);
+    if (url.includes("exa.ai")) return mcpPage("Checking your browser before accessing example.com.")(url, init);
+    if (url.includes("firecrawl")) {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ url: "https://example.com/js", formats: ["markdown"], onlyMainContent: true });
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fc");
+      return new Response(null, { status: 402 });
+    }
+    return mcpPage("Rendered article body.")(url, init);
+  } });
+  expect(calls).toEqual(["mcp.exa.ai", "api.firecrawl.dev", "api.mistral.ai"]);
+  expect(page).toMatchObject({ reader: "mistral", text: "Rendered article body." });
+  expect(page.route).toEqual([{ reader: "exa", outcome: "failed", reason: "access challenge" }, { reader: "firecrawl", outcome: "failed", reason: "HTTP 402" }, { reader: "mistral", outcome: "succeeded" }]);
+  expect(formatPage(page)).toContain("Read route: exa: failed (access challenge) → firecrawl: failed (HTTP 402) → mistral: succeeded.");
+  expect(pagePreview(page)).toBe("Mistral · via Exa → Firecrawl → Mistral · excerpt received · completeness unverified");
+});
+
+test("PI_WEB_OPEN_PROVIDER goes first, unconfigured readers are skipped, and pinned readers never fall back", async () => {
+  expect(remoteOrder({})).toEqual(["exa"]);
+  expect(remoteOrder({ FIRECRAWL_API_KEY: "fc", PI_WEB_OPEN_PROVIDER: "Firecrawl" })).toEqual(["firecrawl", "exa"]);
+  expect(remoteOrder({ PI_WEB_OPEN_PROVIDER: "mistral" })).toEqual(["exa"]);
+  const calls: string[] = [];
+  const failing = async (url: string) => { calls.push(new URL(url).host); return new Response(null, { status: 503 }); };
+  await expect(readPage({ url: "https://example.com", reader: "firecrawl" }, undefined, { env: { FIRECRAWL_API_KEY: "fc", MISTRAL_API_KEY: "mi" }, request: failing })).rejects.toThrow("Firecrawl page reading failed (HTTP 503)");
+  expect(calls).toEqual(["api.firecrawl.dev"]);
+  await expect(readPage({ url: "https://example.com", reader: "firecrawl" }, undefined, { env: {}, request: failing })).rejects.toThrow("No request was sent");
+  await expect(readPage({ url: "https://example.com", reader: "remote", selector: "main", mode: "extract" }, undefined, { env: {}, request: failing })).rejects.toThrow("No request was sent");
+  expect(calls).toHaveLength(1);
+});
+
+test("Mistral article IDs open through the connector; other readers reject them before any request", async () => {
+  let opened: unknown;
+  const page = await readPage({ url: "AFP-2026-0001" }, undefined, { env: { MISTRAL_API_KEY: "mi" }, mistralBaseUrl: "https://api.mistral.ai/v1", request: async (url, init) => {
+    expect(url).toBe("https://api.mistral.ai/v1/connectors-gateway/web_search/mcp");
+    opened = JSON.parse(String(init?.body)).params;
+    return mcpPage("Wire story text.")(url, init);
+  } });
+  expect(opened).toEqual({ name: "open_url", arguments: { url: "AFP-2026-0001" } });
+  expect(page).toMatchObject({ url: "AFP-2026-0001", reader: "mistral", text: "Wire story text." });
+  await expect(readPage({ url: "AFP-2026-0001", reader: "ax" })).rejects.toThrow("reader=mistral");
+  await expect(readPage({ url: "AFP-2026-0001", reader: "mistral" }, undefined, { env: { MISTRAL_API_KEY: "mi" }, request: mcpPage("Open blocked: robots.txt") })).rejects.toThrow("Mistral reported that the page is blocked");
 });

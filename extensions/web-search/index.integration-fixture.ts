@@ -121,7 +121,10 @@ for (const pagination of [undefined, { state: "more", nextOffset: 42 }, { state:
   if (pagination?.state === "more") assert(component.render(24).join("\n").includes("next offset 42"));
 }
 const fallbackView = reader.renderResult({ content: [], details: { url: "https://example.com", reader: "exa", access: "keyless", truncated: true, fallback: { from: "ax", reason: "ax returned no readable content." } } }, { expanded: false, isPartial: false }, theme);
-assert(fallbackView.render(120).join("\n").includes("ax fallback"));
+// Results saved before routes existed still show the ax fallback.
+assert(fallbackView.render(120).join("\n").includes("via ax → Exa"));
+const routeView = reader.renderResult({ content: [], details: { url: "https://example.com", reader: "firecrawl", truncated: false, route: [{ reader: "ax", outcome: "failed" }, { reader: "exa", outcome: "failed" }, { reader: "firecrawl", outcome: "succeeded" }] } }, { expanded: false, isPartial: false }, theme);
+assert(routeView.render(120).join("\n").includes("Firecrawl · via ax → Exa → Firecrawl"));
 for (const width of [1, 12, 40, 80]) assert(fallbackView.render(width).every((line: string) => visibleWidth(line) <= width));
 
 // Inspect actual host cards too: their padding reduces the renderer's available width.
