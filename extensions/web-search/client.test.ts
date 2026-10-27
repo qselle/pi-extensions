@@ -12,9 +12,10 @@ test("Exa is the default even without keys; other providers require explicit sel
 });
 
 test("search validates controls and maps both documented provider contracts", () => {
-  expect(searchRequest({ query: " q ", domains: ["EXAMPLE.COM"] }, "exa").body).toEqual({ query: "q", numResults: 8, type: "auto", contents: { highlights: { query: "q", maxCharacters: 1200 } }, includeDomains: ["example.com"] });
+  expect(searchRequest({ query: " q ", domains: ["EXAMPLE.COM"] }, "exa").body).toEqual({ query: "q", numResults: 10, type: "auto", contents: { highlights: { query: "q", maxCharacters: 1200 } }, includeDomains: ["example.com"] });
   expect(searchRequest({ query: "q", limit: 2 }, "firecrawl").body).toEqual({ query: "q", limit: 2, sources: ["web"], timeout: 25_000 });
-  for (const input of [{ query: " " }, { query: "q", limit: 100 }, { query: "q", domains: ["https://example.com/"] }]) {
+  expect(searchRequest({ query: "q", limit: 20 }, "exa").body).toMatchObject({ numResults: 20 });
+  for (const input of [{ query: " " }, { query: "q", limit: 21 }, { query: "q", limit: 100 }, { query: "q", domains: ["https://example.com/"] }]) {
     expect(() => searchRequest(input, "exa")).toThrow();
   }
 });
@@ -57,7 +58,7 @@ test("forced API-key access and deep mode use the direct API without exposing th
     const result = await searchWeb({ query: "TaskGroup cancellation", quality }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: " private-key " }, async (url, init) => {
       requests.push(url);
       expect(new Headers(init?.headers).get("x-api-key")).toBe("private-key");
-      expect(JSON.parse(String(init?.body))).toMatchObject({ numResults: 8, contents: { highlights: { query: "TaskGroup cancellation", maxCharacters: 1200 } } });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ numResults: 10, contents: { highlights: { query: "TaskGroup cancellation", maxCharacters: 1200 } } });
       return Response.json({ results: [{ url: "https://docs.python.org/", title: "Python docs" }] });
     });
     expect(requests).toEqual(["https://api.exa.ai/search"]);

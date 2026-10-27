@@ -7,7 +7,7 @@ const reply = (results: Record<string, unknown>, id = 1) => Response.json({ json
 
 test("Mistral calls the web_search connector once and keeps ranked results with snippets and dates", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
-  const result = await searchWeb({ query: "current query", provider: "mistral", limit: 5, date_range: { start: "2026-01-01", end: "2026-02-01" } }, undefined,
+  const result = await searchWeb({ query: "current query", provider: "mistral", limit: 15, date_range: { start: "2026-01-01", end: "2026-02-01" } }, undefined,
     { MISTRAL_API_KEY: "secret", EXA_API_KEY: "other" }, async (url, init) => {
       calls.push({ url, init: init! });
       return reply({ b: row(1, "https://example.com/second", { date: "2026-01-20" }), a: row(0, "https://example.com/first"), c: row(2, "https://example.com/old", { date: "2025-01-01" }) });
@@ -18,7 +18,7 @@ test("Mistral calls the web_search connector once and keeps ranked results with 
   expect(headers.get("authorization")).toBe("Bearer secret");
   expect(headers.has("x-api-key")).toBe(false);
   expect(calls[0]!.init.redirect).toBe("error");
-  expect(JSON.parse(String(calls[0]!.init.body)).params).toEqual({ name: "web_search", arguments: { query: "current query", limit: 5, start_date: "2026-01-01", end_date: "2026-02-01" } });
+  expect(JSON.parse(String(calls[0]!.init.body)).params).toEqual({ name: "web_search", arguments: { query: "current query", limit: 15, start_date: "2026-01-01", end_date: "2026-02-01" } });
   expect(result.results.map((hit) => hit.url)).toEqual(["https://example.com/first", "https://example.com/second"]);
   expect(result.results[1]).toMatchObject({ snippet: "Snippet 1", published: "2026-01-20" });
   expect(result.diagnostics?.outsideDates).toBe(1);

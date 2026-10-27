@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { exaAccessSummary } from "./access.ts";
-import { cleanText, DEFAULT_SEARCH_LIMIT, formatSearch, searchWeb } from "./client.ts";
+import { cleanText, DEFAULT_SEARCH_LIMIT, formatSearch, MAX_SEARCH_LIMIT, searchWeb } from "./client.ts";
 import { formatPage, pagePreview, readPage } from "./reader.ts";
 import { remoteOrder } from "./remote-reader.ts";
 import { failurePreview, searchPreview, textBlock } from "./render.ts";
@@ -37,7 +37,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       provider: Type.Optional(StringEnum(["exa", "firecrawl", "mistral"] as const)),
       quality: Type.Optional(StringEnum(["fast", "balanced", "deep"] as const, { description: "Default balanced. Fast and deep require Exa; deep also requires EXA_API_KEY and may take longer and cost more. Explicit provider choices are honored." })),
       additional_queries: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { minItems: 1, maxItems: 5, description: "Optional query variations for deep search only." })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, default: DEFAULT_SEARCH_LIMIT })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT, default: DEFAULT_SEARCH_LIMIT })),
       date_range: Type.Optional(Type.Object({
         start: Type.Optional(Type.String({ pattern: "^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$", description: "First calendar date, YYYY-MM-DD." })),
         end: Type.Optional(Type.String({ pattern: "^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$", description: "Last calendar date, YYYY-MM-DD." })),

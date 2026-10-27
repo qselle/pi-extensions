@@ -8,7 +8,8 @@ import { domainMatcher, freshnessLabel, freshnessOptions, normalizeDomains, SEAR
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type Provider = "exa" | "firecrawl" | "mistral";
 export type SearchQuality = "fast" | "balanced" | "deep";
-export const DEFAULT_SEARCH_LIMIT = 8;
+export const DEFAULT_SEARCH_LIMIT = 10;
+export const MAX_SEARCH_LIMIT = 20;
 export interface SearchInput {
   query: string;
   provider?: Provider;
@@ -79,7 +80,7 @@ export function searchRequest(input: SearchInput, provider: Provider) {
   const query = input.query.trim();
   if (!query || query.length > 500) throw new Error("Search query must contain 1–500 characters.");
   const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("Search limit must be between 1 and 10.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SEARCH_LIMIT) throw new Error(`Search limit must be between 1 and ${MAX_SEARCH_LIMIT}.`);
   const domains = normalizeDomains(input.domains);
   const excluded = normalizeDomains(input.exclude_domains);
   if (input.category && (provider !== "exa" || !SEARCH_CATEGORIES.includes(input.category))) throw new Error("category requires Exa and a supported source category. No request was sent.");

@@ -52,7 +52,7 @@ account/key request remains visible in that history.
 |---|---|
 | `query` | Search text |
 | `provider` | `exa` (default), `firecrawl`, or `mistral` |
-| `limit` | 1–10 results; default 8 |
+| `limit` | 1–20 results; default 10 |
 | `quality` | `balanced` (default), `fast`, or `deep` |
 | `domains`, `exclude_domains` | Up to 10 hostnames or path prefixes each |
 | `date_range` | `start` and/or `end` as ordered `YYYY-MM-DD` dates |
