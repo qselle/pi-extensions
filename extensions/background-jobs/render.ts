@@ -1,5 +1,6 @@
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { elapsed } from "../working-status/state.ts";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 type RenderOptions = { expanded: boolean; isPartial: boolean };
@@ -41,7 +42,7 @@ export function renderJobResult(value: any, options: RenderOptions, theme: Palet
   const header = (split >= 0 ? text.slice(0, split) : text).split("\n");
   const body = split >= 0 ? text.slice(split + 2).replace(/\n+$/, "").split("\n") : [];
   const failed = context?.isError || FAILED.has(value?.details?.status);
-  const rows = [theme.fg(failed ? "error" : "muted", header[0] || "Job result")];
+  const rows = [theme.fg(failed ? "error" : "muted", header[0] || "Job result") + waitEnd(value?.details?.wait, theme)];
   const extra = options.expanded ? header.slice(1) : header.slice(1).filter((row) => row.startsWith("Still running"));
   rows.push(...extra.map((row) => theme.fg("dim", row)));
   const limit = options.expanded ? EXPANDED_ROWS : COLLAPSED_TAIL_ROWS;
@@ -49,6 +50,13 @@ export function renderJobResult(value: any, options: RenderOptions, theme: Palet
   if (hidden) rows.push(theme.fg("dim", `… ${hidden} earlier lines${options.expanded ? "" : " · expand to view"}`));
   rows.push(...body.slice(hidden).map((row) => theme.fg("toolOutput", row)));
   return lines(gutter(rows).join("\n"));
+}
+
+/** Why a wait ended early, from the result's own timestamps so settled rows never change. */
+function waitEnd(wait: any, theme: Palette): string {
+  if (wait?.end !== "interrupted" && wait?.end !== "message") return "";
+  const waited = elapsed(Number(wait.observedAt) - Number(wait.startedAt));
+  return wait.end === "interrupted" ? theme.fg("warning", ` · interrupted after ${waited}`) : theme.fg("dim", ` · new message after ${waited}`);
 }
 
 /** Job list: one counted headline and one row per job. */

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { JobService, isActive, LOG_CAPACITY, MAX_ACTIVE_JOBS, SHUTDOWN_SLACK_MS } from "./service.ts";
+import { JobService, isActive, LOG_CAPACITY, MAX_ACTIVE_JOBS, PENDING_MESSAGE_POLL_MS, SHUTDOWN_SLACK_MS } from "./service.ts";
 import { join } from "node:path";
 
 const input = (code: string, timeoutMs?: number, stdin?: boolean) => ({ name: "test", command: "test command", executable: process.execPath, args: ["-e", code], cwd: process.cwd(), timeoutMs, stdin });
@@ -240,5 +240,26 @@ test("live jobs hold one hard-exit reaper, released when they settle", async () 
     service.stop(job.id);
     await service.wait(job.id, 3000);
     expect(reapers.size).toBe(before);
+  } finally { await service.shutdown(); }
+});
+
+test("bounded waits resolve why they ended and never stop the job", async () => {
+  const service = new JobService(100);
+  try {
+    const job = service.start(input("setTimeout(() => console.log('tick'), 400); setInterval(() => {}, 1000)"));
+    expect(await service.waitFor(job.id, 50)).toBe("deadline");
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+    expect(await service.waitFor(job.id, 3000, { signal: controller.signal })).toBe("interrupted");
+    let queued = false;
+    setTimeout(() => { queued = true; }, 50);
+    const started = Date.now();
+    expect(await service.waitFor(job.id, 3000, { pending: () => queued })).toBe("message");
+    expect(Date.now() - started).toBeLessThan(50 + PENDING_MESSAGE_POLL_MS + 200);
+    expect(await service.waitFor(job.id, 3000, { until: "output", cursor: 0 })).toBe("output");
+    expect(service.output(job.id, 0).text).toBe("tick\n");
+    expect(isActive(service.get(job.id).status)).toBe(true);
+    service.stop(job.id);
+    expect(await service.waitFor(job.id, 3000, { until: "output" })).toBe("exit");
   } finally { await service.shutdown(); }
 });

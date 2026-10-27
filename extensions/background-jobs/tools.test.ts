@@ -13,7 +13,7 @@ const plain = { fg: (_color: string, text: string) => text };
 const shutdowns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const stop of shutdowns.splice(0)) await stop(); });
 
-async function session(mode = "json") {
+async function session(mode = "json", extra: Record<string, unknown> = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function>();
   const entries: unknown[] = [];
@@ -22,11 +22,12 @@ async function session(mode = "json") {
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     events: { emit() {}, on() { return () => {}; } }, on: (name: string, handler: Function) => handlers.set(name, handler),
   } as never);
-  const ctx = { mode, cwd: process.cwd(), sessionManager: { getSessionId: () => "tools-test", getSessionFile: () => undefined, getBranch: () => entries }, ui: { notify() {} } };
+  const ctx = { mode, cwd: process.cwd(), sessionManager: { getSessionId: () => "tools-test", getSessionFile: () => undefined, getBranch: () => entries }, ui: { notify() {} },
+    isIdle: () => true, hasPendingMessages: () => false, ...extra };
   await handlers.get("session_start")!({}, ctx);
   shutdowns.push(async () => { await handlers.get("session_shutdown")!({}, ctx); });
-  const run = (name: string, args: Record<string, unknown>): Promise<any> => tools.get(name).execute("call", args, undefined, undefined, ctx);
-  return { tools, run };
+  const run = (name: string, args: Record<string, unknown>, signal?: AbortSignal, update?: (value: any) => void): Promise<any> => tools.get(name).execute("call", args, signal, update, ctx);
+  return { tools, run, ctx, handlers };
 }
 const outputOf = (value: any): string => value.content[0].text.slice(value.content[0].text.indexOf("\n\n") + 2);
 
@@ -84,8 +85,8 @@ test("an omitted cursor continues from the last agent read without repeating out
 
 test("bash yields after ten seconds by default and one job_wait covers five minutes", async () => {
   const waits: number[] = [];
-  const original = JobService.prototype.wait;
-  JobService.prototype.wait = function (id, milliseconds, signal) { waits.push(milliseconds ?? -1); return original.call(this, id, milliseconds, signal); };
+  const original = JobService.prototype.waitFor;
+  JobService.prototype.waitFor = function (id, milliseconds, options) { waits.push(milliseconds); return original.call(this, id, milliseconds, options); };
   try {
     const { run, tools } = await session();
     expect((await run("bash", { command: "true" })).details.status).toBe("completed");
@@ -105,7 +106,7 @@ test("bash yields after ten seconds by default and one job_wait covers five minu
     await run("bash", { command: "true", yield_ms: 999_999 });
     expect(waits.at(-1)).toBe(30_000);
     expect(DEFAULT_YIELD_MS + MAX_WAIT_MS).toBeGreaterThanOrEqual(180_000);
-  } finally { JobService.prototype.wait = original; }
+  } finally { JobService.prototype.waitFor = original; }
 });
 
 test("bash keeps the PI_* guideline and yielded results say how to follow up", async () => {
@@ -216,4 +217,40 @@ test("managed results carry exit, signal, status and timing details", async () =
   const stopped = await run("job_wait", { id: (await run("job_stop", { id: running.details.id })).details.id, wait_ms: 5000 });
   expect(stopped.details).toMatchObject({ status: "stopped", signal: "SIGTERM" });
   expect(typeof stopped.details.endedAt).toBe("number");
+});
+
+const abortAfter = (milliseconds: number) => { const controller = new AbortController(); setTimeout(() => controller.abort(), milliseconds); return controller.signal; };
+
+test("an interrupted wait returns the output so far and says the job is still running", async () => {
+  const { run, tools } = await session();
+  const started = await run("bash", { command: "printf ready; sleep 5", yield_ms: 300 });
+  const id = started.details.id;
+  const waited = await run("job_wait", { id }, abortAfter(150));
+  expect(waited.details.status).toBe("running");
+  expect(waited.details.wait).toMatchObject({ limitMs: MAX_WAIT_MS, end: "interrupted" });
+  expect(waited.content[0].text).toContain("The user interrupted this wait after 0s; the job is still running, so this does not mean it hung.");
+  const card = tools.get("job_wait").renderResult(waited, { expanded: false, isPartial: false }, plain, { isError: false });
+  expect(card.render(120)[0]).toContain(" · interrupted after 0s");
+  expect(outputOf(await run("job_output", { id }))).toBe("No new output.");
+  await run("job_stop", { id });
+});
+
+test("a queued user message ends a wait promptly", async () => {
+  let queued = false;
+  const { run } = await session("json", { hasPendingMessages: () => queued });
+  const id = (await run("bash", { command: "sleep 5", yield_ms: 0 })).details.id;
+  setTimeout(() => { queued = true; }, 100);
+  const started = Date.now();
+  const waited = await run("job_wait", { id });
+  expect(Date.now() - started).toBeLessThan(800);
+  expect(waited.details.wait.end).toBe("message");
+  expect(waited.content[0].text).toContain("because a new user message is queued; the job is still running.");
+  await run("job_stop", { id });
+});
+
+test("cancelling the initial bash wait stops the command", async () => {
+  const { run } = await session();
+  await expect(run("bash", { command: "sleep 5", yield_ms: 5000 }, abortAfter(150))).rejects.toThrow("Command cancelled; the job was stopped.");
+  const jobs = (await run("job_list", {})).details.jobs;
+  expect(["stopping", "stopped"]).toContain(jobs.at(-1).status);
 });

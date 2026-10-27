@@ -23,6 +23,21 @@ export const MAX_ACTIVE_JOBS = 16;
 export const MAX_RETAINED_JOBS = 50;
 export const LOG_CAPACITY = 128_000;
 export const MAX_WAIT_MS = 300_000;
+/** How often a wait checks for a queued user message. */
+export const PENDING_MESSAGE_POLL_MS = 250;
+/** Output waits return after this much quiet, or this long after the first new output. */
+export const OUTPUT_QUIET_MS = 25;
+export const OUTPUT_BATCH_MS = 250;
+/** Why a bounded wait returned. */
+export type WaitEnd = "exit" | "output" | "deadline" | "interrupted" | "message";
+export interface WaitOptions {
+  signal?: AbortSignal;
+  /** `output` also returns once output arrives past `cursor` (default: the current end). */
+  until?: "exit" | "output";
+  cursor?: number;
+  /** Polled while waiting; true ends the wait with `message`. */
+  pending?: () => boolean;
+}
 /** How long output may keep arriving after the process group is gone before escaped holders are detached. */
 export const DRAIN_MS = 500;
 /** Extra time shutdown allows beyond the TERM grace period before abandoning stuck jobs. */
@@ -198,20 +213,46 @@ export class JobService {
     return this.snapshot(job);
   }
 
+  /** Wait for exit or the deadline; rejects on cancellation. */
   async wait(id: string, milliseconds = 1000, signal?: AbortSignal): Promise<JobSnapshot> {
     signal?.throwIfAborted();
+    if (await this.waitFor(id, milliseconds, { signal }) === "interrupted") throw new Error("Wait cancelled; the job is still managed. Use job_stop to stop it.");
+    return this.get(id);
+  }
+
+  /** Bounded wait that resolves why it ended instead of rejecting. Never stops the job. */
+  async waitFor(id: string, milliseconds: number, options: WaitOptions = {}): Promise<WaitEnd> {
     if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > MAX_WAIT_MS) throw new Error(`Wait must be 0–${MAX_WAIT_MS} milliseconds.`);
     const job = this.require(id);
-    if (!isActive(job.snapshot.status) || milliseconds === 0) return this.snapshot(job);
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => { cleanup(); resolve(); };
-      const abort = () => { cleanup(); reject(new Error("Wait cancelled; the job is still managed. Use job_stop to stop it.")); };
-      const timer = setTimeout(finish, milliseconds);
-      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); unsubscribe(); };
-      const unsubscribe = this.subscribe((snapshot, output) => { if (snapshot.id === id && !output && !isActive(snapshot.status)) finish(); });
+    const { signal, until = "exit", cursor = job.log.end, pending } = options;
+    const queued = () => { try { return !!pending?.(); } catch { return false; } };
+    if (!isActive(job.snapshot.status)) return "exit";
+    if (signal?.aborted) return "interrupted";
+    if (milliseconds === 0) return "deadline";
+    if (queued()) return "message";
+    return new Promise<WaitEnd>((resolve) => {
+      let quiet: ReturnType<typeof setTimeout> | undefined;
+      let batch: ReturnType<typeof setTimeout> | undefined;
+      const finish = (end: WaitEnd) => {
+        clearTimeout(deadline); clearTimeout(quiet); clearTimeout(batch); clearInterval(poll);
+        signal?.removeEventListener("abort", abort);
+        unsubscribe();
+        resolve(end);
+      };
+      const abort = () => finish("interrupted");
+      const check = () => {
+        if (!isActive(job.snapshot.status)) return finish("exit");
+        if (until !== "output" || job.log.end <= cursor) return;
+        clearTimeout(quiet);
+        quiet = setTimeout(() => finish("output"), OUTPUT_QUIET_MS);
+        batch ??= setTimeout(() => finish("output"), OUTPUT_BATCH_MS);
+      };
+      const deadline = setTimeout(() => finish("deadline"), milliseconds);
+      const poll = pending ? setInterval(() => { if (queued()) finish("message"); }, PENDING_MESSAGE_POLL_MS) : undefined;
+      const unsubscribe = this.subscribe((snapshot) => { if (snapshot.id === id) check(); });
       signal?.addEventListener("abort", abort, { once: true });
+      check();
     });
-    return this.snapshot(job);
   }
 
   /** Stop every job. Bounded: jobs still unsettled after grace + slack are detached and marked stopped. */

@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { registerOverlayCard, type OverlayCardHandle } from "../overlay-stack/index.ts";
 import { TranscriptView } from "../../lib/transcript/view.ts";
 import { elapsed } from "../working-status/state.ts";
-import { JobService, isActive, LOG_CAPACITY, MAX_RETAINED_JOBS, MAX_WAIT_MS, type JobSnapshot } from "./service.ts";
+import { JobService, isActive, LOG_CAPACITY, MAX_RETAINED_JOBS, MAX_WAIT_MS, type JobSnapshot, type WaitEnd } from "./service.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { outputWindow, PlainOutput } from "../../lib/output.ts";
 import { redactText } from "../../lib/redact.ts";
@@ -73,6 +73,19 @@ interface ReadRequest {
   /** Advance the per-job agent cursor. UI-only reads leave it untouched. */
   track?: boolean;
   hint?: boolean;
+  wait?: WaitInfo;
+}
+/** One bounded job_wait/job_output wait, observed at `observedAt`; `end` is unset while waiting. */
+interface WaitInfo { startedAt: number; limitMs: number; observedAt: number; end?: WaitEnd }
+
+/**
+ * Explain a wait that ended for a reason other than the job itself. Otherwise an
+ * interrupted wait reads like an empty poll, and a quiet job looks hung.
+ */
+function waitNote(wait: WaitInfo): string | undefined {
+  const waited = elapsed(wait.observedAt - wait.startedAt);
+  if (wait.end === "interrupted") return `The user interrupted this wait after ${waited}; the job is still running, so this does not mean it hung.`;
+  if (wait.end === "message") return `This wait ended after ${waited} because a new user message is queued; the job is still running.`;
 }
 
 export default function backgroundJobsExtension(pi: ExtensionAPI): void {
@@ -138,6 +151,8 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     if (output.lost) header.push(`${output.lost} older characters were evicted from the bounded log.`);
     if (job.error) header.push(job.error);
     if (!live) header.push("Historical record: only the saved output tail is available; no process was resumed.");
+    const note = request.wait && isActive(job.status) ? waitNote(request.wait) : undefined;
+    if (note) header.push(note);
     if (live && isActive(job.status) && request.hint !== false) header.push(`Still running — job_wait id=${id} waits for the exit status; job_stop id=${id} stops it.`);
     const marker = output.omitted ? `[earlier output omitted (${output.omitted} chars); use cursor ${output.from} to read from the start]\n` : "";
     const text = `${header.join("\n")}\n\n${marker}${output.text || (marker ? "" : "No new output.")}`;
@@ -146,7 +161,21 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       managed: true, id, name: job.name, status: job.status, exitCode: job.code, signal: job.signal,
       startedAt: job.startedAt, endedAt: job.endedAt, durationMs,
       cursor: output.cursor, more: output.more, lost: output.lost, omitted: output.omitted,
+      ...(request.wait ? { wait: request.wait } : {}),
     } };
+  };
+  /**
+   * Wait for exit (or with `until: "output"`, new output), then read. Returns a
+   * normal result when the user interrupts or queues a message: the job keeps running.
+   */
+  const waitAndRead = async (jobs: JobService, id: string, request: ReadRequest, limitMs: number,
+    options: { signal?: AbortSignal; ctx?: ExtensionContext; until?: "exit" | "output" }) => {
+    if (!limitMs || !isActive(jobs.get(id).status)) return result(id, request, jobs);
+    const { signal, ctx, until } = options;
+    const startedAt = Date.now();
+    const end = await jobs.waitFor(id, limitMs, { signal, until, cursor: request.cursor ?? agentCursors.get(id) ?? 0,
+      pending: ctx ? () => ctx.hasPendingMessages() : undefined });
+    return result(id, { ...request, wait: { startedAt, limitMs, observedAt: Date.now(), end } }, jobs);
   };
   const renderResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext) => renderJobResult(value, options, theme, context);
   const renderStartResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext, renderer = renderResult) => {
@@ -202,9 +231,11 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       const ticker = onUpdate ? setInterval(publish, 1000) : undefined;
       ticker?.unref?.();
       publish();
-      try { await jobs.wait(job.id, params.yield_ms, signal); }
-      catch (error) { jobs.stop(job.id); throw error; }
+      let end: WaitEnd;
+      try { end = await jobs.waitFor(job.id, params.yield_ms, { signal }); }
       finally { stopped = true; unsubscribe?.(); if (refresh) clearTimeout(refresh); if (ticker) clearInterval(ticker); }
+      // Like Pi's built-in bash, cancelling the initial wait stops the command.
+      if (end === "interrupted") { jobs.stop(job.id); throw new Error("Command cancelled; the job was stopped."); }
       if (isActive(jobs.get(job.id).status)) controls.activate(JOB_CONTROLS);
       return result(job.id, { budget: outputBudget(params.max_chars) }, jobs);
   };
@@ -277,16 +308,16 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   for (const name of ["job_output", "job_wait"] as const) pi.registerTool({
     name, label: name === "job_wait" ? "Wait for job" : "Read job output",
     description: name === "job_wait"
-      ? `Wait for a managed job to exit, up to wait_ms (default and cap ${MAX_WAIT_MS}), then return its status and output since your last read. Cancelling a wait leaves the job running.`
+      ? `Wait for a managed job to exit, up to wait_ms (default and cap ${MAX_WAIT_MS}), then return its status and output since your last read. Waits end early, leaving the job running, when the user interrupts or sends a message.`
       : "Read managed job output without waiting (wait_ms optional). Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
     parameters: readParameters,
     prepareArguments: argumentAliases(readParameters),
     renderShell: "self",
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _update, ctx) {
       const jobs = service;
-      if (jobs.list().some((job) => job.id === params.id)) await jobs.wait(params.id, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), signal);
-      else signal?.throwIfAborted();
-      return result(params.id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, jobs);
+      const request = { cursor: params.cursor, budget: outputBudget(params.max_chars) };
+      if (!jobs.list().some((job) => job.id === params.id)) { signal?.throwIfAborted(); return result(params.id, request, jobs); }
+      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), { signal, ctx });
     },
     renderCall: (args, theme, context) => jobHeading(`${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });

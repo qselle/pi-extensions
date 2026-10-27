@@ -33,7 +33,13 @@ at 30000), `max_chars` (output budget, default 24000, capped at 50000),
 finish inline. Longer commands return a job ID and a hint to call `job_wait`;
 use it for the final status and exit code. Commands that fail during the initial
 wait return an error result that still carries the job details. Cancelling the
-initial wait stops the command; cancelling a later `job_wait` leaves it running.
+initial wait stops the command, like Pi's built-in bash.
+
+Later `job_wait` and `job_output` waits never stop the job. When the user
+interrupts one, or queues a message (checked every 250 ms), the wait returns a
+normal result: the output so far, an advanced cursor, and a note that the job is
+still running and not hung. Its card shows “interrupted after 12s” or “new
+message after 12s”.
 The 16-job limit also applies to bash calls.
 
 Pipe jobs start with stdin closed, so commands that read input see EOF instead
@@ -68,7 +74,7 @@ The agent can also use:
 - `job_list`: inspect active and recently finished jobs.
 - `job_wait`: wait for the job to exit, up to `wait_ms` (default and cap
   300000; larger values are clamped, not rejected), then return its status and
-  output. Cancelling that wait leaves the job managed.
+  output. An interrupted wait leaves the job managed.
 - `job_output`: read output without waiting (`wait_ms` defaults to 0).
 - `job_write`: write literal stdin text, optionally sending EOF. Pipe jobs need
   `stdin: true` at start. Cancelling or timing out a backpressured pipe write
@@ -133,6 +139,7 @@ Managed `bash` and job results set `details` for renderers:
 | `startedAt`, `endedAt` | Epoch milliseconds; `endedAt` is absent while running |
 | `durationMs` | Elapsed time, so far for active jobs; absent for `interrupted` |
 | `cursor`, `more`, `lost`, `omitted` | Read position, another page available, evicted and skipped characters |
+| `wait` | For waits: `startedAt`, `limitMs`, `observedAt`, and `end` (`exit`, `output`, `deadline`, `interrupted`, or `message`; unset while waiting) |
 
 Managed `bash` also declares an output schema and returns `structuredContent`,
 which programmatic callers such as codemode scripts receive instead of the text.
