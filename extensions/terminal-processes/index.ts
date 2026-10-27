@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
-import { ENTRY, plain, TerminalProcesses } from "./service.ts";
+import { toolPurposeParameter } from "../../lib/tool-purpose.ts";
+import { renderCall, renderResult } from "./render.ts";
+import { ENTRY, TerminalProcesses } from "./service.ts";
 
 export default function terminalProcesses(pi: ExtensionAPI, options: ConstructorParameters<typeof TerminalProcesses>[1] = {}) {
   const service = new TerminalProcesses((record) => pi.appendEntry(ENTRY, record), options);
@@ -27,15 +27,9 @@ export default function terminalProcesses(pi: ExtensionAPI, options: Constructor
         press_enter: Type.Optional(Type.Boolean({ description: "Submit input with Enter; default true." })),
       }),
       execute: async (_id, args, signal, _update, ctx) => service.execute(args as Parameters<typeof service.execute>[0], ctx, signal),
-      renderCall: (args, theme) => {
-        const purpose = toolPurpose(args.purpose);
-        return new Text(theme.fg("accent", `Terminal · ${plain(String(args.action ?? "process"))}`) + (purpose ? theme.fg("muted", ` · ${purpose}`) : ""), 0, 0);
-      },
-      renderResult: (result, options, theme) => {
-        const text = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-        const rows = plain(text).split("\n");
-        return new Text(theme.fg("muted", (options.expanded ? rows : rows.slice(0, 8)).join("\n") + (!options.expanded && rows.length > 8 ? "\n… expand for more" : "")), 0, 0);
-      },
+      renderShell: "self",
+      renderCall: (args, theme, context) => renderCall(args as Parameters<typeof renderCall>[0], theme, context),
+      renderResult: (result, options, theme, context) => renderResult(result as Parameters<typeof renderResult>[0], options, theme, context),
     });
   });
   pi.on("session_tree", (_event, ctx) => service.restore(ctx));
