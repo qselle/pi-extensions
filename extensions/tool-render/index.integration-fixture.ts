@@ -129,6 +129,10 @@ const rows = call.render(24);
 assert(rows.join("\n").includes("first-line"));
 assert(rows.join("").includes("second-line"));
 assert(rows.length > 2, "long commands must wrap instead of collapsing to the first line");
+const chain = "cd /a/long/project/path && bun test --coverage && git diff --check";
+const chained = bash.renderCall({ command: chain }, theme, { args: { command: chain }, executionStarted: true, isPartial: true, expanded: true })
+  .render(40).map((row: string) => stripVTControlCharacters(row).trimEnd());
+assert.deepEqual(chained.slice(1), ["  │ cd /a/long/project/path &&", "  │ bun test --coverage &&", "  │ git diff --check"]);
 const detail = "The operation failed because the requested source cannot be read. Check the final permission setting.";
 const wrapped = read.renderResult({ content: [{ type: "text", text: detail }] }, {}, theme, ctx).render(30).join("\n");
 assert(wrapped.includes("setting."), wrapped);

@@ -45,11 +45,11 @@ import {
 } from "./render.ts";
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
 import { codemodeRestyler } from "./codemode.ts";
-import { commandPanel } from "./command-panel.ts";
+import { shellPanel } from "./command-panel.ts";
 import { baseRevision, fit, Lines } from "./lines.ts";
 import { executeWriteWithDiff } from "./write-diff.ts";
 import { bashOutcome, type BashOutcome } from "./bash-status.ts";
-import { BULLET, bashBody, bashStatus, branchBody, clearBashTimes, highlightPreview, highlightSource, noteBashTime, wrapRows } from "./card.ts";
+import { BULLET, bashBody, bashStatus, branchBody, clearBashTimes, highlightPreview, noteBashTime, sourceHighlighter, wrapRows } from "./card.ts";
 import {
 	EXPLORATION_TOOLS,
 	bindLeaderRerender,
@@ -280,7 +280,8 @@ function makeRenderCall(name: ToolName) {
 		const command = name === "bash"
 			? new PlainOutput().push(String(a?.command ?? "")).replace(/\t/g, "    ").replace(/^\n+|\n+$/g, "")
 			: "";
-		const highlighted = memo(() => highlightSource(command, "bash", theme));
+		// The layout depends on width; each layout is highlighted once.
+		const highlight = sourceHighlighter("bash", theme);
 		const build = (width: number): string[] => {
 			const verbText = actionVerb(name, ctx);
 			const verb = theme.bold(theme.fg("text", verbText));
@@ -298,7 +299,7 @@ function makeRenderCall(name: ToolName) {
 				// Clip the caption, never the status.
 				const header = status ? fit(left, Math.max(1, width - visibleWidth(status))) + status : left;
 				if (!command.trim()) return [header];
-				return [header, ...commandPanel(highlighted(), width, theme, !!ctx?.expanded)];
+				return [header, ...shellPanel(command, width, theme, !!ctx?.expanded, highlight)];
 			}
 			const target = targetFor(name, a);
 			if (!target) return [`${bullet(theme, ctx)} ${verb}`];

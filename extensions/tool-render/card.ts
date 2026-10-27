@@ -41,6 +41,15 @@ export function highlightSource(source: string, language: string, theme: Theme):
 	return theme.fg("text", colored.replace(/\x1b\[39m/g, base));
 }
 
+/** Highlights each distinct source once; running cards rebuild every frame. */
+export function sourceHighlighter(language: string, theme: Theme): (source: string) => string {
+	let last: { source: string; colored: string } | undefined;
+	return (source) => {
+		if (last?.source !== source) last = { source, colored: highlightSource(source, language, theme) };
+		return last.colored;
+	};
+}
+
 /** Below this width, wrapping multiplies rows without making text readable. */
 const MIN_WRAP_WIDTH = 12;
 

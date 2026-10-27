@@ -21,7 +21,7 @@ import { PlainOutput } from "../../lib/output.ts";
 import { commandPurpose } from "../../lib/tool-purpose.ts";
 import { expansionHint } from "../../lib/tool-ui.ts";
 import { formatElapsed } from "./bash-status.ts";
-import { BULLET, bashBody, bashStatus, highlightSource, wrapRows } from "./card.ts";
+import { BULLET, bashBody, bashStatus, highlightSource, sourceHighlighter, wrapRows } from "./card.ts";
 import { commandPanel } from "./command-panel.ts";
 import { fit, Lines } from "./lines.ts";
 
@@ -255,12 +255,7 @@ function withRenderers(definition: ToolDefinition<any, any>): ToolDefinition<any
 		renderCall: (_args: any, theme: Theme, ctx: any): Component => {
 			const state = ctx?.state ?? {};
 			const code = typeof ctx?.args?.code === "string" ? ctx.args.code : "";
-			// Running cards rebuild every frame; highlight each script source once.
-			let cached: { source: string; colored: string } | undefined;
-			const highlight = (source: string): string => {
-				if (cached?.source !== source) cached = { source, colored: highlightSource(source, "javascript", theme) };
-				return cached.colored;
-			};
+			const highlight = sourceHighlighter("javascript", theme);
 			const view = (): CodemodeView => ({ code, result: state.codemodeResult, partial: ctx?.isPartial !== false,
 				started: !!ctx?.executionStarted, error: !!ctx?.isError, expanded: !!ctx?.expanded, id: ctx?.toolCallId });
 			return new Lines((width) => renderCodemodeCard(view(), theme, width, highlight), "Ran script", { volatile: ctx?.isPartial !== false });

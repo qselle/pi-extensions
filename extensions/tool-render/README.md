@@ -155,6 +155,9 @@ Expanded exploration calls show their individual output, including calls hidden 
 `Ctrl+O` expands output. File targets use the shared helpers from [`hyperlinks`](../hyperlinks/). Enabling that extension is optional; it adds `/hyperlinks` mode controls and `/open-path`. Every rendered line is width-bounded; rendering errors fall back to a plain line.
 
 Shell command lines wrap to the panel's inner width, including long tokens.
+Lines that do not fit break after top-level `&&`, `||`, `|` and `;`, then
+between words, outside quotes and `$(…)`, with a two-space continuation indent.
+Lines that fit and heredoc bodies keep their source layout.
 Collapsed commands show four visual rows, expanded commands up to 128, followed
 by an omitted-row count when needed. Tabs display as four spaces; the executed
 argument and saved source remain unchanged. Very narrow widths shed indentation
