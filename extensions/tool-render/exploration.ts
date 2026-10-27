@@ -35,6 +35,8 @@ interface Group {
 	leaderId: string;
 	calls: Call[];
 	accepting: boolean;
+	/** Changes whenever this group's rows or activity can render differently. */
+	revision: number;
 	rerender?: () => void;
 }
 
@@ -42,11 +44,19 @@ const groups = new Map<string, Group>();
 const callToGroup = new Map<string, string>();
 let currentId: string | undefined;
 let seq = 0;
-let revision = 0;
+let epoch = 0;
 
-/** Changes whenever any group's rows or activity can render differently. */
-export function explorationRevision(): number {
-	return revision;
+/**
+ * Rows of a call depend on its group, which siblings change without recreating
+ * the call's card. Only that group's changes, or a reset, invalidate it.
+ */
+export function explorationRevision(id: string | undefined): string {
+	return `${epoch}:${groupOf(id)?.revision ?? -1}`;
+}
+
+function changed(g: Group): void {
+	g.revision++;
+	g.rerender?.();
 }
 
 export function readRange(args: any): string | undefined {
@@ -77,14 +87,13 @@ export function noteStart(id: string, name: string, args: any): void {
 	if (!act) return;
 	let g = currentId ? groups.get(currentId) : undefined;
 	if (!g || !g.accepting) {
-		g = { id: `explore-${++seq}`, leaderId: id, calls: [], accepting: true };
+		g = { id: `explore-${++seq}`, leaderId: id, calls: [], accepting: true, revision: 0 };
 		groups.set(g.id, g);
 		currentId = g.id;
 	}
 	g.calls.push({ ...act, id, status: "pending", index: g.calls.length });
 	callToGroup.set(id, g.id);
-	revision++;
-	g.rerender?.();
+	changed(g);
 }
 
 export function noteEnd(id: string, isError: boolean, count?: string): void {
@@ -93,8 +102,7 @@ export function noteEnd(id: string, isError: boolean, count?: string): void {
 	if (g && c) {
 		c.status = isError ? "error" : "done";
 		if (count) c.count = count;
-		revision++;
-		g.rerender?.();
+		changed(g);
 	}
 }
 
@@ -104,8 +112,7 @@ export function closeGroup(): void {
 	currentId = undefined;
 	if (g) {
 		g.accepting = false;
-		revision++;
-		g.rerender?.();
+		changed(g);
 	}
 }
 
@@ -251,5 +258,5 @@ export function resetExploration(): void {
 	callToGroup.clear();
 	currentId = undefined;
 	seq = 0;
-	revision++;
+	epoch++;
 }

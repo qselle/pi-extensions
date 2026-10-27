@@ -3,6 +3,7 @@ import {
 	activityFor,
 	bindLeaderRerender,
 	closeGroup,
+	explorationRevision,
 	groupState,
 	isLeader,
 	noteEnd,
@@ -204,5 +205,25 @@ describe("saved exploration", () => {
 		expect(groupState("a")).toBeUndefined();
 		expect(groupState("b")).toBeUndefined();
 		expect(isLeader("new")).toBe(true);
+	});
+});
+
+describe("explorationRevision", () => {
+	test("changes only for the affected group, and for every card on reset", () => {
+		noteStart("a1", "read", { path: "a.ts" });
+		closeGroup();
+		noteStart("b1", "read", { path: "b.ts" });
+		const settled = explorationRevision("a1");
+		const before = explorationRevision("b1");
+		noteStart("b2", "grep", { pattern: "x" });
+		noteEnd("b2", false, "1 match");
+		closeGroup();
+		expect(explorationRevision("a1")).toBe(settled);
+		expect(explorationRevision("b1")).not.toBe(before);
+		expect(explorationRevision("b2")).toBe(explorationRevision("b1"));
+		const loose = explorationRevision("unknown");
+		resetExploration();
+		expect(explorationRevision("a1")).not.toBe(settled);
+		expect(explorationRevision("unknown")).not.toBe(loose);
 	});
 });

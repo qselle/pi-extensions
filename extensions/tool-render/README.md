@@ -178,7 +178,8 @@ Pi repaints every card on each frame. Settled cards build their rows once per
 width (up to four widths) and repaint them byte-identically; command and diff
 highlighting runs once per card. Pi recreates a card when its arguments, result,
 expansion or theme change. Group membership, syntax highlighter readiness and the
-hyperlink mode are also checked, so changes there rebuild affected cards. Running
+hyperlink mode are also checked, so changes there rebuild affected cards. A change
+to one exploration group rebuilds only that group's cards. Running
 and streaming cards rebuild on every frame.
 
 ### Saved-history benchmark

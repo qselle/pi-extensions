@@ -70,7 +70,7 @@ const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
 const TIMED_TOOLS = new Set(["bash", "codemode"]);
 
 /** Grouped rows also depend on sibling calls, which change without recreating the leader. */
-const groupedRevision = (): string => `${baseRevision()}:${explorationRevision()}`;
+const groupedRevision = (id: string | undefined) => (): string => `${baseRevision()}:${explorationRevision(id)}`;
 
 function bullet(theme: Theme, ctx: any): string {
 	return theme.fg(ctx?.isError ? "error" : ctx?.executionStarted && ctx?.isPartial ? "accent" : "muted", BULLET);
@@ -259,7 +259,7 @@ function makeRenderCall(name: ToolName) {
 			const state = groupState(ctx?.toolCallId)!;
 			bindExploration(ctx);
 			return explorationBlock(state.rows, state.active, theme, width, ctx?.cwd ?? process.cwd());
-		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision });
+		}, "", { volatile: !!ctx?.isPartial, revision: groupedRevision(ctx?.toolCallId) });
 		// Completed edit/write counts need the result patch. Streaming and running
 		// cards show the intended size without claiming any change succeeded.
 		if (name === "edit" || name === "write") return new Lines((width) => ctx?.isPartial ? [diffHeadline(name, theme, ctx, width)] : [], "", { volatile: !!ctx?.isPartial });
@@ -326,7 +326,7 @@ function makeRenderResult(name: ToolName) {
 				const st = groupState(ctx?.toolCallId)!;
 				bindExploration(ctx);
 				return explorationBlock(st.rows, st.active, theme, width, ctx?.cwd ?? process.cwd());
-			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision });
+			}, summarize(name, result, ctx?.args) || "done", { volatile: !!opts?.isPartial, revision: groupedRevision(ctx?.toolCallId) });
 		}
 		// Pi creates the call component first and renders both later, so the
 		// call headline can show the outcome recorded here.
