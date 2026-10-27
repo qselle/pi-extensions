@@ -12,6 +12,7 @@ mock.module("typebox", () => ({
     Integer: (options?: unknown) => ({ type: "integer", ...options as object }),
     Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...options as object }),
     Optional: (schema: unknown) => schema,
+    Union: (anyOf: unknown[]) => ({ anyOf }),
   },
 }));
 
@@ -308,6 +309,7 @@ test("requires the same blocker in three separate runs", async () => {
     await pi.emit("tool_execution_end", {}, ctx);
     await pi.emit("agent_settled", {}, ctx);
     expect(result.details.blockerCount).toBe(run);
+    expect(result.terminate).toBe(run === 3 ? true : undefined);
   }
 
   expect(pi.entries.at(-1).data.goal.status).toBe("blocked");
@@ -841,4 +843,99 @@ test("a provider error retried within the settled run keeps the goal active and 
   expect(pi.sent).toHaveLength(2);
   await pi.commands.get("goal").handler("pause", ctx);
   await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("budgets ignore cached prompt reads and usage persists only when the run settles", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("create_goal").execute("create", { objective: "Count real tokens", token_budget: 1_000 }, undefined, undefined, ctx);
+  const entries = pi.entries.length;
+  const message = assistantMessage(900);
+  message.usage.cacheRead = 800;
+  await pi.emit("message_end", { message }, ctx);
+  expect(pi.entries).toHaveLength(entries);
+  await pi.emit("agent_settled", {}, ctx);
+  expect(pi.entries.at(-1).data.goal).toMatchObject({ status: "active", tokensUsed: 100 });
+  await pi.commands.get("goal").handler("pause", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("create_goal accepts plain checks and starts the first pending one", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  const result = await pi.tools.get("create_goal").execute("create", {
+    objective: "Ship with checks",
+    checks: ["Implement", { content: "Verify", status: "pending" }],
+  }, undefined, undefined, ctx);
+  expect(result.details.goal.checks).toEqual([
+    { content: "Implement", status: "in_progress" },
+    { content: "Verify", status: "pending" },
+  ]);
+  await pi.commands.get("goal").handler("pause", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("/goal complete reports stats and emits completion; /goal block stays out of attention alerts", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  const completions: unknown[] = [];
+  const attention: unknown[] = [];
+  pi.events.on(GOAL_COMPLETED_EVENT, (event) => completions.push(event));
+  pi.events.on("goal:attention", (event) => attention.push(event));
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("Finish by hand", ctx);
+  await pi.commands.get("goal").handler("complete", ctx);
+  expect(pi.entries.at(-1).data.goal.status).toBe("complete");
+  expect(completions).toHaveLength(1);
+  expect(ctx.notifications.at(-1)).toBe("Goal complete · 0 runs · 0s · 0 tokens");
+
+  await pi.commands.get("goal").handler("Second objective", ctx);
+  await pi.commands.get("goal").handler("block", ctx);
+  await Promise.resolve();
+  expect(pi.entries.at(-1).data.goal).toMatchObject({ status: "blocked", stallReason: "Blocked by the user." });
+  expect(attention).toHaveLength(0);
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("startup offers to resume, keep, or clear an inactive goal", async () => {
+  for (const [choice, expected] of [["Resume goal", "active"], ["Keep paused", "paused"], ["Clear goal", null]] as const) {
+    const pi = new MockPi();
+    const ctx: any = mockContext(pi);
+    const prompts: string[][] = [];
+    ctx.ui.select = async (_title: string, options: string[]) => { prompts.push(options); return choice; };
+    pi.appendEntry("goal-state", { version: 2, goal: { ...createGoal("Paused work"), status: "paused" } });
+    goalExtension(pi as any);
+    await pi.emit("session_start", { reason: "reload" }, ctx);
+    expect(prompts).toHaveLength(0);
+    await pi.emit("session_start", { reason: "startup" }, ctx);
+    await Bun.sleep(0);
+    expect(prompts).toEqual([["Resume goal", "Keep paused", "Clear goal"]]);
+    expect(pi.entries.at(-1).data.goal?.status ?? null).toBe(expected);
+    if (expected === "active") await pi.commands.get("goal").handler("pause", ctx);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
+});
+
+test("automatic continuation runs for RPC clients but not headless modes", async () => {
+  for (const [hasUI, sent] of [[true, 1], [false, 0]] as const) {
+    const pi = new MockPi();
+    const ctx: any = mockContext(pi);
+    ctx.mode = hasUI ? "rpc" : "json";
+    ctx.hasUI = hasUI;
+    goalExtension(pi as any);
+    await pi.emit("session_start", {}, ctx);
+    await pi.commands.get("goal").handler("Continue over RPC", ctx);
+    await Bun.sleep(40);
+    expect(pi.sent).toHaveLength(sent);
+    await pi.commands.get("goal").handler("pause", ctx);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
 });

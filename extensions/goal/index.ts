@@ -22,8 +22,10 @@ import {
   editGoalObjective,
   formatDuration,
   formatTokens,
+  goalBudgetTokens,
   goalCheckProgress,
   goalChecksComplete,
+  normalizeNewGoalChecks,
   recordGoalBlocker,
   recordRunTools,
   reportGoalProgress,
@@ -94,7 +96,7 @@ const ReconcileGoalParameters = Type.Object({
 });
 const CreateGoalParameters = Type.Object({
   objective: Type.String({ description: "The complete objective explicitly requested by the user." }),
-  checks: Type.Optional(Type.Array(GoalCheckParameters, { maxItems: 8 })),
+  checks: Type.Optional(Type.Array(Type.Union([Type.String(), GoalCheckParameters]), { maxItems: 8, description: "Strings are pending checks; the first pending check starts in progress." })),
   token_budget: Type.Optional(Type.Integer({ minimum: 1, description: "Set only when the user explicitly requests a token budget." })),
 });
 const ReportGoalProgressParameters = Type.Object({
@@ -183,13 +185,14 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   const syncAnchor = (ctx: AnchorContext) => goalAnchor.sync(pi, ctx, goal, goal ? { goalId: goal.id, status: goal.status } : { status: "cleared" });
 
-  const save = (ctx?: ExtensionContext) => {
+  /** `attention: false` keeps user-initiated stops out of attention alerts. */
+  const save = (ctx?: ExtensionContext, attention = true) => {
     persist();
     overlayCard.invalidate();
     const nextStatus = goal ? `${goal.id}:${goal.status}` : undefined;
     const changed = nextStatus !== savedGoalStatus;
     savedGoalStatus = nextStatus;
-    if (!goal || !isGoalAttentionStatus(goal.status)) { pendingAttention = undefined; return; }
+    if (!attention || !goal || !isGoalAttentionStatus(goal.status)) { pendingAttention = undefined; return; }
     const sessionId = ctx?.sessionManager.getSessionId?.();
     if (!changed || !sessionId) return;
     pendingAttention = {
@@ -209,11 +212,12 @@ export default function goalExtension(pi: ExtensionAPI) {
     });
   };
 
-  const emitPendingCompletion = () => {
+  const emitPendingCompletion = (ctx?: ExtensionContext) => {
     const pending = pendingCompletion;
     if (!pending) return;
     pendingCompletion = undefined;
     if (!goal || goal.id !== pending.goalId || goal.status !== "complete") return;
+    ctx?.ui.notify(`Goal complete · ${goalStats(goal)}`, "info");
     pi.events.emit(
       GOAL_COMPLETED_EVENT,
       createGoalCompletedEvent(goal, pending.completionId, pending.completedAt),
@@ -227,7 +231,8 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   const scheduleContinuation = (ctx: ExtensionContext) => {
     stopContinuationTimer();
-    if (ctx.mode !== "tui" || !goal || goal.status !== "active" || goal.reconciliation) return;
+    // TUI and RPC clients can observe and interrupt automatic runs; print and JSON modes cannot.
+    if (!ctx.hasUI || !goal || goal.status !== "active" || goal.reconciliation) return;
     const expectedGoalId = goal.id;
 
     continuationTimer = setTimeout(() => {
@@ -329,15 +334,14 @@ export default function goalExtension(pi: ExtensionAPI) {
     scheduleContinuation(ctx);
   };
 
-  const clearGoal = async (ctx: ExtensionCommandContext) => {
+  const clearGoal = async (ctx: ExtensionContext, confirm = true) => {
     if (!goal) {
       ctx.ui.notify("No goal is currently set.", "info");
       return;
     }
     const snapshot = goal;
     const generation = sessionGeneration;
-    const confirmed = await ctx.ui.confirm("Clear goal?", "The goal card and automatic continuation will stop.");
-    if (!confirmed) return;
+    if (confirm && !await ctx.ui.confirm("Clear goal?", "The goal card and automatic continuation will stop.")) return;
     if (generation !== sessionGeneration || snapshot !== goal) return;
     stopContinuationTimer();
     goal = undefined;
@@ -366,6 +370,46 @@ export default function goalExtension(pi: ExtensionAPI) {
     } catch (error) {
       ctx.ui.notify(errorMessage(error), "error");
     }
+  };
+
+  const completeGoalFromCommand = (ctx: ExtensionContext) => {
+    if (!goal || goal.status === "complete") {
+      ctx.ui.notify(goal ? "The goal is already complete." : "No goal is currently set.", "warning");
+      return;
+    }
+    stopContinuationTimer();
+    const completedAt = Date.now();
+    goal = { ...setGoalStatus(goal, "complete", completedAt), reconciliation: undefined };
+    currentRequestId = undefined;
+    pendingCompletion = { goalId: goal.id, completionId: crypto.randomUUID(), completedAt };
+    save(ctx);
+    if (!agentRunning) emitPendingCompletion(ctx);
+  };
+
+  const blockGoalFromCommand = (ctx: ExtensionContext) => {
+    if (!goal || goal.status === "complete" || goal.status === "blocked") {
+      ctx.ui.notify(goal ? `The goal is ${goal.status.replace("_", " ")}.` : "No goal is currently set.", "warning");
+      return;
+    }
+    stopContinuationTimer();
+    goal = { ...setGoalStatus(goal, "blocked"), stallReason: "Blocked by the user.", reconciliation: undefined };
+    currentRequestId = undefined;
+    save(ctx, false);
+    ctx.ui.notify("Goal blocked.", "info");
+  };
+
+  const offerResume = async (ctx: ExtensionContext) => {
+    const snapshot = goal;
+    if (!snapshot || !isResumable(snapshot)) return;
+    const generation = sessionGeneration;
+    const status = snapshot.status.replace("_", " ");
+    const objective = truncateToWidth(snapshot.objective.replace(/\s+/g, " "), 120, "\u2026");
+    const choice = await ctx.ui.select(`Resume ${status} goal? ${objective}`, ["Resume goal", `Keep ${status}`, "Clear goal"]);
+    if (generation !== sessionGeneration || snapshot !== goal) return;
+    if (choice === "Resume goal") resumeGoal(ctx);
+    else if (choice === "Clear goal") await clearGoal(ctx, false);
+    else return;
+    syncAnchor(ctx);
   };
 
   const setGoalFromCommand = async (objective: string, ctx: ExtensionCommandContext) => {
@@ -432,9 +476,9 @@ export default function goalExtension(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("goal", {
-    description: "Set or manage a persistent goal: /goal [<objective>|clear|edit|pause|resume]",
+    description: "Set or manage a persistent goal: /goal [<objective>|clear|edit|pause|resume|complete|block]",
     getArgumentCompletions: (prefix) => {
-      const commands = ["clear", "edit", "pause", "resume"];
+      const commands = ["clear", "edit", "pause", "resume", "complete", "block"];
       const items = commands
         .filter((command) => command.startsWith(prefix.toLowerCase()))
         .map((command) => ({ value: command, label: command }));
@@ -452,6 +496,8 @@ export default function goalExtension(pi: ExtensionAPI) {
             case "edit": await editGoal(ctx); break;
             case "pause": pauseGoal(ctx); break;
             case "resume": resumeGoal(ctx); break;
+            case "complete": completeGoalFromCommand(ctx); break;
+            case "block": blockGoalFromCommand(ctx); break;
             default: await setGoalFromCommand(input, ctx);
           }
         }
@@ -496,7 +542,7 @@ export default function goalExtension(pi: ExtensionAPI) {
         ctx,
         params.token_budget ?? null,
         agentRunning,
-        (params.checks ?? []) as GoalCheck[],
+        normalizeNewGoalChecks((params.checks ?? []) as (string | GoalCheck)[]),
       );
       return {
         content: [{ type: "text", text: goalResponse(created) }],
@@ -651,6 +697,8 @@ export default function goalExtension(pi: ExtensionAPI) {
           blockerRequired: BLOCKED_AUDIT_TURNS,
           duplicate: outcome.duplicate,
         } satisfies GoalToolDetails,
+        // A confirmed blocker ends the run instead of prompting another response.
+        ...(outcome.blocked ? { terminate: true } : {}),
       };
     },
     renderCall: (args, theme) => toolHeading(args.status === "complete" ? "Completing goal" : "Reporting blocker", theme),
@@ -730,7 +778,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
     // Usage is persisted when the run settles; only transitions save here.
     const previousStatus = goal.status;
-    goal = accountGoalUsage(goal, { tokens: message.usage.totalTokens });
+    goal = accountGoalUsage(goal, { tokens: goalBudgetTokens(message.usage) });
     overlayCard.invalidate();
 
     if (previousStatus === "active" && goal.status === "budget_limited") {
@@ -788,7 +836,7 @@ export default function goalExtension(pi: ExtensionAPI) {
       }
       save(ctx);
     }
-    emitPendingCompletion();
+    emitPendingCompletion(ctx);
 
     if (goal?.reconciliation && goal.status === "active") {
       goal = stallGoal(goal, RECONCILIATION_STALL_REASON);
@@ -856,7 +904,11 @@ export default function goalExtension(pi: ExtensionAPI) {
     scheduleContinuation(ctx);
   };
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
+  pi.on("session_start", (event, ctx) => {
+    restore(ctx);
+    // Not awaited: startup must not wait on the user.
+    if (ctx.hasUI && (event.reason === "startup" || event.reason === "resume")) void offerResume(ctx);
+  });
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_compact", (_event, ctx) => {
     overlayCard.invalidate();
@@ -920,6 +972,18 @@ function assistantMessageText(message: unknown): string | undefined {
     .join("\n")
     .trim();
   return text || undefined;
+}
+
+/** Inactive goals that /goal resume can restart. */
+function isResumable(goal: GoalState): boolean {
+  const exhausted = goal.tokenBudget !== null && goal.tokensUsed >= goal.tokenBudget;
+  return !exhausted && ["paused", "stalled", "blocked", "usage_limited"].includes(goal.status);
+}
+
+function goalStats(goal: GoalState): string {
+  const runs = `${goal.turns} ${goal.turns === 1 ? "run" : "runs"}`;
+  const tokens = goal.tokenBudget === null ? formatTokens(goal.tokensUsed) : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)}`;
+  return `${runs} · ${formatDuration(goal.timeUsedMs)} · ${tokens} tokens`;
 }
 
 function isUsageLimitError(message: string | undefined): boolean {

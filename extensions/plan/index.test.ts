@@ -11,6 +11,7 @@ mock.module("typebox", () => ({
     Boolean: (options?: unknown) => ({ type: "boolean", ...options as object }),
     Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...options as object }),
     Optional: (schema: unknown) => schema,
+    Union: (anyOf: unknown[]) => ({ anyOf }),
     Integer: (options?: unknown) => ({ type: "integer", ...options as object }),
   },
 }));
