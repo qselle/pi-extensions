@@ -106,7 +106,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     if (budget.phase === "exhausted" && !checkpointTool) {
       return { block: true, reason: hasNotes() ? "Emergency context budget exhausted. Pi rolls over to the saved notes after this turn." : "Emergency context budget exhausted. Write a context_notes checkpoint with the full objective, evidence, constraints and remaining work now." };
     }
-    if (budget.phase === "checkpoint" && !(event.toolName === "context_rollover" || event.toolName === "context_notes" && ["write", "delete"].includes(String(event.input.action)))) {
+    if (budget.phase === "checkpoint" && !checkpointTool) {
       return { block: true, reason: "Context working budget exhausted. Only context_notes write/delete and context_rollover are allowed: checkpoint the full objective, evidence, constraints and remaining work, then roll over." };
     }
   });
