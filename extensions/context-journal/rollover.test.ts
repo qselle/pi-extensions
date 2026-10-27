@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { contextBudget, installRollover, ROLLOVER_TEXT } from "./rollover.ts";
+import { BUDGET_REMINDER, contextBudget, installRollover, ROLLOVER_TEXT } from "./rollover.ts";
 import { emptyJournal } from "./state.ts";
 import { CHECKPOINT_ENTRY } from "./checkpoint.ts";
 
@@ -26,13 +26,22 @@ function fixture() {
     if (result?.entries) for (const entry of result.entries) { entries.push({ ...entry, id: `entry-${entries.length}` }); if (entry.type === "compaction") compactions++; }
     return result;
   };
-  return { handlers, tools, ctx, policy, state, entries, settle, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
+  const turn = (outcome = "completed") => handlers.get("turn_end")({ outcome, entries: [] }, ctx);
+  return { handlers, tools, ctx, policy, state, entries, settle, turn, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
 }
-test("warns once then permits only checkpoint writes and rollover", () => {
+test("persists each budget notice once per cycle and permits only checkpoint writes and rollover", () => {
   const f = fixture(); f.tokens(85000);
-  expect(f.handlers.get("context")({ messages: [] }, f.ctx).messages).toHaveLength(1);
-  expect(f.handlers.get("context")({ messages: [] }, f.ctx).messages).toHaveLength(0);
+  expect(f.turn("aborted")).toBeUndefined();
+  const reminder = f.turn();
+  expect(reminder.entries).toEqual([{ type: "custom_message", customType: BUDGET_REMINDER, content: expect.stringContaining("approaching"), display: false, details: { notice: "reminder" } }]);
+  expect(f.turn()).toBeUndefined();
   f.tokens(91000);
+  expect(f.turn().entries[0].details.notice).toBe("checkpoint");
+  expect(f.turn()).toBeUndefined();
+  // A resumed session does not repeat notices already in the current cycle.
+  f.entries.push({ type: "custom_message", customType: BUDGET_REMINDER, details: { notice: "checkpoint" } });
+  f.handlers.get("session_start")({}, f.ctx);
+  expect(f.turn()).toBeUndefined();
   expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).block).toBe(true);
   expect(f.handlers.get("tool_call")({ toolName: "context_notes", input: { action: "write" } }, f.ctx)).toBeUndefined();
   expect(f.handlers.get("tool_call")({ toolName: "context_rollover", input: {} }, f.ctx)).toBeUndefined();
@@ -49,6 +58,8 @@ test("rollover proposes a retain-none boundary before settlement and continues o
   const proposal = await f.settle();
   expect(proposal.continue).toBe(true);
   expect(proposal.entries.at(-1)).toMatchObject({ type: "compaction", firstKeptEntryId: null });
+  expect(proposal.entries.at(-1).summary).toStartWith(ROLLOVER_TEXT);
+  expect(proposal.entries.at(-1).summary).toContain("## objective\nfinish all work");
   expect(f.compactions()).toBe(1);
   expect(f.entries).toHaveLength(2);
   expect(f.aborted()).toBe(0);

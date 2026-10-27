@@ -1,11 +1,34 @@
 import type { ExtensionAPI, ExtensionContext, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { Journal } from "./state.ts";
+import { redactText } from "../../lib/redact.ts";
+import { knownSecretValues } from "../questions/secrets.ts";
+import { journalPrompt, type Journal } from "./state.ts";
 import { CHECKPOINT_ENTRY, currentCheckpoint, ROLLOVER_BOUNDARY } from "./checkpoint.ts";
 
 export { ROLLOVER_BOUNDARY } from "./checkpoint.ts";
 export const BUDGET_REMINDER = "context-journal-budget";
-export const ROLLOVER_TEXT = "Context window rolled over without an LLM-generated summary. The full append-only session transcript remains available with context_history. Durable context_notes contain the working checkpoint; verify its claims against files and history. Preserve the complete user objective and constraints, and continue unfinished work. This boundary is not evidence that the task is complete.";
+export const ROLLOVER_TEXT = "Context window rolled over without an LLM-generated summary. The full append-only session transcript remains available with context_history. The durable context_notes below contain the working checkpoint; verify its claims against files and history. Preserve the complete user objective and constraints, and continue unfinished work. This boundary is not evidence that the task is complete.";
+/** Saved notes as the model sees them, or empty text without notes. */
+export const notesContext = (state: Journal) => Object.keys(state.notes).length ? redactText(journalPrompt(state), knownSecretValues()) : "";
+/** The compaction summary restates notes once, so requests never append them after the newest message. */
+export const rolloverSummary = (state: Journal) => `${ROLLOVER_TEXT}\n\n${notesContext(state)}`;
+
+type Notice = "reminder" | "checkpoint";
+const NOTICES: Record<Notice, string> = {
+  reminder: "Context is approaching its working limit. Update durable context_notes now with the full objective, constraints, evidence and unfinished work, then request context_rollover at a safe stopping point. Older history remains retrievable.",
+  checkpoint: "The 90% working context budget is exhausted. Use the remaining checkpoint reserve only for context_notes write/delete and context_rollover. Preserve the full objective, constraints, evidence and unfinished work. Other tools are blocked.",
+};
+/** Budget notices already persisted in the current context cycle. */
+function sentNotices(entries: readonly any[]): Set<string> {
+  const sent = new Set<string>();
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type === "compaction") break;
+    if (entry?.type === "custom_message" && entry.customType === BUDGET_REMINDER && typeof entry.details?.notice === "string") sent.add(entry.details.notice);
+  }
+  return sent;
+}
+
 export type BudgetPhase = "unknown" | "normal" | "reminder" | "checkpoint" | "exhausted";
 export function contextBudget(usage: Pick<ContextUsage, "tokens" | "contextWindow"> | undefined) {
   const window = usage?.contextWindow;
@@ -20,12 +43,15 @@ export function contextBudget(usage: Pick<ContextUsage, "tokens" | "contextWindo
 export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
   let requested = false;
   let compacting = false;
-  let warned = false;
   let exhaustedNotified = false;
+  let notices = new Set<string>();
   let generation = 0;
   let activeContext: ExtensionContext | undefined;
   let acceptedCheckpoint: string | undefined;
-  const reset = () => { generation++; requested = false; compacting = false; warned = false; exhaustedNotified = false; activeContext = undefined; acceptedCheckpoint = undefined; };
+  const reset = (_event?: unknown, ctx?: ExtensionContext) => {
+    generation++; requested = false; compacting = false; exhaustedNotified = false; activeContext = undefined; acceptedCheckpoint = undefined;
+    notices = ctx ? sentNotices(ctx.sessionManager.getBranch()) : new Set();
+  };
   pi.on("session_start", reset); pi.on("session_tree", reset); pi.on("session_shutdown", reset);
   const ready = (ctx: ExtensionContext) => Object.keys(journal().notes).length > 0 ? currentCheckpoint(ctx.sessionManager.getBranch(), acceptedCheckpoint) : undefined;
   const rollover = async (ctx: ExtensionContext) => {
@@ -68,19 +94,20 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       return { block: true, reason: "Context working budget exhausted. Only context_notes write/delete and context_rollover are allowed: checkpoint the full objective, evidence, constraints and remaining work, then roll over." };
     }
   });
-  pi.on("context", (event, ctx) => {
-    if (!journal().enabled) return;
-    const budget = contextBudget(ctx.getContextUsage());
-    let text: string | undefined;
-    if (budget.phase === "exhausted") {
-      ctx.abort();
-      if (!exhaustedNotified) { exhaustedNotified = true; ctx.ui.notify("Emergency context budget exhausted. Review saved notes, then /context-journal reset.", "warning"); }
-    } else if (requested) text = "Context rollover is pending. End this response; do not run more tools or claim completion. Continue unfinished work after the boundary.";
-    else if (budget.phase === "checkpoint") text = "The 90% working context budget is exhausted. Use the remaining checkpoint reserve only for context_notes write/delete and context_rollover. Preserve the full objective, constraints, evidence and unfinished work. Other tools are blocked.";
-    else if (budget.phase === "reminder" && !warned) { warned = true; text = "Context is approaching its working limit. Update durable context_notes now with the full objective, constraints, evidence and unfinished work, then request context_rollover at a safe stopping point. Older history remains retrievable."; }
-    const messages = event.messages.filter((message) => !("customType" in message && message.customType === BUDGET_REMINDER));
-    if (text) messages.push({ role: "custom", customType: BUDGET_REMINDER, content: text, display: false, timestamp: Date.now() } as typeof messages[number]);
-    return { messages };
+  pi.on("context", (_event, ctx) => {
+    if (!journal().enabled || contextBudget(ctx.getContextUsage()).phase !== "exhausted") return;
+    ctx.abort();
+    if (!exhaustedNotified) { exhaustedNotified = true; ctx.ui.notify("Emergency context budget exhausted. Review saved notes, then /context-journal reset.", "warning"); }
+  });
+  // Each budget notice is persisted once per context cycle after a completed
+  // turn, so the request prefix stays cacheable and the notice stays visible.
+  pi.on("turn_end", (event, ctx) => {
+    if (!journal().enabled || requested || event.outcome !== "completed") return;
+    const phase = contextBudget(ctx.getContextUsage()).phase;
+    const notice: Notice | undefined = phase === "checkpoint" ? "checkpoint" : phase === "reminder" ? "reminder" : undefined;
+    if (!notice || notices.has(notice)) return;
+    notices.add(notice);
+    return { entries: [...event.entries, { type: "custom_message" as const, customType: BUDGET_REMINDER, content: NOTICES[notice], display: false, details: { notice } }] };
   });
   pi.on("session_before_compact", (event, ctx) => {
     if (!journal().enabled) return compacting ? { cancel: true } : undefined;
@@ -92,9 +119,9 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     pi.appendEntry(ROLLOVER_BOUNDARY, { version: 1 });
     const firstKeptEntryId = ctx.sessionManager.getLeafId();
     if (!firstKeptEntryId) return { cancel: true };
-    return { compaction: { summary: ROLLOVER_TEXT, firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details: { contextJournal: 1, noSummary: true } } };
+    return { compaction: { summary: rolloverSummary(journal()), firstKeptEntryId, tokensBefore: event.preparation.tokensBefore, details: { contextJournal: 1, noSummary: true } } };
   });
-  pi.on("session_compact", () => { requested = false; warned = false; exhaustedNotified = false; acceptedCheckpoint = undefined; });
+  pi.on("session_compact", () => { requested = false; exhaustedNotified = false; notices.clear(); acceptedCheckpoint = undefined; });
   pi.on("agent_before_settle", (event, ctx) => {
     if (!requested || compacting || !journal().enabled) return;
     // Never turn an interruption/error into a context-only recovery request.
@@ -106,9 +133,9 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       ctx.ui.notify("Context rollover deferred because the checkpoint or boundary changed. Save updated notes before retrying.", "warning");
       return;
     }
-    warned = false; exhaustedNotified = false;
+    exhaustedNotified = false; notices.clear();
     return {
-      entries: [...event.entries, { type: "compaction" as const, summary: ROLLOVER_TEXT, firstKeptEntryId: null, details: { contextJournal: 1, noSummary: true } }],
+      entries: [...event.entries, { type: "compaction" as const, summary: rolloverSummary(journal()), firstKeptEntryId: null, details: { contextJournal: 1, noSummary: true } }],
       continue: true,
     };
   });
@@ -118,5 +145,5 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     if (!requested && !["checkpoint", "exhausted"].includes(budget.phase)) return;
     try { await rollover(ctx); } catch { ctx.ui.notify("Context was not rolled over. Save a checkpoint or use native /compact; your input will still be submitted.", "warning"); }
   });
-  return { rollover, checkpoint: () => pi.appendEntry(CHECKPOINT_ENTRY, { version: 1 }), disable: () => { requested = false; warned = false; acceptedCheckpoint = undefined; activeContext?.abort(); }, status: () => requested ? "rollover pending" : "automatic" };
+  return { rollover, checkpoint: () => pi.appendEntry(CHECKPOINT_ENTRY, { version: 1 }), disable: () => { requested = false; acceptedCheckpoint = undefined; activeContext?.abort(); }, status: () => requested ? "rollover pending" : "automatic" };
 }

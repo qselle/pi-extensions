@@ -1,14 +1,31 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
 import { redactText } from "../../lib/redact.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
-import { contextBudget, installRollover } from "./rollover.ts";
-import { emptyJournal, historyMatches, journalPrompt, JOURNAL_CONTEXT, JOURNAL_ENTRY, restoreJournal, updateNote } from "./state.ts";
+import { contextBudget, installRollover, notesContext } from "./rollover.ts";
+import { emptyJournal, historyMatches, JOURNAL_CONTEXT, JOURNAL_ENTRY, JOURNAL_HEADER, restoreJournal, updateNote, type Journal } from "./state.ts";
+
+/**
+ * Notes reach the model through its own context_notes calls, the rollover
+ * summary, or a hidden anchor persisted once after restore or native compaction.
+ */
+const notesAnchor = createContextAnchor<Journal>({
+  customType: JOURNAL_CONTEXT,
+  render: notesContext,
+  readMessage: (message) => {
+    const summary = (message as { summary?: unknown }).summary;
+    if (message.role !== "compactionSummary" || typeof summary !== "string") return undefined;
+    const start = summary.indexOf(JOURNAL_HEADER);
+    return start < 0 ? undefined : summary.slice(start);
+  },
+});
 
 const TOOLS = ["context_notes", "context_history", "context_budget", "context_rollover"];
 export default function contextJournalExtension(pi: ExtensionAPI): void {
   let state = emptyJournal();
   const rollover = installRollover(pi, () => state);
+  const syncNotes = (ctx: AnchorContext) => { if (state.enabled) notesAnchor.sync(pi, ctx, state); };
   const activate = () => {
     const active = pi.getActiveTools().filter((name) => !TOOLS.includes(name));
     pi.setActiveTools(state.enabled ? [...active, ...TOOLS] : active);
@@ -18,7 +35,7 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
     description: "Durable per-session notes and history retrieval: /context-journal on|off|status|reset",
     async handler(args, ctx) {
       const action = args.trim() || "status";
-      if (action === "on" || action === "off") { const next = { ...state, enabled: action === "on" }; pi.appendEntry(JOURNAL_ENTRY, next); state = next; if (!state.enabled) rollover.disable(); activate(); }
+      if (action === "on" || action === "off") { const next = { ...state, enabled: action === "on" }; pi.appendEntry(JOURNAL_ENTRY, next); state = next; if (!state.enabled) rollover.disable(); activate(); syncNotes(ctx); }
       else if (action === "reset") {
         if (!state.enabled) { ctx.ui.notify("Enable /context-journal on first.", "warning"); return; }
         if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Finish the current run and queued messages before resetting context.", "warning"); return; }
@@ -67,11 +84,9 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
       return { content: [{ type: "text", text: usage ? JSON.stringify({ ...usage, budget: contextBudget(usage) }) : "Context usage is currently unknown." }], details: {} };
     },
   });
-  pi.on("context", (event) => {
-    const messages = event.messages.filter((message) => !("customType" in message && message.customType === JOURNAL_CONTEXT));
-    if (state.enabled && Object.keys(state.notes).length) messages.push({ role: "custom", customType: JOURNAL_CONTEXT, content: redactText(journalPrompt(state), knownSecretValues()), display: false, timestamp: Date.now() } as typeof messages[number]);
-    return { messages };
-  });
-  const restore = (_event: unknown, ctx: any) => { state = restoreJournal(ctx.sessionManager.getBranch()); activate(); ctx.ui.setStatus?.("context-journal", state.enabled ? "ctx:auto" : undefined); };
+  // Disabling hides earlier note anchors: a deliberate one-time cache reset.
+  pi.on("context", (event) => state.enabled ? undefined : { messages: event.messages.filter((message) => !("customType" in message && message.customType === JOURNAL_CONTEXT)) });
+  const restore = (_event: unknown, ctx: any) => { state = restoreJournal(ctx.sessionManager.getBranch()); activate(); syncNotes(ctx); ctx.ui.setStatus?.("context-journal", state.enabled ? "ctx:auto" : undefined); };
   pi.on("session_start", restore); pi.on("session_tree", restore);
+  pi.on("session_compact", (_event, ctx) => syncNotes(ctx));
 }

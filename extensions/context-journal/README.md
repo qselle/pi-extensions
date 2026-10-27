@@ -6,8 +6,8 @@ default; use [`memory`](../memory/) for notes shared across sessions.
 ## Usage
 
 ```text
-/context-journal on       Enable tools and notes in model requests
-/context-journal off      Disable tools/injection, retaining notes
+/context-journal on       Enable tools and notes in model context
+/context-journal off      Disable tools and note anchors, retaining notes
 /context-journal status   Show state and storage limits
 /context-journal reset    Roll over while idle, after saving notes
 ```
@@ -22,11 +22,13 @@ navigation.
 | `context_budget` | Read Pi's context estimate and checkpoint budget |
 | `context_rollover` | Request fresh context from saved notes, without a generated summary |
 
-Notes are included in each model request. Record the objective, constraints,
-decisions, evidence, and unfinished work. Keys allow 1–64 letters, digits, dots,
+Record the objective, constraints, decisions, evidence, and unfinished work.
+The model sees notes through its own `context_notes` calls, the rollover
+summary, and a hidden anchor saved once after resume, tree navigation, native
+compaction, or enabling, when nothing visible shows the current notes. Notes are
+never appended to each request, so the prompt cache keeps covering history. Keys allow 1–64 letters, digits, dots,
 underscores, or hyphens. Limits: 32 keys, 4,000 characters per value, 16,000 total.
-Changes take effect on the next request; deleting a note leaves older versions
-in the session file and backups.
+Deleting a note leaves older versions in the session file and backups.
 
 History search is literal and case-insensitive, newest first. Omit `query` for
 recent text; pass `nextBefore` as `before` for older results. It returns up to
@@ -36,8 +38,8 @@ It excludes reasoning, images, custom extension messages, and other branches.
 ### Rollover
 
 Rollover removes earlier messages from model context while keeping them in session
-history. System instructions, tools, and notes survive. Turning the journal off
-does not undo a committed rollover.
+history. System instructions and tools survive; the compaction summary restates
+the notes. Turning the journal off does not undo a committed rollover.
 
 Save current notes before requesting rollover, then end the response. Other tools
 are blocked while the request is pending. Pi commits it at a safe compaction or
@@ -45,9 +47,10 @@ pre-settlement boundary and can continue with the notes. Errors and interruption
 do not trigger that continuation. If another extension changes model context,
 notes must be updated before rollover can proceed.
 
-The working budget is 90% of the context window. A reminder arrives with up to
-6,144 tokens left (10% on smaller models). Beyond that budget, only note writes,
-deletes, and rollover are allowed. A checkpoint reserve adds at most 16,384 tokens
+The working budget is 90% of the context window. A hidden reminder is saved
+once, after the turn that leaves at most 6,144 tokens (10% on smaller models).
+Beyond that budget, a one-time notice follows and only note writes, deletes, and
+rollover are allowed. A checkpoint reserve adds at most 16,384 tokens
 without exceeding 98% of the window; exhausting it aborts further work.
 
 Completed responses are not interrupted. If the next idle input arrives after
@@ -73,5 +76,7 @@ behavior when no journal rollover is pending.
   message before writing to disk.
 - Known questionnaire secrets are redacted by literal matching; avoid storing
   secrets. This does not detect all credentials.
+- Disabling hides earlier note anchors from requests, a one-time cache reset;
+  rollover summaries keep their notes.
 - Context usage is unknown after compaction until another provider response.
   The footer badge `ctx:auto` indicates enabled journal mode.
