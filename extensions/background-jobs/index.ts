@@ -156,7 +156,16 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     const ended = [...jobs.values()].filter((job) => !isActive(job.status)).sort((a, b) => a.startedAt - b.startedAt);
     return [...active, ...ended.slice(-Math.max(0, MAX_RETAINED_JOBS - active.length))];
   };
-  const findJob = (id: string) => {
+  /** A full job ID, or an unambiguous prefix of a current or recent job's ID. */
+  const resolveId = (id: string) => {
+    const known = new Set([...service.list(), ...history.list()].map((job) => job.id));
+    if (!id || known.has(id)) return id;
+    const matches = [...known].filter((candidate) => candidate.startsWith(id));
+    if (matches.length > 1) throw new Error(`Job ID prefix ${safeLabel(id)} is ambiguous: ${matches.join(", ")}.`);
+    return matches[0] ?? id;
+  };
+  const findJob = (prefix: string) => {
+    const id = resolveId(prefix);
     const job = service.list().find((job) => job.id === id) ?? history.get(id);
     if (!job) throw new Error("Unknown job ID.");
     return job;
@@ -384,12 +393,13 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderCall: (args, theme, context) => jobHeading(`Start job · ${safeLabel(args.name) || "command"}`, args, theme, context), renderResult: renderStartResult,
   });
+  const idParameter = Type.String({ description: "Job ID or an unambiguous prefix" });
   const cursorParameter = Type.Optional(Type.Integer({ minimum: 0, description: "Absolute offset to page forward from. Omit to get the newest output since your last read of this job." }));
   const readParameters = {
-    job_wait: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), cursor: cursorParameter,
+    job_wait: Type.Object({ purpose: toolPurposeParameter, id: idParameter, cursor: cursorParameter,
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for the job to exit, capped at ${MAX_WAIT_MS}.` })),
       max_chars: budgetParameter }),
-    job_output: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), cursor: cursorParameter,
+    job_output: Type.Object({ purpose: toolPurposeParameter, id: idParameter, cursor: cursorParameter,
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for new output or exit (default 0, capped at ${MAX_WAIT_MS}).` })),
       wait: Type.Optional(Type.Boolean({ description: `Wait for exit instead, ignoring progress output; wait_ms defaults to ${MAX_WAIT_MS}.` })),
       max_chars: budgetParameter }),
@@ -404,10 +414,11 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     renderShell: "self",
     async execute(_id, params: any, signal, onUpdate, ctx) {
       const jobs = service;
+      const id = resolveId(params.id);
       const request = { cursor: params.cursor, budget: outputBudget(params.max_chars) };
-      if (!jobs.list().some((job) => job.id === params.id)) { signal?.throwIfAborted(); return result(params.id, request, jobs); }
+      if (!jobs.list().some((job) => job.id === id)) { signal?.throwIfAborted(); return result(id, request, jobs); }
       const exit = name === "job_wait" || params.wait === true;
-      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, exit ? MAX_WAIT_MS : 0), { signal, ctx, onUpdate, until: exit ? "exit" : "output" });
+      return waitAndRead(jobs, id, request, waitDuration(params.wait_ms, exit ? MAX_WAIT_MS : 0), { signal, ctx, onUpdate, until: exit ? "exit" : "output" });
     },
     renderCall: (args, theme, context) => jobHeading(`${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
@@ -424,7 +435,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderCall: (args, theme, context) => jobHeading("List background jobs", args, theme, context), renderResult: renderJobList,
   });
-  const writeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()),
+  const writeParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter, text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()),
     wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for a reply after writing (default ${WRITE_WAIT_MS}, capped at ${MAX_WAIT_MS}).` })),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })), max_chars: budgetParameter });
   pi.registerTool({
@@ -434,27 +445,32 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     renderShell: "self",
     async execute(_id, params, signal, onUpdate, ctx) {
       const jobs = service;
-      await jobs.write(params.id, params.text, params.eof, signal);
-      return waitAndRead(jobs, params.id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, waitDuration(params.wait_ms, WRITE_WAIT_MS), { signal, ctx, onUpdate, until: "output" });
+      const id = resolveId(params.id);
+      await jobs.write(id, params.text, params.eof, signal);
+      return waitAndRead(jobs, id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, waitDuration(params.wait_ms, WRITE_WAIT_MS), { signal, ctx, onUpdate, until: "output" });
     },
     renderCall: (args, theme, context) => jobHeading(`Write job input · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
-  const resizeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) });
+  const resizeParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter, columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) });
   pi.registerTool({
     name: "job_resize", label: "Resize job terminal", description: "Resize a running PTY job. Terminal applications receive the new dimensions; pipe jobs cannot be resized.",
     parameters: resizeParameters,
     prepareArguments: argumentAliases(resizeParameters),
     renderShell: "self",
-    async execute(_id, params) { const job = service.resize(params.id, params.columns, params.rows); return result(job.id, { cursor: job.outputEnd, track: false }); },
+    async execute(_id, params) { const job = service.resize(resolveId(params.id), params.columns, params.rows); return result(job.id, { cursor: job.outputEnd, track: false }); },
     renderCall: (args, theme, context) => jobHeading(`Resize terminal · ${safeLabel(args.id)} · ${args.columns}×${args.rows}`, args, theme, context), renderResult,
   });
-  const stopParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String() });
+  const stopParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter });
   pi.registerTool({
     name: "job_stop", label: "Stop background job", description: "Stop a managed job and its process group. Sends TERM, then KILL after three seconds if necessary. Safe to repeat for a finished job.",
     parameters: stopParameters,
     prepareArguments: argumentAliases(stopParameters),
     renderShell: "self",
-    async execute(_id, params) { const job = findJob(params.id); if (service.list().some((job) => job.id === params.id)) service.stop(params.id); return result(params.id, { cursor: job.outputEnd, track: false, hint: false }); },
+    async execute(_id, params) {
+      const job = findJob(params.id);
+      if (service.list().some((live) => live.id === job.id)) service.stop(job.id);
+      return result(job.id, { cursor: job.outputEnd, track: false, hint: false });
+    },
     renderCall: (args, theme, context) => jobHeading(`Stop job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
 
@@ -464,7 +480,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     const [action, id] = args.trim().split(/\s+/);
     if (action === "stop") {
       if (id === "all") { for (const job of service.list()) if (isActive(job.status)) service.stop(job.id); }
-      else if (id) { const job = findJob(id); if (isActive(job.status)) service.stop(id); }
+      else if (id) { const job = findJob(id); if (isActive(job.status)) service.stop(job.id); }
       else { ctx.ui.notify("Usage: /jobs stop <id|all>", "error"); return; }
       ctx.ui.notify("Stop requested. Jobs remain visible until their processes exit.", "info");
       return;

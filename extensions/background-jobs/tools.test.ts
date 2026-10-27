@@ -7,16 +7,17 @@ import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, NOTICE_TYPE, PI_EN
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
 import { COLLAPSED_TAIL_ROWS } from "./render.ts";
+import { encodeJob, JOB_HISTORY_ENTRY } from "./history.ts";
 
 initTheme("dark");
 const plain = { fg: (_color: string, text: string) => text };
 const shutdowns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const stop of shutdowns.splice(0)) await stop(); });
 
-async function session(mode = "json", extra: Record<string, unknown> = {}) {
+async function session(mode = "json", extra: Record<string, unknown> = {}, seed: unknown[] = []) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function>();
-  const entries: unknown[] = [];
+  const entries: unknown[] = [...seed];
   const messages: { message: any; options: any }[] = [];
   const renderers = new Map<string, any>();
   extension({
@@ -361,4 +362,13 @@ test("the overlay shows only yielded jobs under a running count", async () => {
   expect(card.renderBody(60, 5, plain)).toEqual(["● Serve the fixture"]);
   await run("job_wait", { id: (await run("job_stop", { id: details.id })).details.id, wait_ms: 3000 });
   expect(card.visible()).toBe(false);
+});
+
+test("job IDs accept an unambiguous prefix", async () => {
+  const saved = (id: string) => ({ type: "custom", customType: JOB_HISTORY_ENTRY, data: encodeJob({ id, name: id, command: "true", cwd: "/", status: "completed", startedAt: 1, endedAt: 2, code: 0, outputStart: 0, outputEnd: 2, tail: `${id}\n` }) });
+  const { run } = await session("json", {}, [saved("zz111111"), saved("zz122222")]);
+  await expect(run("job_output", { id: "zz1" })).rejects.toThrow("Job ID prefix zz1 is ambiguous: zz111111, zz122222.");
+  expect(outputOf(await run("job_output", { id: "zz12", cursor: 0 }))).toBe("zz122222\n");
+  const live = (await run("bash", { command: "sleep 5", yield_ms: 0 })).details.id;
+  expect((await run("job_stop", { id: live.slice(0, 6) })).details.id).toBe(live);
 });

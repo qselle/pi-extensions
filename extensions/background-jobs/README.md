@@ -26,6 +26,9 @@ system-prompt file change is needed.
 /jobs stop all           Request termination of every active job
 ```
 
+Job tools and `/jobs` accept a full job ID or an unambiguous prefix of a current
+or recent job's ID; an ambiguous prefix fails and lists the matches.
+
 With this extension enabled, `bash` uses the managed executor. It accepts the
 usual `command` and `timeout` (seconds), plus `yield_ms` (default 10000, capped
 at 30000), `max_chars` (output budget, default 24000, capped at 50000),
