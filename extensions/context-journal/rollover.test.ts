@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { contextBudget, installRollover, ROLLOVER_TEXT } from "./rollover.ts";
+import { BUDGET_REMINDER, contextBudget, installRollover, ROLLOVER_BOUNDARY, ROLLOVER_TEXT, STALE_TEXT } from "./rollover.ts";
 import { emptyJournal } from "./state.ts";
 import { CHECKPOINT_ENTRY } from "./checkpoint.ts";
 
@@ -16,28 +16,56 @@ test("budget reserves a checkpoint phase below the context ceiling", () => {
 function fixture() {
   const handlers = new Map<string, any>(); const tools = new Map<string, any>();
   const state = { ...emptyJournal(), enabled: true, notes: { objective: "finish all work" } };
-  let tokens: number | null = 1000; let aborted = 0; let leaf = "old"; let compactions = 0;
+  let tokens: number | null = 1000; let aborted = 0; let leaf = "old"; let compactions = 0; const summaries: string[] = [];
   const entries: any[] = [{ id: "fresh", type: "custom", customType: CHECKPOINT_ENTRY, data: { version: 1 } }];
   const ctx: any = { getContextUsage: () => ({ tokens, contextWindow: 100000 }), isIdle: () => true, abort: () => aborted++, ui: { notify() {} }, sessionManager: { getLeafId: () => leaf, getBranch: () => entries },
-    compact: (options: any) => { compactions++; const result = handlers.get("session_before_compact")({ reason: "manual", signal: new AbortController().signal, preparation: { tokensBefore: tokens } }, ctx); options.onComplete(result.compaction); handlers.get("session_compact")(); } };
+    compact: (options: any) => { compactions++; const result = handlers.get("session_before_compact")({ reason: "manual", signal: new AbortController().signal, preparation: { tokensBefore: tokens } }, ctx); summaries.push(result.compaction.summary); options.onComplete(result.compaction); handlers.get("session_compact")(); } };
   const policy = installRollover({ on: (name: string, handler: any) => handlers.set(name, handler), registerTool: (tool: any) => tools.set(tool.name, tool), appendEntry: (customType: string, data: any) => { leaf = `entry-${entries.length}`; entries.push({ id: leaf, type: "custom", customType, data }); } } as never, () => state);
   const settle = async (outcome = "completed", proposals: any[] = []) => {
     const result = await handlers.get("agent_before_settle")({ outcome, entries: proposals }, ctx);
     if (result?.entries) for (const entry of result.entries) { entries.push({ ...entry, id: `entry-${entries.length}` }); if (entry.type === "compaction") compactions++; }
     return result;
   };
-  return { handlers, tools, ctx, policy, state, entries, settle, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
+  const turn = (outcome = "completed", message: any = { role: "assistant", content: [{ type: "text", text: "done" }] }) => handlers.get("turn_end")({ outcome, entries: [], message }, ctx);
+  return { handlers, tools, ctx, policy, state, entries, settle, turn, summaries, tokens: (value: number | null) => { tokens = value; }, aborted: () => aborted, compactions: () => compactions };
 }
-test("warns once then permits only checkpoint writes and rollover", () => {
+test("persists each budget notice once per cycle and permits only checkpoint writes and rollover", () => {
   const f = fixture(); f.tokens(85000);
-  expect(f.handlers.get("context")({ messages: [] }, f.ctx).messages).toHaveLength(1);
-  expect(f.handlers.get("context")({ messages: [] }, f.ctx).messages).toHaveLength(0);
+  expect(f.turn("aborted")).toBeUndefined();
+  const reminder = f.turn();
+  expect(reminder.entries).toEqual([{ type: "custom_message", customType: BUDGET_REMINDER, content: expect.stringContaining("approaching"), display: false, details: { notice: "reminder" } }]);
+  expect(f.turn()).toBeUndefined();
   f.tokens(91000);
+  expect(f.turn().entries[0].details.notice).toBe("checkpoint");
+  expect(f.turn()).toBeUndefined();
+  // A resumed session does not repeat notices already in the current cycle.
+  f.entries.push({ type: "custom_message", customType: BUDGET_REMINDER, details: { notice: "checkpoint" } });
+  f.handlers.get("session_start")({}, f.ctx);
+  expect(f.turn()).toBeUndefined();
   expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).block).toBe(true);
   expect(f.handlers.get("tool_call")({ toolName: "context_notes", input: { action: "write" } }, f.ctx)).toBeUndefined();
   expect(f.handlers.get("tool_call")({ toolName: "context_rollover", input: {} }, f.ctx)).toBeUndefined();
-  f.tokens(98000);
-  expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).terminate).toBe(true);
+});
+const toolTurn = { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: {} }] };
+test("a spent emergency reserve rolls over to stale notes during a tool chain without aborting", () => {
+  const f = fixture(); f.tokens(98000);
+  f.entries.push({ type: "message", message: { role: "user", content: "newer work" } });
+  // Blocking without terminating lets the turn end and the run continue.
+  expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx)).toEqual({ block: true, reason: expect.stringContaining("rolls over") });
+  expect(f.handlers.get("tool_call")({ toolName: "context_notes", input: { action: "write" } }, f.ctx)).toBeUndefined();
+  expect(f.turn()).toBeUndefined();
+  const proposal = f.turn("completed", toolTurn);
+  expect(proposal.continue).toBe(true);
+  expect(proposal.entries[0].data).toEqual({ version: 1, reason: "automatic", percent: 98, stale: true });
+  expect(proposal.entries[1]).toMatchObject({ type: "compaction", firstKeptEntryId: null, details: { stale: true } });
+  expect(proposal.entries[1].summary).toContain(STALE_TEXT);
+  expect(proposal.entries[1].summary).toContain("finish all work");
+  expect(f.aborted()).toBe(0);
+});
+test("a spent emergency reserve without notes aborts the run once and prompts for notes", () => {
+  const f = fixture(); f.tokens(98000); f.state.notes = {} as any;
+  expect(f.handlers.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).reason).toContain("Write a context_notes checkpoint");
+  expect(f.turn("completed", toolTurn)).toBeUndefined();
   expect(f.aborted()).toBe(1);
 });
 test("rollover proposes a retain-none boundary before settlement and continues once", async () => {
@@ -49,8 +77,11 @@ test("rollover proposes a retain-none boundary before settlement and continues o
   const proposal = await f.settle();
   expect(proposal.continue).toBe(true);
   expect(proposal.entries.at(-1)).toMatchObject({ type: "compaction", firstKeptEntryId: null });
+  expect(proposal.entries.at(-1).summary).toStartWith(ROLLOVER_TEXT);
+  expect(proposal.entries.at(-1).summary).toContain("## objective\nfinish all work");
   expect(f.compactions()).toBe(1);
-  expect(f.entries).toHaveLength(2);
+  expect(proposal.entries[0]).toEqual({ type: "custom", customType: ROLLOVER_BOUNDARY, data: { version: 1, reason: "agent", percent: 1 } });
+  expect(f.entries).toHaveLength(3);
   expect(f.aborted()).toBe(0);
   expect(f.policy.status()).toBe("automatic");
   expect(await f.settle()).toBeUndefined();
@@ -58,8 +89,18 @@ test("rollover proposes a retain-none boundary before settlement and continues o
 test("native manual/overflow compaction stays unchanged without a pending rollover", () => {
   const f = fixture();
   for (const reason of ["manual", "overflow"]) expect(f.handlers.get("session_before_compact")({ reason, signal: new AbortController().signal }, f.ctx)).toBeUndefined();
-  expect(f.handlers.get("session_before_compact")({ reason: "threshold", signal: new AbortController().signal }, f.ctx)).toEqual({ cancel: true });
+  const threshold = (message: any) => f.handlers.get("session_before_compact")({ reason: "threshold", signal: new AbortController().signal, preparation: { tokensBefore: 1 }, branchEntries: [{ type: "message", message }] }, f.ctx);
+  expect(threshold(toolTurn)).toEqual({ cancel: true });
   expect(f.compactions()).toBe(0);
+});
+test("threshold compaction after a finished response becomes a rollover to saved notes", () => {
+  const f = fixture();
+  const event = { reason: "threshold", signal: new AbortController().signal, preparation: { tokensBefore: 1 }, branchEntries: [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }] } }] };
+  const result = f.handlers.get("session_before_compact")(event, f.ctx);
+  expect(result.compaction.summary).toContain("finish all work");
+  expect(result.compaction.details).toEqual({ contextJournal: 1, noSummary: true });
+  f.state.notes = {} as any;
+  expect(f.handlers.get("session_before_compact")(event, f.ctx)).toEqual({ cancel: true });
 });
 test("idle input commits exhausted working context but does not consume the input", async () => {
   const f = fixture(); f.tokens(92000);
@@ -109,19 +150,21 @@ test("late errors after a session switch do not notify or throw into the old ses
   expect(f.policy.status()).toBe("automatic");
 });
 
-test("stale notes do not roll over on input or permit an explicit request", async () => {
+test("stale notes roll over on idle input, marked stale, but never permit an explicit request", async () => {
   const f = fixture(); f.tokens(92000);
   f.entries.push({ type: "message", message: { role: "user", content: "A newer objective" } });
-  await f.handlers.get("input")({}, f.ctx);
-  expect(f.compactions()).toBe(0);
   await expect(f.tools.get("context_rollover").execute("id", { checkpoint_ready: true }, undefined, undefined, f.ctx)).rejects.toThrow("fresh");
-  f.policy.checkpoint();
-  await f.policy.rollover(f.ctx);
-  expect(f.compactions()).toBe(1);
-  // The prior cycle's checkpoint cannot authorize a second rollover.
+  await expect(f.policy.rollover(f.ctx)).rejects.toThrow("stale");
   await f.handlers.get("input")({}, f.ctx);
   expect(f.compactions()).toBe(1);
+  expect(f.summaries[0]).toContain(STALE_TEXT);
+  expect(f.entries.findLast((entry) => entry.customType === ROLLOVER_BOUNDARY).data).toEqual({ version: 1, reason: "automatic", percent: 92, stale: true });
+  // A fresh checkpoint after the boundary drops the stale warning.
   f.policy.checkpoint();
+  await f.handlers.get("input")({}, f.ctx);
+  expect(f.compactions()).toBe(2);
+  expect(f.summaries[1]).not.toContain(STALE_TEXT);
+  f.state.notes = {} as any;
   await f.handlers.get("input")({}, f.ctx);
   expect(f.compactions()).toBe(2);
 });

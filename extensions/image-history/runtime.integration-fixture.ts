@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSessionServices, createAgentSessionFromServices, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -7,6 +7,9 @@ import { getModels } from "@earendil-works/pi-ai/compat";
 import extension from "./index.ts";
 const root = await mkdtemp(join(tmpdir(), "pi-image-history-"));
 process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+// Defer each older image immediately; batching has focused unit coverage.
+await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+await writeFile(join(process.env.PI_CODING_AGENT_DIR, "image-history.json"), JSON.stringify({ deferral: { batch: 1 } }));
 let session: Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"] | undefined;
 try {
   const manager = SessionManager.create(root, join(root, "sessions"));

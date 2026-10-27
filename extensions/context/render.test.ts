@@ -93,6 +93,8 @@ test("reconciles the estimate against Pi's figure, naming the provider's last-tu
   expect(providerLine).toContain("15,110 fresh + 626,923 cached");
   expect(providerLine).toContain("6,400 out");
   expect(providerLine).toContain("last turn:");
+  expect(lineFor(withComponents, "cache read")).toMatch(/cache read\s+93%\s+of the last turn's prompt/);
+  expect(lineFor(renderReport(report(), plain, 100), "cache read")).toBe("");
 
   // Without components, fall back to a plain explanation.
   expect(lineFor(renderReport(report(), plain, 100), "pi context total"))
@@ -189,4 +191,11 @@ test("degrades to a single line when the terminal is too narrow for a table", ()
 test("reported zero remains authoritative and a zero-column viewport renders nothing", () => {
   expect(summaryLine(report({ reported: 0 }))).toBe("Used 0 / 258,000 (0%)");
   expect(renderReport(report(), plain, 0)).toEqual([]);
+});
+
+test("shows tokens kept outside context on this branch and on inactive branches", () => {
+  const lines = renderReport(report({ outside: { compacted: 52_000, inactive: 7_300 } }), plain, 100);
+  expect(lineFor(lines, "compacted away")).toMatch(/52,000\s+this branch, outside context/);
+  expect(lineFor(lines, "inactive branches")).toMatch(/7,300\s+outside context/);
+  expect(lineFor(renderReport(report({ outside: { compacted: 0, inactive: 5 } }), plain, 100), "compacted away")).toBe("");
 });

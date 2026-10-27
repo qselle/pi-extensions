@@ -15,8 +15,9 @@ A report includes:
 - system-prompt components such as Pi instructions, guidelines, context files, and skills
 - active tool schemas, grouped by tool
 - conversation entries, including extension context grouped by `customType`
-- the largest individual entries
-- the independent estimated total and the latest provider usage components
+- the largest individual entries, naming the file, command, or query behind tool results
+- the independent estimated total, the latest provider usage components, and their cache-read share
+- tokens outside model context: compacted away or omitted on this branch, and on inactive branches
 
 Rows use Pi's token estimator. The headline uses `getContextUsage()`, which is the value Pi uses for compaction.
 When that value is unavailable (including after compaction), the headline says

@@ -40,8 +40,22 @@ test("history continuation requires an older matching entry, not just older rows
 test("history excludes hidden context, reasoning and image payloads and bounds total output", () => {
   const entries: any[] = [ { type: "custom_message", id: "hidden", display: false, content: "private" }, { type: "message", id: "assistant", message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }, { type: "image", data: "private" }, { type: "text", text: "public secret" }] } } ];
   expect(historyMatches(entries, "private").matches).toEqual([]);
+  expect(historyMatches(entries, "private", 10, undefined, [], true).matches.map((match) => match.excerpt)).toEqual(["private\npublic secret"]);
   expect(historyMatches(entries, "public", 10, undefined, ["secret"]).matches[0]?.excerpt).toBe("public [redacted]");
   const large = historyMatches(Array.from({ length: 20 }, (_, i) => message(String(i), "界😀".repeat(2000))), "", 20);
   expect(large.matches.reduce((sum, value) => sum + value.excerpt.length, 0)).toBeLessThanOrEqual(12000);
   expect(large.matches.every((value) => !/[\ud800-\udbff]…$/.test(value.excerpt))).toBe(true);
+});
+
+test("history searches tool calls and labels tool results by tool name", () => {
+  const entries: any[] = [
+    { type: "message", id: "call", message: { role: "assistant", content: [{ type: "toolCall", id: "1", name: "bash", arguments: { command: "make deploy TOKEN=secret" } }] } },
+    { type: "message", id: "result", message: { role: "toolResult", toolName: "bash", content: [{ type: "text", text: "deploy finished" }] } },
+    { type: "message", id: "hidden", message: { role: "assistant", content: [{ type: "thinking", thinking: "deploy plan", redacted: true }] } },
+  ];
+  const { matches } = historyMatches(entries, "deploy", 10, undefined, ["secret"], true);
+  expect(matches).toEqual([
+    { id: "result", role: "tool:bash", excerpt: "deploy finished" },
+    { id: "call", role: "assistant", excerpt: '[tool call: bash] {"command":"make deploy TOKEN=[redacted]"}' },
+  ]);
 });

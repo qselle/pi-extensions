@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import imageHistory from "./index.ts";
+import imageHistory, { historyImageRenderers } from "./index.ts";
 import { CONFIG_FILE, loadConfig, type ImageHistoryConfig } from "./config.ts";
 import { STATE_TYPE } from "./history.ts";
 import { legacyToolResult, writeLegacyBlob } from "./legacy.fixture.ts";
@@ -50,6 +50,10 @@ test("config defaults storage on and deferral off; malformed files keep defaults
     expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false });
     await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ storage: { enabled: false }, deferral: { enabled: true } }));
     expect(loadConfig(agentDir)).toEqual({ storage: false, deferral: true });
+    await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ deferral: { batch: 1 } }));
+    expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false, batch: 1 });
+    await writeFile(join(agentDir, CONFIG_FILE), JSON.stringify({ deferral: { batch: 0.5 } }));
+    expect(loadConfig(agentDir).batch).toBeUndefined();
     await writeFile(join(agentDir, CONFIG_FILE), "{oops");
     expect(loadConfig(agentDir)).toEqual({ storage: true, deferral: false });
   } finally { await rm(agentDir, { recursive: true, force: true }); }
@@ -119,4 +123,16 @@ test("a resumed sidecar session gets its images back in model context and the tr
     expect(missing.notices).toHaveLength(1);
     expect(tui.renderers.has(LEGACY_PREVIEW_ENTRY)).toBe(true);
   } finally { await rm(agentDir, { recursive: true, force: true }); }
+});
+
+test("history_image renders a one-line card and leaves the image to Pi's native preview", () => {
+  const theme: any = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  const rows = (component: any) => component.render(80).map((row: string) => row.trimEnd());
+  expect(rows(historyImageRenderers.renderCall({ reference: "entry:0" }, theme, { isPartial: true }))).toEqual(["• Retrieving image entry:0"]);
+  expect(rows(historyImageRenderers.renderCall({ reference: "entry:0\x1b[31m" }, theme, {}))).toEqual(["• Retrieved image entry:0"]);
+  const image = { content: [{ type: "text", text: "Earlier image entry:0" }, { type: "image" }] };
+  expect(historyImageRenderers.renderResult(image, { isPartial: false }, theme, {}).render(80)).toEqual([]);
+  const failed = { content: [{ type: "text", text: "Image reference not found on the current branch." }] };
+  expect(rows(historyImageRenderers.renderCall({ reference: "x:1" }, theme, { isError: true }))).toEqual(["• Image retrieval failed x:1"]);
+  expect(rows(historyImageRenderers.renderResult(failed, { isPartial: false }, theme, { isError: true }))).toEqual(["  └ Image reference not found on the current branch."]);
 });

@@ -56,8 +56,8 @@ try {
   assert.equal(compaction.fromHook, true);
   assert.equal(compaction.details.noSummary, true);
   const fresh = manager.buildSessionContext().messages;
-  // The plan extension may restate a hidden plan with one checkpoint after compaction.
-  const withoutPlanAnchor = (messages: any[]) => messages.filter((message) => message.customType !== "plan-context");
+  // Plan and goal extensions may restate hidden state with one anchor after compaction.
+  const withoutPlanAnchor = (messages: any[]) => messages.filter((message) => !["plan-context", "goal-anchor"].includes(message.customType));
   assert.equal(withoutPlanAnchor(fresh).length, 2);
   assert.equal(fresh[0]!.role, "system");
   assert(JSON.stringify(fresh[0]).includes("Persistent system constraint"));
