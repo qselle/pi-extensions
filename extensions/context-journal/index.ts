@@ -39,7 +39,8 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
       else if (action === "reset") {
         if (!state.enabled) { ctx.ui.notify("Enable /context-journal on first.", "warning"); return; }
         if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Finish the current run and queued messages before resetting context.", "warning"); return; }
-        await rollover.rollover(ctx);
+        // A spent emergency reserve accepts stale notes; otherwise notes must be fresh.
+        await rollover.rollover(ctx, contextBudget(ctx.getContextUsage()).phase === "exhausted");
       }
       else if (action !== "status") { ctx.ui.notify("Usage: /context-journal on|off|status|reset", "info"); return; }
       ctx.ui.setStatus?.("context-journal", state.enabled ? "ctx:auto" : undefined);

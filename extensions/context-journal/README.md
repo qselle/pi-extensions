@@ -51,20 +51,26 @@ The working budget is 90% of the context window. A hidden reminder is saved
 once, after the turn that leaves at most 6,144 tokens (10% on smaller models).
 Beyond that budget, a one-time notice follows and only note writes, deletes, and
 rollover are allowed. A checkpoint reserve adds at most 16,384 tokens
-without exceeding 98% of the window; exhausting it aborts further work.
+without exceeding 98% of the window. If a tool chain spends it, Pi rolls over
+to the saved notes after that turn and continues; without notes it stops the
+run once, and the next prompt can still save notes.
 
 Completed responses are not interrupted. If the next idle input arrives after
-the budget is spent, rollover precedes submission. Journal mode defers native
-threshold summarization; ordinary `/compact` and overflow recovery keep Pi's
-behavior when no journal rollover is pending.
+the budget is spent, rollover to the saved notes precedes submission. Native
+threshold compaction after a finished response also becomes a rollover when
+notes exist; during a tool chain it is deferred. Ordinary `/compact` and
+overflow recovery keep Pi's behavior when no journal rollover is pending.
 
 ## Dependencies and limitations
 
 - Uses public Pi tools, context, session, and usage APIs, host TypeBox, and shared
   redaction helpers. Cross-platform; no third-party packages or external storage.
-- Rollover requires at least one note and a fresh checkpoint covering current
-  work. New input, tool work, or a completed response without a rollover request
+- Rollover requires at least one note. `context_rollover`, and `reset` before
+  the reserve is spent, also require a fresh checkpoint covering current work.
+  New input, tool work, or a completed response without a rollover request
   makes earlier notes stale. Checkpoints cannot be reused after compaction.
+  Automatic recovery accepts stale notes and tells the model to retrieve
+  recent history.
 - Continuation depends on complete notes. The extension cannot recover omitted
   facts automatically, and estimates cannot predict unusually large responses.
 - Manual reset and input-triggered rollover use Pi's compaction preparation,
