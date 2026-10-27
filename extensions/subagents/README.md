@@ -41,7 +41,7 @@ onto its schema:
 |---|---|
 | `starting`, `running` | Child process is working |
 | `completed` | Run finished; result delivered once |
-| `paused` | Run ended on a provider quota, rate-limit (429) or overload error; the conversation is kept. `send` resumes it after the limit resets |
+| `paused` | Run ended on a provider quota, credit, billing, rate-limit (429) or overload error; the conversation is kept. `send` resumes it after the limit resets |
 | `failed` | Run or process failed |
 | `interrupted` | Stopped by `interrupt`; no completion is delivered and late child events are ignored. `send` resumes it |
 | `stopped` | Restored after reload, quit or tree navigation; `send` resumes it |

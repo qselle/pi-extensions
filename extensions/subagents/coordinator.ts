@@ -955,10 +955,11 @@ export function isProviderLimitError(message: string): boolean {
     /\brate[ _-]?limit/,
     /\btoo many requests\b/,
     /\binsufficient[_ -]?quota\b/,
-    /\bquota\b.{0,80}\b(?:exceeded|exhausted|reached|limit)/,
+    /\b(?:quota|credits?|credit balance)\b.{0,80}\b(?:exceeded|exhausted|depleted|reached|too low|limit)/,
     /\b(?:exceeded|exhausted|reached)\b.{0,80}\bquota\b/,
     /\busage limit\b/,
-    /\b(?:daily|weekly|monthly|billing|spending) limit\b/,
+    /\b(?:daily|weekly|monthly) limit\b/,
+    /\b(?:billing|spending)(?: hard)? limit\b/,
     /\boverloaded/,
     /(?:^|\b(?:http|status|code|error)\s*:?\s*)429\b/,
   ].some((pattern) => pattern.test(text));

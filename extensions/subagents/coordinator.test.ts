@@ -551,10 +551,12 @@ function durableHarness(maxOpenAgents = 6) {
 
 test("recognizes provider quota, rate-limit and overload errors", () => {
   for (const message of ["429 Too Many Requests", "HTTP 429", "Rate limit reached for requests", "rate_limit_error",
-    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached"]) {
+    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached",
+    "Your credit balance is too low to access the API", "Credits exhausted for this workspace", "Billing hard limit has been reached",
+    "You have reached your spending limit"]) {
     expect(isProviderLimitError(message), message).toBe(true);
   }
-  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted"]) {
+  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted", "Credits: see LICENSE"]) {
     expect(isProviderLimitError(message), message).toBe(false);
   }
 });
