@@ -104,6 +104,8 @@ test("collects a terminal answer first, cancels Telegram polling, and mirrors th
   expect(titles).toEqual(["❓ Input needed · Question 1/1", "pi"]);
   expect(pi.emitted).toEqual([
     { name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/1" } },
+    { name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
+    { name: "herdr:blocked", payload: { active: false } },
     { name: "terminal-title:override", payload: { source: "questions", title: undefined } },
   ]);
 });
@@ -361,4 +363,39 @@ test("an already aborted questionnaire opens no input and leaves the title alone
   expect(result.details.interrupted).toBe(true);
   expect(titles).toEqual([]);
   pi.fire("session_shutdown", {});
+});
+
+const blocked = (pi: MockPi) => pi.emitted.filter((event) => event.name === "herdr:blocked").map((event) => (event.payload as any).active);
+
+test("reports a Herdr wait while only Telegram can answer", async () => {
+  const pi = new MockPi();
+  let resolveReply!: (value: any) => void;
+  const telegram = serviceWithPrompt<string>(async () => ({
+    messageId: 1,
+    result: new Promise((resolve) => { resolveReply = resolve; }),
+    close: async () => undefined,
+  }));
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: telegram });
+  const running = pi.tool.execute("call", { questions: [{ id: "q", question: "Ship?" }] }, new AbortController().signal, undefined, { mode: "json", ui: { notify() {} } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(blocked(pi)).toEqual([true]);
+  resolveReply({ status: "answered", value: "yes" });
+  await running;
+  expect(blocked(pi)).toEqual([true, false]);
+});
+
+test("balances the Herdr wait when the questionnaire is aborted or the session changes", async () => {
+  for (const interrupt of ["abort", "session_tree"]) {
+    const pi = new MockPi();
+    questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
+    const ctx = terminalContext([]);
+    ctx.ui.custom = (factory: any) => new Promise((resolve) => factory({ requestRender() {} }, theme, keybindings, resolve));
+    const controller = new AbortController();
+    const running = pi.tool.execute("call", { questions: [{ id: "a", question: "A?" }, { id: "b", question: "B?" }] }, controller.signal, undefined, ctx);
+    expect(blocked(pi)).toEqual([true]);
+    if (interrupt === "abort") controller.abort(); else pi.fire("session_tree", {});
+    expect((await running).details.interrupted).toBe(true);
+    expect(blocked(pi)).toEqual([true, false]);
+    pi.fire("session_shutdown", {});
+  }
 });

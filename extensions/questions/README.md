@@ -32,6 +32,8 @@ The saved recap renders Markdown too, with a quiet shaded answer beneath each qu
 
 Session changes and shutdown cancel pending questions and discard late replies.
 
+While a question waits, the extension emits `herdr:blocked` events (`{ active: true, label: "Waiting for user input" }`, then `{ active: false }`) so Herdr shows the pane as blocked rather than working. The label never contains question text.
+
 ### Telegram
 
 When [`telegram`](../telegram/) is configured, non-secret questions are sent after its configured delay. Terminal and Telegram answers race; the first valid answer wins and closes the other channel. Telegram failures do not disable terminal input.

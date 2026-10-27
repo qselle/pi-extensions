@@ -21,6 +21,8 @@ import { createTerminalReplySource } from "./ui.ts";
 import { hasAnswer, QuestionRecap } from "./recap.ts";
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
+/** Herdr's agent-state integration reference-counts these; keep the label free of question text. */
+const HERDR_BLOCKED_EVENT = "herdr:blocked";
 
 const parameters = {
   type: "object",
@@ -150,14 +152,21 @@ export default function questionsExtension(
           if (terminal) sources.push(terminal);
           if (telegramReply) sources.push(telegramReply.source);
 
-          const outcome = await firstReplyWins(sources, {
-            signal: controller.signal,
-            onSourceError: (source, error) => {
-              if (!current() || source !== "telegram" || telegramWarningShown) return;
-              telegramWarningShown = true;
-              ctx.ui.notify(safeTelegramQuestionError(error), "warning");
-            },
-          });
+          const waiting = sources.length > 0;
+          if (waiting) pi.events.emit(HERDR_BLOCKED_EVENT, { active: true, label: "Waiting for user input" });
+          let outcome: Awaited<ReturnType<typeof firstReplyWins>>;
+          try {
+            outcome = await firstReplyWins(sources, {
+              signal: controller.signal,
+              onSourceError: (source, error) => {
+                if (!current() || source !== "telegram" || telegramWarningShown) return;
+                telegramWarningShown = true;
+                ctx.ui.notify(safeTelegramQuestionError(error), "warning");
+              },
+            });
+          } finally {
+            if (waiting) pi.events.emit(HERDR_BLOCKED_EVENT, { active: false });
+          }
           // A reply can win immediately before navigation. Do not issue a
           // secret handle or return its answer into the replacement session.
           if (!current()) { interrupted = true; break; }
