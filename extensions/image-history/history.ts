@@ -33,9 +33,10 @@ export const DEFERRAL_BATCH = 8;
  * Rewrite only recoverable images before a user-turn boundary, never history.
  * The boundary advances to a user turn only once `batch` recoverable images
  * precede it. It depends only on earlier messages, so each request keeps the
- * previous request's prefix until a whole batch is deferred at once.
+ * previous request's prefix until a whole batch is deferred at once. The
+ * default of one defers everything before the latest user turn.
  */
-export function referenceOlderImages<T>(messages: readonly T[], entries: readonly any[], batch = DEFERRAL_BATCH): { messages: T[]; replaced: number } {
+export function referenceOlderImages<T>(messages: readonly T[], entries: readonly any[], batch = 1): { messages: T[]; replaced: number } {
   const references = new Map<string, Map<string, string>>();
   for (const entry of entries) {
     const content = entryContent(entry);

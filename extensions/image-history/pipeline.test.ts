@@ -16,7 +16,7 @@ test("defers before hydration, resolves only current branch images, and labels m
     const old = await storeMessage({ role: "user", content: [original], timestamp: 1 }, store);
     const current = { ...old, timestamp: 2 };
     const entries = [{ type: "message", id: "old", message: old }, { type: "message", id: "current", message: current }];
-    const deferred = referenceOlderImages([old, current], entries, 1);
+    const deferred = referenceOlderImages([old, current], entries);
     expect(deferred.replaced).toBe(1);
     const hydrated = await hydrateImages(deferred.messages, entries, store);
     expect(JSON.stringify(hydrated[0])).toContain("old:0");
@@ -77,7 +77,7 @@ test("identical previews keep distinct original identities, including images int
       { type: "message", id: "first", message: first },
       { type: "context_edit", id: "edit", targetId: "second", replacement: { content: [b] } },
     ];
-    const result = referenceOlderImages([first, second, { role: "user", content: [] }], entries, 1);
+    const result = referenceOlderImages([first, second, { role: "user", content: [] }], entries);
     expect(JSON.stringify(result.messages[0])).toContain("first:0");
     expect(JSON.stringify(result.messages[1])).toContain("edit:0");
     expect(await store.unpack(retrieveImage(entries, "edit:0")!)).toEqual(secondOriginal);

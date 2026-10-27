@@ -6,7 +6,7 @@ const entries = [{ type: "message", id: "entry", message: old }];
 test("defers older images while preserving the entire current turn and source history", () => {
   const current = { role: "user", content: [image, image] };
   const tool = { role: "toolResult", content: [image] };
-  const result = referenceOlderImages([old, current, tool], entries, 1);
+  const result = referenceOlderImages([old, current, tool], entries);
   expect(result.replaced).toBe(1);
   expect(JSON.stringify(result.messages[0])).toContain('entry:0');
   expect(result.messages[1]).toBe(current);
@@ -17,8 +17,8 @@ test("defers older images while preserving the entire current turn and source hi
 test("keeps unrecoverable images, no-user context and non-image parts unchanged", () => {
   const unknown = { ...image, data: "missing" };
   const messages = [{ role: "user", content: [unknown] }, { role: "user", content: "Now" }];
-  expect(referenceOlderImages(messages, entries, 1).messages).toEqual(messages);
-  expect(referenceOlderImages([{ role: "toolResult", content: [image] }], entries, 1).replaced).toBe(0);
+  expect(referenceOlderImages(messages, entries).messages).toEqual(messages);
+  expect(referenceOlderImages([{ role: "toolResult", content: [image] }], entries).replaced).toBe(0);
   expect(retrieveImage(entries, "entry:-1")).toBeUndefined();
   expect(retrieveImage(entries, "entry:1")).toBeUndefined();
   expect(retrieveImage([], "entry:0")).toBeUndefined();
@@ -34,7 +34,7 @@ test("opt-in state follows branch append order and rejects malformed state", () 
 test("defers images in batches so each request extends the previous request's prefix", () => {
   const turns = Array.from({ length: 20 }, (_, index) => ({ role: "user", content: [{ type: "image" as const, mimeType: "image/png", data: `image-${index}` }, { type: "text", text: `turn ${index}` }] }));
   const branch = turns.map((message, index) => ({ type: "message", id: `turn-${index}`, message }));
-  const requests = turns.map((_, index) => referenceOlderImages(turns.slice(0, index + 1), branch).messages);
+  const requests = turns.map((_, index) => referenceOlderImages(turns.slice(0, index + 1), branch, DEFERRAL_BATCH).messages);
   const rewrites: number[] = [];
   for (let index = 1; index < requests.length; index++) {
     const previous = requests[index - 1]!;
