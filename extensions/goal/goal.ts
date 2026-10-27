@@ -136,6 +136,19 @@ export function validateGoalChecks(checks: readonly GoalCheck[]): GoalCheck[] {
   return normalized;
 }
 
+/** New goals accept plain strings and start the first pending check when none is in progress. */
+export function normalizeNewGoalChecks(checks: readonly (string | GoalCheck)[]): GoalCheck[] {
+  const normalized = checks.map((check): GoalCheck => typeof check === "string" ? { content: check, status: "pending" } : check);
+  if (normalized.some((check) => check.status === "in_progress")) return normalized;
+  const first = normalized.findIndex((check) => check.status === "pending");
+  return first < 0 ? normalized : normalized.map((check, index) => index === first ? { ...check, status: "in_progress" } : check);
+}
+
+/** Cached prompt reads are cheap repeats of earlier input, so budgets ignore them. */
+export function goalBudgetTokens(usage: { totalTokens?: number; cacheRead?: number } | undefined): number {
+  return Math.max(0, (usage?.totalTokens ?? 0) - (usage?.cacheRead ?? 0));
+}
+
 export function beginGoalRun(goal: GoalState, continuation: boolean, now = Date.now()): GoalState {
   if (goal.status !== "active") return goal;
   return {

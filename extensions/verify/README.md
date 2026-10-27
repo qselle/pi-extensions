@@ -11,7 +11,7 @@ Runs a configured project check after a successful `edit` or `write` and appends
 /verify run <path>  Run the matching check without editing
 ```
 
-Failed verification does not mark the edit itself as failed. Large output is written to a temporary file and the tool result receives a bounded preview and path. Cancellation kills the check without reporting a code failure.
+Failed verification does not mark the edit itself as failed. Large output is written to a temporary file and the tool result receives a bounded preview and path. Cancellation kills the check without reporting a code failure. Appended failures keep the tool's structured result for codemode scripts unchanged.
 
 Results are cached per turn, command, and file state. A later edit changes the cache key and runs the check again.
 

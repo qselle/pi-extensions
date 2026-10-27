@@ -12,6 +12,7 @@ mock.module("typebox", () => ({
     Integer: (options?: unknown) => ({ type: "integer", ...options as object }),
     Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...options as object }),
     Optional: (schema: unknown) => schema,
+    Union: (anyOf: unknown[]) => ({ anyOf }),
   },
 }));
 
@@ -141,7 +142,7 @@ test("starts fresh goal continuations with a hidden prompt marker from safe idle
   expect(pi.sent).toHaveLength(1);
   expect(pi.sent[0].kind).toBe("custom");
   expect((pi.sent[0].message as any).customType).toBe("goal-continuation");
-  expect((pi.sent[0].message as any).content).toBe("Continue the active goal.");
+  expect((pi.sent[0].message as any).content).toStartWith("Continue the active goal.");
   expect(pi.sent[0].options).toEqual({ triggerTurn: true });
 
   await pi.emit("agent_start", {}, ctx);
@@ -181,68 +182,8 @@ test("tool-created goals use a hidden prompt marker for their first continuation
   expect(pi.sent).toHaveLength(1);
   expect(pi.sent[0].kind).toBe("custom");
   expect((pi.sent[0].message as any).customType).toBe("goal-continuation");
-  expect((pi.sent[0].message as any).content).toBe("Continue the active goal.");
+  expect((pi.sent[0].message as any).content).toStartWith("Continue the active goal.");
 
-  await pi.commands.get("goal").handler("pause", ctx);
-  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
-});
-
-test("injects full goal context transiently while storing only small markers", async () => {
-  const pi = new MockPi();
-  const ctx = mockContext(pi);
-  goalExtension(pi as any);
-
-  await pi.emit("session_start", { reason: "startup" }, ctx);
-  await pi.commands.get("goal").handler("Ship <safe> goal context", ctx);
-  await Bun.sleep(40);
-  expect(pi.sent[0].kind).toBe("custom");
-  expect((pi.sent[0].message as any).content).toBe("Continue the active goal.");
-  expect((pi.sent[0].message as any).content).not.toContain("safe");
-
-  const [injection] = await pi.emit("before_agent_start", {}, ctx);
-  expect(injection.message.content).toBe("Active goal context.");
-  await pi.emit("agent_start", {}, ctx);
-  const [transformed] = await pi.emit("context", {
-    messages: [
-      { role: "custom", customType: "goal-context", content: "stale", display: false, timestamp: 1 },
-      { role: "custom", ...(pi.sent[0].message as object), timestamp: 2 },
-      { role: "custom", ...injection.message, timestamp: 3 },
-    ],
-  }, ctx);
-
-  expect(transformed.messages).toHaveLength(1);
-  expect(transformed.messages[0].role).toBe("custom");
-  expect(transformed.messages[0].customType).toBe("goal-context");
-  expect(transformed.messages[0].content).toContain("Persistent goal continuation");
-  expect(transformed.messages[0].content).toContain("Ship &lt;safe&gt; goal context");
-  expect(pi.entries.some((entry) => JSON.stringify(entry).includes("Persistent goal continuation"))).toBe(false);
-
-  await pi.emit("agent_settled", {}, ctx);
-  await pi.commands.get("goal").handler("pause", ctx);
-  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
-});
-
-test("expands the tiny continuation marker when before_agent_start is bypassed", async () => {
-  const pi = new MockPi();
-  const ctx = mockContext(pi);
-  goalExtension(pi as any);
-
-  await pi.emit("session_start", { reason: "startup" }, ctx);
-  await pi.commands.get("goal").handler("Execute the continuation objective", ctx);
-  await Bun.sleep(40);
-  await pi.emit("agent_start", {}, ctx);
-
-  const [transformed] = await pi.emit("context", {
-    messages: [{ role: "custom", ...(pi.sent[0].message as object), timestamp: 1 }],
-  }, ctx);
-  expect(transformed.messages).toHaveLength(1);
-  expect(transformed.messages[0].role).toBe("custom");
-  expect(transformed.messages[0].customType).toBe("goal-context");
-  expect(transformed.messages[0].content).toContain("Persistent goal continuation");
-  expect(transformed.messages[0].content).toContain("Execute the continuation objective");
-
-  await pi.emit("tool_execution_end", {}, ctx);
-  await pi.emit("agent_settled", {}, ctx);
   await pi.commands.get("goal").handler("pause", ctx);
   await pi.emit("session_shutdown", { reason: "quit" }, ctx);
 });
@@ -368,6 +309,7 @@ test("requires the same blocker in three separate runs", async () => {
     await pi.emit("tool_execution_end", {}, ctx);
     await pi.emit("agent_settled", {}, ctx);
     expect(result.details.blockerCount).toBe(run);
+    expect(result.terminate).toBe(run === 3 ? true : undefined);
   }
 
   expect(pi.entries.at(-1).data.goal.status).toBe("blocked");
@@ -395,11 +337,7 @@ test("a stalled goal resumes only through explicit resume and request reconcilia
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.goal.status).toBe("stalled");
 
-  const [stalledStart] = await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx);
-  expect(stalledStart.message.customType).toBe("goal-context");
-  const [stalledContext] = await pi.emit("context", { messages: [stalledStart.message] }, ctx);
-  expect(stalledContext.messages[0].content).toContain("State: stalled");
-  expect(stalledContext.messages[0].content).toContain("A progress report never resumes a goal");
+  expect(await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx)).toEqual([undefined]);
 
   await pi.emit("agent_start", {}, ctx);
   await expect(pi.tools.get("report_goal_progress").execute("invalid-progress", {
@@ -408,9 +346,9 @@ test("a stalled goal resumes only through explicit resume and request reconcilia
   expect(pi.entries.at(-1).data.goal.status).toBe("stalled");
 
   await pi.emit("input", { source: "interactive", text: "Resume implementation" }, ctx);
-  const beforeResume = pi.entries.at(-1).data.goal;
+  const beforeResume = JSON.parse((await pi.tools.get("get_goal").execute("get", {}, undefined, undefined, ctx)).content[0].text).goal;
   const resumed = await pi.tools.get("resume_goal").execute("resume", {
-    goal_id: beforeResume.id, request_id: beforeResume.reconciliation.requestId,
+    goal_id: beforeResume.id, request_id: beforeResume.request_id,
   }, undefined, undefined, ctx);
   const current = resumed.details.goal;
   await pi.tools.get("reconcile_goal").execute("keep", {
@@ -458,10 +396,7 @@ test("does not auto-revive provider-capacity stops", async () => {
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.goal.status).toBe("usage_limited");
 
-  const [startContext] = await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx);
-  const [inactiveContext] = await pi.emit("context", { messages: [startContext.message] }, ctx);
-  expect(inactiveContext.messages[0].content).toContain("State: usage_limited");
-  expect(inactiveContext.messages[0].content).toContain("Resume only when the user explicitly asks");
+  expect(await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx)).toEqual([undefined]);
   await expect(pi.tools.get("report_goal_progress").execute("progress", {
     checks: [{ content: "Wait for provider capacity", status: "in_progress" }],
   }, undefined, undefined, ctx)).rejects.toThrow("only while the goal is active");
@@ -729,18 +664,22 @@ test("inactive status questions keep the goal inactive while resume and full rev
   const original = { ...createGoal("The complete feature", { now: 10, tokenBudget: 50_000 }), status: "paused", turns: 4, continuations: 2, tokensUsed: 1200, timeUsedMs: 35_000 };
   pi.appendEntry("goal-state", { version: 2, goal: original });
   await pi.emit("session_start", {}, ctx);
+  const entries = pi.entries.length;
   await pi.emit("input", { source: "interactive", text: "What is the status?" }, ctx);
-  await pi.tools.get("reconcile_goal").execute("keep", { ...goalIdentifiers(pi.entries.at(-1).data.goal), action: "keep" }, undefined, undefined, ctx);
+  expect(await pi.emit("before_agent_start", {}, ctx)).toEqual([undefined]);
+  await pi.emit("agent_start", {}, ctx);
   await pi.emit("agent_settled", {}, ctx);
+  expect(pi.entries).toHaveLength(entries);
   expect(pi.entries.at(-1).data.goal.status).toBe("paused");
+  expect(ctx.notifications.some((message) => message.includes("reconciliation"))).toBe(false);
   await Bun.sleep(40);
   expect(pi.sent).toHaveLength(0);
   await pi.emit("input", { source: "interactive", text: "Resume and add migrations" }, ctx);
   await pi.emit("agent_start", {}, ctx);
-  const identifiers = goalIdentifiers(pi.entries.at(-1).data.goal);
-  await pi.tools.get("resume_goal").execute("resume", identifiers, undefined, undefined, ctx);
+  const read = JSON.parse((await pi.tools.get("get_goal").execute("get", {}, undefined, undefined, ctx)).content[0].text).goal;
+  const resumed = await pi.tools.get("resume_goal").execute("resume", { goal_id: read.id, request_id: read.request_id }, undefined, undefined, ctx);
   await pi.tools.get("reconcile_goal").execute("revise", {
-    ...identifiers, action: "revise", objective: "The complete feature, with migrations",
+    ...goalIdentifiers(resumed.details.goal), action: "revise", objective: "The complete feature, with migrations",
     checks: [{ content: "Implement feature and migration", status: "in_progress" }, { content: "Verify every behavior", status: "pending" }],
   }, undefined, undefined, ctx);
   const revised = pi.entries.at(-1).data.goal;
@@ -800,4 +739,203 @@ test("budget wrap-up may verify completed work but a later run cannot silently r
   await stopped.commands.get("goal").handler("resume", stoppedContext);
   expect(stopped.entries.at(-1).data.goal.status).toBe("budget_limited");
   await stopped.emit("session_shutdown", {}, stoppedContext);
+});
+
+/** A context whose session projection is the transcript the model would see. */
+function projectedContext(pi: MockPi) {
+  const ctx: any = mockContext(pi);
+  const transcript: any[] = [];
+  pi.sendMessage = (message: any, options: unknown) => {
+    pi.sent.push({ kind: "custom", message, options });
+    transcript.push({ role: "custom", ...message });
+  };
+  ctx.sessionManager.buildSessionProjection = () => ({ messages: transcript });
+  return { ctx, transcript };
+}
+
+const anchors = (transcript: any[]) => transcript.filter((message) => message.customType === "goal-anchor");
+
+test("keeps the request prefix identical across goal turns until a transition", async () => {
+  const pi = new MockPi();
+  const { ctx, transcript } = projectedContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", { reason: "startup" }, ctx);
+  expect(transcript).toHaveLength(0);
+
+  await pi.commands.get("goal").handler("Ship <the> feature", ctx);
+  expect(anchors(transcript)).toHaveLength(1);
+  expect(anchors(transcript)[0].content).toContain("Ship &lt;the&gt; feature");
+
+  const requests: any[][] = [];
+  for (let run = 0; run < 3; run++) {
+    await Bun.sleep(40);
+    expect(transcript.at(-1).customType).toBe("goal-continuation");
+    await pi.emit("agent_start", {}, ctx);
+    const [rewritten] = await pi.emit("context", { messages: transcript }, ctx);
+    expect(rewritten).toBeUndefined();
+    requests.push([...transcript]);
+    const message = assistantMessage(100 + run, `Progress ${run}`);
+    transcript.push(message, { role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "ok" }] });
+    await pi.emit("message_end", { message }, ctx);
+    await pi.emit("tool_execution_end", {}, ctx);
+    await pi.emit("agent_settled", {}, ctx);
+  }
+  for (let index = 1; index < requests.length; index++) {
+    expect(requests[index].slice(0, requests[index - 1].length)).toEqual(requests[index - 1]);
+  }
+  expect(anchors(transcript)).toHaveLength(1);
+  expect(pi.entries.at(-1).data.goal.tokensUsed).toBe(303);
+
+  await Bun.sleep(40);
+  await pi.commands.get("goal").handler("pause", ctx);
+  expect(anchors(transcript)).toHaveLength(2);
+  expect(anchors(transcript)[1].content).toContain("State: paused");
+  await pi.emit("session_tree", {}, ctx);
+  expect(anchors(transcript)).toHaveLength(2);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("a user request adds one reconciliation message and its tool result keeps anchors quiet", async () => {
+  const pi = new MockPi();
+  const { ctx, transcript } = projectedContext(pi);
+  ctx.mode = "rpc";
+  ctx.hasUI = false;
+  goalExtension(pi as any);
+  await pi.emit("session_start", { reason: "startup" }, ctx);
+  await pi.commands.get("goal").handler("Keep scope stable", ctx);
+  await pi.emit("input", { source: "rpc", text: "How is it going?" }, ctx);
+  const [start] = await pi.emit("before_agent_start", {}, ctx);
+  const requestId = pi.entries.at(-1).data.goal.reconciliation.requestId;
+  expect(start.message.customType).toBe("goal-reconciliation");
+  expect(start.message.content).toContain(`request_id: ${requestId}`);
+  transcript.push({ role: "custom", ...start.message });
+  await pi.emit("agent_start", {}, ctx);
+  const goal = pi.entries.at(-1).data.goal;
+  const kept = await pi.tools.get("reconcile_goal").execute("keep", { ...goalIdentifiers(goal), action: "keep" }, undefined, undefined, ctx);
+  transcript.push({ role: "toolResult", toolName: "reconcile_goal", isError: false, details: kept.details, content: kept.content });
+  await pi.emit("agent_settled", {}, ctx);
+  expect(anchors(transcript)).toHaveLength(1);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("a provider error retried within the settled run keeps the goal active and run state intact", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", { reason: "startup" }, ctx);
+  await pi.commands.get("goal").handler("Survive transient provider errors", ctx);
+  await Bun.sleep(40);
+
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("update_goal").execute("blocked", { status: "blocked", blocker: "Registry is flaky" }, undefined, undefined, ctx);
+  await pi.emit("message_end", { message: { ...assistantMessage(10), stopReason: "error", errorMessage: "WebSocket error" } }, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.emit("message_end", { message: assistantMessage(20, "Recovered") }, ctx);
+  await pi.emit("tool_execution_end", {}, ctx);
+  await pi.emit("agent_settled", {}, ctx);
+
+  const goal = pi.entries.at(-1).data.goal;
+  expect(goal.status).toBe("active");
+  expect(goal.turns).toBe(1);
+  expect(goal.blockerAudit.count).toBe(1);
+  expect(goal.tokensUsed).toBe(30);
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(2);
+  await pi.commands.get("goal").handler("pause", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("budgets ignore cached prompt reads and usage persists only when the run settles", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.emit("agent_start", {}, ctx);
+  await pi.tools.get("create_goal").execute("create", { objective: "Count real tokens", token_budget: 1_000 }, undefined, undefined, ctx);
+  const entries = pi.entries.length;
+  const message = assistantMessage(900);
+  message.usage.cacheRead = 800;
+  await pi.emit("message_end", { message }, ctx);
+  expect(pi.entries).toHaveLength(entries);
+  await pi.emit("agent_settled", {}, ctx);
+  expect(pi.entries.at(-1).data.goal).toMatchObject({ status: "active", tokensUsed: 100 });
+  await pi.commands.get("goal").handler("pause", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("create_goal accepts plain checks and starts the first pending one", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  const result = await pi.tools.get("create_goal").execute("create", {
+    objective: "Ship with checks",
+    checks: ["Implement", { content: "Verify", status: "pending" }],
+  }, undefined, undefined, ctx);
+  expect(result.details.goal.checks).toEqual([
+    { content: "Implement", status: "in_progress" },
+    { content: "Verify", status: "pending" },
+  ]);
+  await pi.commands.get("goal").handler("pause", ctx);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("/goal complete reports stats and emits completion; /goal block stays out of attention alerts", async () => {
+  const pi = new MockPi();
+  const ctx = mockContext(pi);
+  const completions: unknown[] = [];
+  const attention: unknown[] = [];
+  pi.events.on(GOAL_COMPLETED_EVENT, (event) => completions.push(event));
+  pi.events.on("goal:attention", (event) => attention.push(event));
+  goalExtension(pi as any);
+  await pi.emit("session_start", {}, ctx);
+  await pi.commands.get("goal").handler("Finish by hand", ctx);
+  await pi.commands.get("goal").handler("complete", ctx);
+  expect(pi.entries.at(-1).data.goal.status).toBe("complete");
+  expect(completions).toHaveLength(1);
+  expect(ctx.notifications.at(-1)).toBe("Goal complete · 0 runs · 0s · 0 tokens");
+
+  await pi.commands.get("goal").handler("Second objective", ctx);
+  await pi.commands.get("goal").handler("block", ctx);
+  await Promise.resolve();
+  expect(pi.entries.at(-1).data.goal).toMatchObject({ status: "blocked", stallReason: "Blocked by the user." });
+  expect(attention).toHaveLength(0);
+  await Bun.sleep(40);
+  expect(pi.sent).toHaveLength(0);
+  await pi.emit("session_shutdown", {}, ctx);
+});
+
+test("startup offers to resume, keep, or clear an inactive goal", async () => {
+  for (const [choice, expected] of [["Resume goal", "active"], ["Keep paused", "paused"], ["Clear goal", null]] as const) {
+    const pi = new MockPi();
+    const ctx: any = mockContext(pi);
+    const prompts: string[][] = [];
+    ctx.ui.select = async (_title: string, options: string[]) => { prompts.push(options); return choice; };
+    pi.appendEntry("goal-state", { version: 2, goal: { ...createGoal("Paused work"), status: "paused" } });
+    goalExtension(pi as any);
+    await pi.emit("session_start", { reason: "reload" }, ctx);
+    expect(prompts).toHaveLength(0);
+    await pi.emit("session_start", { reason: "startup" }, ctx);
+    await Bun.sleep(0);
+    expect(prompts).toEqual([["Resume goal", "Keep paused", "Clear goal"]]);
+    expect(pi.entries.at(-1).data.goal?.status ?? null).toBe(expected);
+    if (expected === "active") await pi.commands.get("goal").handler("pause", ctx);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
+});
+
+test("automatic continuation runs for RPC clients but not headless modes", async () => {
+  for (const [hasUI, sent] of [[true, 1], [false, 0]] as const) {
+    const pi = new MockPi();
+    const ctx: any = mockContext(pi);
+    ctx.mode = hasUI ? "rpc" : "json";
+    ctx.hasUI = hasUI;
+    goalExtension(pi as any);
+    await pi.emit("session_start", {}, ctx);
+    await pi.commands.get("goal").handler("Continue over RPC", ctx);
+    await Bun.sleep(40);
+    expect(pi.sent).toHaveLength(sent);
+    await pi.commands.get("goal").handler("pause", ctx);
+    await pi.emit("session_shutdown", {}, ctx);
+  }
 });

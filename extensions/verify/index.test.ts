@@ -165,6 +165,14 @@ describe("tool_result verification", () => {
     expect(result.isError).toBeUndefined();
   });
 
+  test("keeps the structured result for programmatic callers", async () => {
+    const harness = setup({ execResult: { code: 1, stdout: "1 failing" } });
+    await harness.pi.emit("session_start", {}, harness.ctx);
+    const structuredContent = { replaced: 1 };
+    const [result] = await harness.pi.emit("tool_result", editEvent({ structuredContent }), harness.ctx);
+    expect(result.structuredContent).toBe(structuredContent);
+  });
+
   test("clears the running status afterwards", async () => {
     const { statuses } = await run({ code: 1, stdout: "boom" });
     expect(statuses[0]?.value).toContain("verifying tests");

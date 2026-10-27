@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
+import { redactValue } from "../../lib/redact.ts";
 import { getTelegramService, type TelegramService } from "../telegram/service.ts";
 import {
   MAX_ID_CHARS,
@@ -15,12 +16,14 @@ import {
   type QuestionnaireDetails,
 } from "./model.ts";
 import { firstReplyWins } from "./race.ts";
-import { findSecretHandles, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
+import { findSecretHandles, knownSecretValues, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
 import { createTelegramQuestionReply, safeTelegramQuestionError } from "./telegram.ts";
 import { createTerminalReplySource } from "./ui.ts";
 import { hasAnswer, QuestionRecap } from "./recap.ts";
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
+/** Herdr's agent-state integration reference-counts these; keep the label free of question text. */
+const HERDR_BLOCKED_EVENT = "herdr:blocked";
 
 const parameters = {
   type: "object",
@@ -99,6 +102,16 @@ export default function questionsExtension(
       reason: `${unknown.length === 1 ? "A secret handle is" : "Secret handles are"} no longer valid in this session. Ask for the secret again with a questionnaire secret question instead of guessing the value.`,
     };
   });
+  pi.on("tool_result", (event) => {
+    const values = knownSecretValues();
+    if (values.length === 0) return;
+    const content = redactValue(event.content, values);
+    const details = redactValue(event.details, values);
+    const structuredContent = redactValue(event.structuredContent, values);
+    if (content === event.content && details === event.details && structuredContent === event.structuredContent) return;
+    // Replacing content drops structuredContent unless it is returned too.
+    return { content, details, structuredContent };
+  });
   pi.on("session_tree", reset);
   pi.on("session_shutdown", () => { reset(); unregisterVault(); });
 
@@ -150,14 +163,21 @@ export default function questionsExtension(
           if (terminal) sources.push(terminal);
           if (telegramReply) sources.push(telegramReply.source);
 
-          const outcome = await firstReplyWins(sources, {
-            signal: controller.signal,
-            onSourceError: (source, error) => {
-              if (!current() || source !== "telegram" || telegramWarningShown) return;
-              telegramWarningShown = true;
-              ctx.ui.notify(safeTelegramQuestionError(error), "warning");
-            },
-          });
+          const waiting = sources.length > 0;
+          if (waiting) pi.events.emit(HERDR_BLOCKED_EVENT, { active: true, label: "Waiting for user input" });
+          let outcome: Awaited<ReturnType<typeof firstReplyWins>>;
+          try {
+            outcome = await firstReplyWins(sources, {
+              signal: controller.signal,
+              onSourceError: (source, error) => {
+                if (!current() || source !== "telegram" || telegramWarningShown) return;
+                telegramWarningShown = true;
+                ctx.ui.notify(safeTelegramQuestionError(error), "warning");
+              },
+            });
+          } finally {
+            if (waiting) pi.events.emit(HERDR_BLOCKED_EVENT, { active: false });
+          }
           // A reply can win immediately before navigation. Do not issue a
           // secret handle or return its answer into the replacement session.
           if (!current()) { interrupted = true; break; }
@@ -222,7 +242,7 @@ export default function questionsExtension(
       const suffix = unavailable
         ? answers[0].secret
           ? "Secret questions require Pi in TUI mode."
-          : "No reply channel is available. Open Pi in TUI mode or configure Telegram."
+          : "No reply channel is available. Open Pi in TUI or RPC mode, or configure Telegram."
         : "Questionnaire interrupted";
       return {
         content: [{ type: "text", text: [interrupted ? `${response}\n${suffix}`.trim() : response, handled ? SECRET_HANDLE_HINT : ""].filter(Boolean).join("\n\n") }],
@@ -245,7 +265,7 @@ function sourcesUnavailable(
   telegram: TelegramService | undefined,
   secret: boolean,
 ): boolean {
-  return ctx.mode !== "tui" && (!telegram || secret);
+  return ctx.mode !== "tui" && (secret || (!ctx.hasUI && !telegram));
 }
 
 export function telegramContextLabel(sessionName: string | undefined, cwd: string, home = homedir()): string {

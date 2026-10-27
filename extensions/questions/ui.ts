@@ -213,7 +213,7 @@ export function createTerminalReplySource(
   total: number,
   telegramEnabled: boolean,
 ): ReplySource | undefined {
-  if (ctx.mode !== "tui") return undefined;
+  if (ctx.mode !== "tui") return ctx.hasUI && !question.secret ? createDialogReplySource(ctx, question, index, total) : undefined;
   return {
     name: "terminal",
     run: async (signal): Promise<SourceReply> => {
@@ -245,6 +245,29 @@ export function createTerminalReplySource(
       });
       if (result.status === "answered") return result;
       return result.status === "cancelled" ? { status: "cancelled" } : { status: "unavailable" };
+    },
+  };
+}
+
+const OTHER_CHOICE = "Other (type an answer)";
+
+/** RPC clients have no custom components, so use Pi's select and input dialogs. */
+function createDialogReplySource(ctx: ExtensionContext, question: Question, index: number, total: number): ReplySource {
+  const title = `Question ${index + 1}/${total} · ${question.question}`;
+  return {
+    name: "terminal",
+    run: async (signal): Promise<SourceReply> => {
+      if (question.options.length > 0) {
+        const choices = question.allowOther ? [...question.options, OTHER_CHOICE] : question.options;
+        const selected = await ctx.ui.select(title, choices, { signal });
+        if (signal.aborted) return { status: "unavailable" };
+        if (selected === undefined) return { status: "cancelled" };
+        if (selected !== OTHER_CHOICE || question.options.includes(selected)) return { status: "answered", answer: selected };
+      }
+      const entered = await ctx.ui.input(title, "Type your answer", { signal });
+      if (signal.aborted) return { status: "unavailable" };
+      const answer = cleanAnswer(entered ?? "");
+      return answer ? { status: "answered", answer } : { status: "cancelled" };
     },
   };
 }

@@ -13,6 +13,8 @@ and lifecycle tools activate when a goal is created or restored.
 /goal edit                Edit the objective
 /goal pause               Pause continuation
 /goal resume              Resume a paused or blocked goal
+/goal complete            Mark the goal complete and show its stats
+/goal block               Stop the goal as blocked (no attention alert)
 /goal clear               Remove the goal
 ```
 
@@ -28,7 +30,7 @@ Agent tools:
 | `resume_goal` | Resume an inactive goal at the user's explicit request |
 | `clear_goal` | Clear an inactive goal after explicit cancellation or replacement |
 
-Only one check may be in progress. Completion is rejected while a non-cancelled check is unfinished. The same blocker must be reported in three consecutive goal runs before the goal stops as blocked.
+Only one check may be in progress. `create_goal` also accepts plain-string checks; when none is in progress, the first pending check starts. A confirmed third blocker report ends the run immediately. Completion is rejected while a non-cancelled check is unfinished. The same blocker must be reported in three consecutive goal runs before the goal stops as blocked.
 
 Blocker reports can include a stable `condition_id`. Reuse it for the same
 underlying condition as wording, evidence, or next-input details change; a different
@@ -37,9 +39,18 @@ required next input. No semantic or fuzzy matching is performed.
 
 Cancelled checks are excluded from completion totals. Cancelling a check requires a user-approved scope change; the agent must still verify the objective before completing the goal.
 
-Continuation waits for Pi to be idle with no queued user input. Interruptions pause the goal; provider failures and budget limits stop automatic work. Goal context is expanded only for the active turn, while session history stores small state markers. State follows session branches.
+Continuation waits for Pi to be idle with no queued user input. Interruptions pause the goal; budget limits stop automatic work. A provider error stops the goal only if the settled run still ends with it, so Pi's own retries and compaction can recover first. Retries, compaction and queued work count as one run for turn totals and blocker audits. State follows session branches.
 
-New interactive or RPC input creates a persisted reconciliation request. The agent
+Token budgets count input, output and cache writes; cached prompt reads are excluded. Usage is saved when a run settles. Completion shows runs, time and tokens.
+
+### Prompt cache
+
+Goal state reaches the model as hidden append-only anchors that restate only the goal ID, status, objective, checks and latest progress summary. An anchor is added only when the visible conversation stops showing the current state: after `/goal` commands, extension-driven transitions such as stalls, compaction, branch changes, or restore. Goal tool results count as showing the state they return. Usage, timing and run counters never enter anchors; `get_goal` reports them. The goal rules are guidelines of the goal controls, which activate once per session.
+
+Each automatic continuation persists one short wake message. Earlier anchors and messages are never rewritten or pruned, so the request prefix stays identical between turns. Older sessions' per-run `goal-context` markers are dropped consistently.
+
+New interactive or RPC input to an active goal creates a persisted reconciliation
+request, delivered once as a hidden message with its `request_id`. The agent
 must reconcile it before updating progress, completing the goal, reporting a blocker,
 or continuing automatically. `keep` preserves scope, including when answering a
 status question. `revise` requires the complete objective and complete checks list
@@ -54,15 +65,18 @@ invalidates old request tokens; controls use `goal_id` and `request_id` from
 `get_goal` or the current goal context. Failed validation leaves the previous
 objective and pending request intact.
 
-Inactive goals stay inactive after progress questions or scope reconciliation.
-When explicitly asked to continue, the agent calls `resume_goal` before
-`reconcile_goal`; resumption resets the blocker audit but preserves lifetime totals.
+Inactive goals stay out of unrelated requests: input adds no reconciliation, hidden
+context, or settle notice. `get_goal` returns the current `request_id`. When
+explicitly asked to continue, the agent calls `resume_goal`, which turns the request
+into a reconciliation, before `reconcile_goal`; resumption resets the blocker audit but preserves lifetime totals.
 An exhausted token budget cannot resume. A goal may still be marked complete during
 the run that exhausted its budget if all work and checks are already verified.
 For explicit cancellation, reconcile an active goal with `pause`, then call
 `clear_goal` with the same identifiers. Clearing appends a state entry and preserves
 history. Direct `/goal resume` confirms the current objective and clears pending
 reconciliation; `/goal edit` and the confirmed `/goal clear` remain available.
+
+At startup or resume with a UI, a paused, stalled, blocked or usage-limited goal offers Resume, Keep, or Clear.
 
 Completed goals emit one `goal:completed` event for optional consumers such as [`telegram`](../telegram/).
 
@@ -78,4 +92,4 @@ blocker details, and raw provider errors.
 - Uses Pi's extension, session, context, and TUI APIs.
 - Requires [`overlay-stack`](../overlay-stack/) for the status card.
 - Uses host-provided `typebox` for tool schemas.
-- Goal state and tools work in persistent TUI and RPC sessions. The panel and automatic continuation require the TUI.
+- Goal state and tools work in persistent TUI and RPC sessions. The panel requires the TUI; automatic continuation requires a TUI or RPC client and does not run in print or JSON mode.

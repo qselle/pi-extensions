@@ -11,6 +11,7 @@ mock.module("typebox", () => ({
     Boolean: (options?: unknown) => ({ type: "boolean", ...options as object }),
     Array: (items: unknown, options?: unknown) => ({ type: "array", items, ...options as object }),
     Optional: (schema: unknown) => schema,
+    Union: (anyOf: unknown[]) => ({ anyOf }),
     Integer: (options?: unknown) => ({ type: "integer", ...options as object }),
   },
 }));
@@ -202,27 +203,21 @@ test("coexists with goal context during an automatic goal run", async () => {
   await pi.tools.get("update_plan").execute("plan-1", activePlan, undefined, undefined, ctx);
 
   const beforeResults = await pi.emit("before_agent_start", {}, ctx);
-  const goalMarker = beforeResults.find((result) => result?.message)?.message;
-  expect(goalMarker?.customType).toBe("goal-context");
+  expect(beforeResults.every((result) => !result?.message)).toBe(true);
   await pi.emit("agent_start", {}, ctx);
 
-  let event = {
-    messages: [
-      { role: "user", content: "continue", timestamp: 1 },
-      { role: "toolResult", toolName: "update_plan", content: "Plan updated", timestamp: 2 },
-      { role: "custom", ...goalMarker, timestamp: 3 },
-    ],
-  };
+  const messages = [
+    { role: "user", content: "continue", timestamp: 1 },
+    { role: "toolResult", toolName: "update_plan", content: "Plan updated", timestamp: 2 },
+    { role: "custom", customType: "goal-anchor", content: "## Persistent goal", display: false, timestamp: 3 },
+  ];
+  let event = { messages };
   for (const handler of pi.handlers.get("context") ?? []) {
     const result = await handler(event, ctx);
     if (result?.messages) event = result;
   }
-
-  const goalContext = event.messages.find((message: any) => message.customType === "goal-context");
-  expect(goalContext?.content).toContain("Ship a multi-step integrated feature");
-  expect(goalContext?.content).toContain("If update_plan is available");
-  expect(event.messages.find((message: any) => message.customType === "plan-context")).toBeUndefined();
-  expect(event.messages[1]).toMatchObject({ role: "toolResult", toolName: "update_plan" });
+  // Neither extension rewrites history on an ordinary goal turn.
+  expect(event.messages).toBe(messages);
 
   const overlay = new OverlayStackView(plainTheme);
   overlay.setViewport(120, 40);

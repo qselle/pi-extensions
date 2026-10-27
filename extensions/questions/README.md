@@ -32,6 +32,10 @@ The saved recap renders Markdown too, with a quiet shaded answer beneath each qu
 
 Session changes and shutdown cancel pending questions and discard late replies.
 
+While a question waits, the extension emits `herdr:blocked` events (`{ active: true, label: "Waiting for user input" }`, then `{ active: false }`) so Herdr shows the pane as blocked rather than working. The label never contains question text.
+
+RPC clients without custom components get Pi's select and input dialogs instead of the terminal picker.
+
 ### Telegram
 
 When [`telegram`](../telegram/) is configured, non-secret questions are sent after its configured delay. Terminal and Telegram answers race; the first valid answer wins and closes the other channel. Telegram failures do not disable terminal input.
@@ -42,7 +46,7 @@ Replies must come from the configured chat, optional topic, and exact question m
 
 Set `secret: true` for masked terminal input. The tool result receives an opaque handle instead of the value. A later tool call can use that handle; the extension substitutes the value in memory before execution.
 
-Secret values are never persisted and handles expire on shutdown, branch change, or a new session start. Stale handles block the tool call. Tool output can still reveal a substituted value, so use commands that do not echo secrets. Secret questions are terminal-only; Telegram receives only a redacted notice.
+Secret values are never persisted and handles expire on shutdown, branch change, or a new session start. Stale handles block the tool call. Collected values are redacted as `[redacted]` from every tool result's content, details and structured content, so echoed secrets do not reach the transcript. Secret questions are terminal-only; Telegram receives only a redacted notice.
 
 ## Dependencies and limitations
 
@@ -50,4 +54,5 @@ Secret values are never persisted and handles expire on shutdown, branch change,
 - Optionally uses [`telegram`](../telegram/); no third-party packages.
 - Terminal interaction is cross-platform. Telegram requires outbound HTTPS.
 - Freeform answers are limited to 4,000 characters.
-- Without a TUI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.
+- Without a TUI, RPC UI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.
+- Redaction matches exact values only; encoded or transformed secrets are not detected.
