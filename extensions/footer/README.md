@@ -4,7 +4,7 @@ A readable **single-line** footer. The model uses the theme accent; normal label
 values and workspace details stay neutral. Quiet dots separate related groups.
 
 ```text
- GPT-5.6 Sol high │ context 6% 15.5K/258K · in 1.2K out 521 · cache R 8.4K W 400 hit 84% · $0.21 │ pi-extensions · main
+ GPT-5.6 Sol high fast · Footer refresh │ context 6% 15.5K/258K · in 1.2K out 521 · cache R 8.4K W 400 hit 84% · $0.21 │ pi-extensions · main
 ```
 
 ## Usage
@@ -31,13 +31,16 @@ The hit rate is cache reads divided by fresh input plus cache reads and writes.
 That cumulative prompt total is not shown separately because it repeats these
 counters; `context` remains the current context measurement.
 
-Wide terminals preserve detailed metrics. Session/status
-metadata gives way first, followed by optional cache details. Workspace
-identity stays on the right; paths and branches shorten before disappearing.
-Narrow layouts retain the model, context percentage and cost, then use available
-space for other fields. Cache writes give way before reads, then the remaining
-`cache hit` field disappears as a unit. The `cache` label always stays with its
-counters; other metric labels keep their readable words.
+Wide terminals preserve detailed metrics. When space runs out, the footer first
+shortens the directory, branch and session name (to 24 characters), then statuses,
+then drops cache writes and Git details. The session name shortens to 12
+characters before cache details disappear and hides only after context token
+counts. Workspace identity stays on the right; paths and branches shorten before
+disappearing. Narrow layouts retain the model, context percentage and cost, then
+use available space for other fields. Cache writes give way before reads, then the
+remaining `cache hit` field disappears as a unit. The `cache` label always stays
+with its counters; other metric labels keep their readable words. After pruning,
+any dropped detail that fits the remaining space returns, most important first.
 The model retains its reasoning effort when shortened; conflicts outlast ordinary
 Git details and other optional fields. A final cell-aware clip handles exceptionally
 tiny widths.
@@ -52,9 +55,10 @@ the footer prices that response from the model's configured rates in Pi's model
 registry and marks the total `≈`. Responses from unknown or free models keep the
 recorded zero, and absent costs still show `$?`. Detailed per-run accounting remains available through `turn-stats`.
 
-Extension statuses share the same row, sorted by key. They disappear before usage
-metrics when space is limited. Control sequences and newlines are stripped from
-labels. The working indicator and terminal title continue to show activity.
+Extension statuses share the same row, sorted by key and separated by dots. As
+space shrinks, each status shortens, then only the first remains with an overflow
+count such as `agents 2 · +1`; statuses hide after cache details but before core
+usage metrics. Control sequences and newlines are stripped from labels. The working indicator and terminal title continue to show activity.
 
 Context uses Pi's reported **used** percentage and token count. It becomes yellow
 from 75% used and red from 90%; unknown measurements show `?`. Normal cache use,
@@ -98,11 +102,13 @@ Pi writes its own title after session start, reload, and renames; the footer re-
 Optional extensions can publish a short inline badge through Pi's event bus:
 
 ```ts
-pi.events.emit("footer:badge", { id: "fast-mode", text: "fast", order: 10 });
+pi.events.emit("footer:badge", { id: "fast-mode", text: "fast", order: -10 });
 pi.events.emit("footer:badge", { id: "fast-mode" }); // remove
 ```
 
-Badge IDs and labels are sanitized and bounded. Re-emitting an ID replaces it; `order` controls stable placement.
+Badges appear right after the model, such as `GPT-5.6 Sol high fast`, and shorten with it: they
+survive ordinary widths and disappear only shortly before the model is truncated to
+ten cells. Badge IDs and labels are sanitized and bounded. Re-emitting an ID replaces it; `order` controls stable placement.
 
 ## Dependencies and limitations
 
