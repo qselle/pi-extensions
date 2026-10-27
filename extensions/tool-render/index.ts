@@ -27,6 +27,7 @@ import {
 	withoutPurpose,
 } from "../../lib/tool-purpose.ts";
 import { BASH_STYLE, managedBashOwns, type BashStyleRequest } from "../background-jobs/bash-style.ts";
+import { assertSearchRoot, BROAD_ROOT_NOTE } from "../../lib/search-root.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -428,16 +429,19 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 					// alias) to the native executor.
 					const purposeParameter = name === "bash" ? commandPurposeParameter
 						: name === "edit" || name === "write" ? changePurposeParameter : toolPurposeParameter;
+					const search = name === "grep" || name === "find";
 					const purposeMetadata: Partial<ToolDefinition<any>> = {
 						parameters: { ...definition.parameters, properties: { purpose: purposeParameter, ...definition.parameters.properties } },
 						// Pi sends strict schemas only to tools that opt in; keep native
 						// opt-ins and prefer strict sampling for the added field.
 						constrainedSampling: definition.constrainedSampling ?? STRICT_SAMPLING,
+						...(search ? { description: `${definition.description} ${BROAD_ROOT_NOTE}` } : {}),
 						...(name === "bash" ? { promptGuidelines: [...(definition.promptGuidelines ?? []), COMMAND_PURPOSE_GUIDELINE] } : {}),
-						execute: (id, args, signal, update, context) => {
+						execute: async (id, args, signal, update, context) => {
 							const toolArgs = withoutPurpose(args as Record<string, unknown>);
 							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
 							if (name === "bash") return executeTimedBash(definition, id, toolArgs, signal, update, context);
+							if (search) await assertSearchRoot(name, toolArgs.path, context?.cwd || cwd);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},
 					};

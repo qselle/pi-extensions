@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -66,6 +66,14 @@ for (const entry of rebound) {
 // Every override keeps strict schema sampling, including the added purpose field.
 for (const entry of rebound) {
   assert.deepEqual(entry.definition.constrainedSampling, { type: "json_schema", strict: "prefer" }, entry.name);
+  assert.equal(entry.definition.description.endsWith("choose a specific project or subdirectory."), ["grep", "find"].includes(entry.name), entry.name);
+}
+
+// Recursive searches refuse broad roots before the native executor runs.
+for (const name of ["grep", "find"]) {
+  const search = rebound.find((entry) => entry.name === name)!.definition;
+  const args = name === "grep" ? { pattern: "x", path: "~" } : { pattern: "*.txt", path: homedir() };
+  await assert.rejects(search.execute("call-0", args, undefined, undefined, { cwd: sessionDir }), /broad root/);
 }
 
 // The rebound ls override resolves a relative path against the session cwd.

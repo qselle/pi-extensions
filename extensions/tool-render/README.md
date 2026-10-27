@@ -164,6 +164,14 @@ when you need the complete content for copying.
 Omission rows offer expansion only while it can reveal more content; after the
 expanded limit, they say `preview limit`. Diffs follow the same convention.
 
+### Search roots
+
+`grep` and `find` refuse recursive searches rooted at the home directory, its
+ancestors, or, on macOS, `~/Library`, iCloud Drive and `~/Library/CloudStorage`,
+where a scan can download every cloud file. Their descriptions say so. The
+path is checked as written and after resolving symlinks; specific projects and
+subdirectories, including cloud subfolders, remain allowed.
+
 ### Render cache
 
 Pi repaints every card on each frame. Settled cards build their rows once per
