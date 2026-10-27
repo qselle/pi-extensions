@@ -33,8 +33,10 @@ or recent job's ID; an ambiguous prefix fails and lists the matches.
 With this extension enabled, `bash` uses the managed executor. It accepts the
 usual `command` and `timeout` (seconds), plus `yield_ms` (default 10000, capped
 at 30000), `max_chars` (output budget, default 24000, capped at 50000),
-`stdin`, optional `name`, `purpose`, `pty`, `columns`, and `rows`. Quick commands
-finish inline. Longer commands return a job ID and a hint to call `job_wait`;
+`stdin`, optional `name`, `purpose`, `pty`, `columns`, `rows`, and `cwd`. A
+relative `cwd` resolves against Pi's working directory; a missing directory
+fails before launch, and the call card shows “in <dir>” when it differs. Quick
+commands finish inline. Longer commands return a job ID and a hint to call `job_wait`;
 use it for the final status and exit code. Commands that fail during the initial
 wait return an error result that still carries the job details. Cancelling the
 initial wait stops the command, like Pi's built-in bash.

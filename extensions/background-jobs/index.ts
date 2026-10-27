@@ -1,4 +1,6 @@
 import { getShellConfig, type ExtensionAPI, type ExtensionContext, type Theme, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { Type } from "typebox";
 import { registerOverlayCard, type OverlayCardHandle } from "../overlay-stack/index.ts";
 import { TranscriptView } from "../../lib/transcript/view.ts";
@@ -304,7 +306,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
 
   interface StartParams {
     command: string; name: string; pty?: boolean; columns?: number; rows?: number; stdin?: boolean;
-    yield_ms: number; timeout_seconds?: number; max_chars?: number;
+    yield_ms: number; timeout_seconds?: number; max_chars?: number; cwd?: string;
   }
   const startManaged = async (params: StartParams, signal: AbortSignal | undefined, ctx: ExtensionContext, onUpdate?: (result: any) => void) => {
       const shell = getShellConfig();
@@ -316,7 +318,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       if (ctx.model) { env.PI_PROVIDER = ctx.model.provider; env.PI_MODEL = ctx.model.id; }
       env.PI_REASONING_LEVEL = pi.getThinkingLevel();
       const jobs = service;
-      const job = jobs.start({ pty: params.pty, columns: params.columns, rows: params.rows, stdin: params.stdin, command: params.command, name: params.name, cwd: ctx.cwd, executable: shell.shell, args: [...shell.args, params.command], env, timeoutMs: params.timeout_seconds === undefined ? undefined : params.timeout_seconds * 1000 }, signal);
+      const job = jobs.start({ pty: params.pty, columns: params.columns, rows: params.rows, stdin: params.stdin, command: params.command, name: params.name, cwd: params.cwd ?? ctx.cwd, executable: shell.shell, args: [...shell.args, params.command], env, timeoutMs: params.timeout_seconds === undefined ? undefined : params.timeout_seconds * 1000 }, signal);
       const stopProgress = streamProgress(jobs, job.id, onUpdate, () => {
         const snapshot = jobs.get(job.id);
         const value = result(job.id, { cursor: Math.max(0, snapshot.outputEnd - PROGRESS_CHARS), partial: true }, jobs);
@@ -337,20 +339,23 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   let bashStyle: BashStyle | undefined;
   const bashParameters = Type.Object({ purpose: commandPurposeParameter, command: Type.String({ minLength: 1, maxLength: 16000 }), timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 86400 })),
     yield_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait before returning a job ID (default ${DEFAULT_YIELD_MS}, capped at ${MAX_YIELD_MS}).` })),
-    max_chars: budgetParameter, stdin: stdinParameter, pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })) });
+    max_chars: budgetParameter, stdin: stdinParameter, pty: Type.Optional(Type.Boolean()), columns: Type.Optional(Type.Integer({ minimum: 10, maximum: 500 })), rows: Type.Optional(Type.Integer({ minimum: 2, maximum: 200 })), name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+    cwd: Type.Optional(Type.String({ description: "Working directory, relative to the current project unless absolute" })) });
   const bashDefinition = (): ToolDefinition<any> => ({
     name: "bash", label: "bash",
     constrainedSampling: { type: "json_schema", strict: "prefer" },
-    description: `Execute a managed shell command in the current working directory. Short commands finish inline; after yield_ms (default ${DEFAULT_YIELD_MS}) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Results show the newest max_chars characters. Optional timeout is in seconds. stdin is at EOF unless stdin=true. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use &, nohup, disown, or setsid.`,
+    description: `Execute a managed shell command in the current working directory unless cwd is set. Short commands finish inline; after yield_ms (default ${DEFAULT_YIELD_MS}) a running command returns a job ID. Use job_wait/job_output, job_write, job_resize and job_stop to control it. Results show the newest max_chars characters. Optional timeout is in seconds. stdin is at EOF unless stdin=true. Use pty for interactive terminal programs (Node.js required). Keep commands in the foreground; do not use &, nohup, disown, or setsid.`,
     promptSnippet: "Execute shell commands; long commands yield managed job IDs for follow-up.",
     promptGuidelines: [PI_ENV_GUIDELINE, FOREGROUND_GUIDELINE, YIELD_GUIDELINE, COMMAND_PURPOSE_GUIDELINE],
     parameters: bashParameters,
     outputSchema: BASH_OUTPUT_SCHEMA,
     prepareArguments: argumentAliases(bashParameters),
     async execute(_id, params: any, signal, update, ctx) {
-      const { purpose, ...execution } = params;
+      const { purpose, cwd, ...execution } = params;
+      const directory = typeof cwd === "string" && cwd.trim() ? resolve(ctx.cwd, cwd) : undefined;
+      if (directory && !statSync(directory, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Working directory not found: ${directory}`);
       const jobs = service;
-      const value = await startManaged({ ...execution, name: execution.name ?? jobName(purpose, execution.command), timeout_seconds: execution.timeout, yield_ms: yieldDuration(execution.yield_ms) }, signal, ctx, update);
+      const value = await startManaged({ ...execution, cwd: directory, name: execution.name ?? jobName(purpose, execution.command), timeout_seconds: execution.timeout, yield_ms: yieldDuration(execution.yield_ms) }, signal, ctx, update);
       const structured = { ...value, structuredContent: structuredResult(value.details.id, jobs) };
       // Keep details for renderers; the model still receives an error result.
       return ["failed", "timed-out", "stopped"].includes(value.details.status) ? { ...structured, isError: true } : structured;
@@ -361,8 +366,13 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       const { reasoning, ...rest } = args;
       const purpose = safePurpose(args.purpose || reasoning, [args.command]);
       const shown = { ...rest, purpose, command: new PlainOutput().push(redactText(String(args.command ?? ""), knownSecretValues())) };
-      return bashStyle?.renderCall?.(shown, theme, context)
-        ?? lines([...(purpose ? [theme.fg("muted", purpose)] : []), theme.fg("accent", `$ ${safeLabel(args.command)}`)].join("\n"));
+      const base = context?.cwd ?? process.cwd();
+      const directory = typeof args.cwd === "string" && args.cwd.trim() && resolve(base, args.cwd) !== base ? theme.fg("dim", `in ${safeLabel(args.cwd)}`) : undefined;
+      const styled = bashStyle?.renderCall?.(shown, theme, context);
+      if (!styled) return lines([...(purpose ? [theme.fg("muted", purpose)] : []), theme.fg("accent", `$ ${safeLabel(args.command)}`), ...(directory ? [directory] : [])].join("\n"));
+      if (!directory) return styled;
+      const row = lines(`    ${directory}`); // aligned with the command panel's text
+      return { render: (width: number) => [...styled.render(width), ...row.render(width)], invalidate: () => { styled.invalidate(); row.invalidate(); } };
     },
     renderResult: (value, options, theme, context) => renderStartResult(value, options, theme, context,
       bashStyle?.renderResult ? (resolved, opts, selectedTheme, selectedContext) => bashStyle!.renderResult!(resolved, opts, selectedTheme, selectedContext!) : renderResult),

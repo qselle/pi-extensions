@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
@@ -386,4 +388,14 @@ test("/jobs stop asks for confirmation when a UI is available", async () => {
   await commands.get("jobs").handler("stop all", ctx);
   expect(prompts).toHaveLength(2);
   expect(["stopping", "stopped"]).toContain((await run("job_output", { id })).details.status);
+});
+
+test("bash runs in an optional cwd and shows it when it differs", async () => {
+  const { run, tools } = await session();
+  const ran = await run("bash", { command: "pwd", cwd: "extensions", yield_ms: 5000 });
+  expect(outputOf(ran).trim()).toBe(realpathSync(join(process.cwd(), "extensions")));
+  await expect(run("bash", { command: "pwd", cwd: "missing-directory" })).rejects.toThrow(`Working directory not found: ${join(process.cwd(), "missing-directory")}`);
+  const call = (args: Record<string, unknown>) => tools.get("bash").renderCall(args, plain, { cwd: process.cwd() }).render(80);
+  expect(call({ command: "pwd", cwd: "extensions" }).at(-1)).toBe("in extensions");
+  expect(call({ command: "pwd", cwd: "." })).toEqual(["$ pwd"]);
 });
