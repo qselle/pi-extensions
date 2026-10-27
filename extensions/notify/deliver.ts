@@ -57,6 +57,13 @@ export function notificationEscape(
 	return inTmux ? `\u001bPtmux;${seq.replace(/\u001b/g, "\u001b\u001b")}\u001b\\` : seq;
 }
 
+/** How a banner would be delivered here, for diagnostics. */
+export function bannerMethod(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+	const osc = notificationEscape(env, "t", "b");
+	if (osc) return osc.startsWith("\u001b]777") ? "OSC 777" : "OSC 9";
+	return notifyCommand(platform, "t", "b")?.cmd ?? "none";
+}
+
 const FOCUS_REPORT = /\u001b\[([IO])/g;
 
 /** Terminals whose focus-reporting (CSI I / CSI O) we trust. */

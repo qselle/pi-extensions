@@ -9,10 +9,17 @@ A failed tool operation remains visible in the settled notification until the sa
 ## Usage
 
 ```text
-/notify          Show status
-/notify on|off   Enable or disable notifications
-/notify test     Send a sample notification
+/notify                  Show status and delivery diagnostics
+/notify on|off           Enable or disable notifications
+/notify test [seconds]   Send a sample after 0–60 seconds (default 3), if a real one would be sent
+/notify test force       Send a sample now, bypassing the on/off and focus checks
 ```
+
+A delayed test follows the same on/off and focus gates as turn notifications:
+switch to another window before it fires. Diagnostics show whether a
+notification would be sent now, the focus state and number of focus reports,
+the banner method (OSC 777, OSC 9, `osascript`, `notify-send`, or none), the
+bell, tmux, and whether an active goal quiets turn notifications.
 
 ## Configuration
 
