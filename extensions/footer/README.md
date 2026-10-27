@@ -87,8 +87,8 @@ include fresh/cached/written input and output from assistant responses, nested m
 compactions, cache-warming usage, and recorded child-agent response deltas. Child
 usage shares the main counters and cost; it does not add a separate status group.
 The context window and percentage always describe the parent conversation.
-Child responses refresh the footer even while the parent is idle. Reloads and
-branch navigation restore only usage recorded on that branch; cumulative child
+Child responses refresh the footer even while the parent is idle. By default, reloads
+and branch navigation restore only usage recorded on that branch; cumulative child
 snapshots and repeated references to the same saved entry are not counted again.
 Missing child metrics retain the same unknown/lower-bound treatment as parent
 usage. Older records retain the values originally saved.
@@ -110,6 +110,21 @@ pi.events.emit("footer:badge", { id: "fast-mode" }); // remove
 Badges appear right after the model, such as `GPT-5.6 Sol high fast`, and shorten with it: they
 survive ordinary widths and disappear only shortly before the model is truncated to
 ten cells. Badge IDs and labels are sanitized and bounded. Re-emitting an ID replaces it; `order` controls stable placement.
+
+## Configuration
+
+Optional `footer.json` in Pi's agent directory (`$PI_CODING_AGENT_DIR`, default `~/.pi/agent`):
+
+```json
+{ "totals": "session" }
+```
+
+`totals` selects what the usage counters and cost include. `branch` (the default)
+counts the active session branch. `session` counts every entry recorded in the
+session, including branches abandoned through tree navigation, so cost reflects
+everything spent in that session. Context always describes the active
+conversation. A missing or invalid file uses `branch`; changes apply at the next
+session start or `/reload`.
 
 ## Dependencies and limitations
 

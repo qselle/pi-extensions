@@ -1,6 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import {
 	compactInlineText,
 	formatCwd,
@@ -60,6 +61,21 @@ function baseTerminalTitle(pi: ExtensionAPI, ctx: ExtensionContext): string {
 	return session && session !== project ? `π ${session} · ${project}` : `π ${project}`;
 }
 
+export interface FooterOptions {
+	/** Defaults to `footer.json` in Pi's agent directory. */
+	configPath?: string;
+}
+
+/** `session` totals every recorded entry, including abandoned branches; `branch` (default) only the active path. */
+type TotalsScope = "branch" | "session";
+function loadTotalsScope(path: string): TotalsScope {
+	try {
+		return JSON.parse(readFileSync(path, "utf8"))?.totals === "session" ? "session" : "branch";
+	} catch {
+		return "branch";
+	}
+}
+
 function normalizeBadgeUpdate(value: unknown): { id: string; badge?: StoredBadge } | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const input = value as FooterBadgeUpdate;
@@ -82,7 +98,8 @@ function normalizeTitleOverride(value: unknown): { source: string; title?: strin
 	return title ? { source, title } : { source };
 }
 
-export default function footerExtension(pi: ExtensionAPI): void {
+export default function footerExtension(pi: ExtensionAPI, options: FooterOptions = {}): void {
+	let totalsScope: TotalsScope = "branch";
 	let tuiRef: { requestRender: () => void } | undefined;
 	let activeCtx: ExtensionContext | undefined;
 	let sessionOpen = false;
@@ -198,6 +215,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
 		sessionOpen = true;
 		totals.invalidate();
 		if (ctx.mode !== "tui") return;
+		totalsScope = loadTotalsScope(options.configPath ?? join(getAgentDir(), "footer.json"));
 		activeCtx = ctx;
 		agentActive = !ctx.isIdle();
 		lastTerminalTitle = undefined;
@@ -230,7 +248,8 @@ export default function footerExtension(pi: ExtensionAPI): void {
 						gitConflicts: !!git.value?.conflicts,
 						usage,
 						contextWindow: current.model?.contextWindow,
-						totals: totals.get(() => current.sessionManager.getBranch(), current.sessionManager.getLeafId(),
+						totals: totals.get(() => totalsScope === "session" ? current.sessionManager.getEntries() : current.sessionManager.getBranch(),
+							current.sessionManager.getLeafId(),
 							current.modelRegistry ? pricingEstimator((provider, model) => current.modelRegistry.find(provider, model)) : undefined),
 						directory: formatCwd(current.cwd, homedir()),
 						branch: footerData?.getGitBranch?.(),
