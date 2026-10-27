@@ -82,7 +82,7 @@ export function bashBody(result: any, opts: any, theme: Theme, width: number, is
 	return branchBody(theme, body, width);
 }
 
-/** Start and end times of live shell calls; saved results carry their own duration. */
+/** Start and end times of live shell and script calls; saved results carry their own duration. */
 const bashTimes = new Map<string, { start: number; end?: number }>();
 const MAX_BASH_TIMES = 256;
 

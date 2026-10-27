@@ -54,6 +54,36 @@ the full added and removed counts. New files, and files over 512 KiB or 5,000
 lines before or after the change, show their content as added; binary files do
 too.
 
+### Codemode scripts
+
+When Pi's built-in `codemode` tool is enabled, its calls render as one card:
+
+```text
+• Ran script to collect repo stats · 3 calls · ✓ in 2s
+  │ const rows = await Promise.all(…)
+  ├ bash Count commits $ git log --oneline ×2 · ✓
+  ├ read Read the readme README.md · ✓
+  └ | Repo | Commits |
+```
+
+A prompt guideline asks each script to start with a `// <intent>` comment,
+after any `// @options:` line; the headline shows it as `Ran script to <intent>`.
+The collapsed script panel hides both lines and shows eight rows. Each nested
+call gets a row with its `purpose` (or saved `reasoning`) and its dimmed main
+argument (`$ command`, path, pattern, query, URL or action). Credential-like
+`NAME=value` assignments show as `NAME=***`. Collapsed, consecutive calls with
+the same tool and purpose join into one row: `×N` when identical, or the first
+argument and `(+N)` when they differ. Up to six rows show; earlier calls are
+counted, including failures. Pi keeps 200 characters of each call's arguments,
+so a long argument written before the purpose hides the purpose. Output follows
+the calls without Pi's `Script completed` header, with the bash output limits.
+Expand to see the full script, every call and nested call errors.
+
+Only the renderers change: the definition, settings and default activation stay
+Pi's. The card is registered at session start, which shadows the built-in without
+a replaced-extension warning. Disabled and third-party `codemode` tools keep
+their own cards.
+
 ### Action purpose
 
 Tools accept an optional brief, factual purpose, such as "Check the renderer
@@ -162,7 +192,8 @@ The setting is stored in `$PI_CODING_AGENT_DIR/tool-render.json` as `{"enabled":
 
 Long or multiline shell commands wrap into a bounded block; expand it for more lines.
 
-- Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs.
+- Uses Pi's public extension, built-in tool-definition, syntax-highlighting, and rendering APIs,
+  and `createCodemodeExtension()` for the codemode card.
 - Uses the package's `shiki` dependency and shared [`lib/syntax.ts`](../../lib/syntax.ts)
   implementation. Each extension caches its own highlighter during interactive
   session startup and disposes it on shutdown. It retains foreground

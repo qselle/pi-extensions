@@ -43,6 +43,7 @@ import {
 	type ToolName,
 } from "./render.ts";
 import { contentToAddRows, gutterWidth, parseUnifiedPatch, washLine, diffCounts, type DiffRow } from "./diff.ts";
+import { codemodeRestyler } from "./codemode.ts";
 import { commandPanel } from "./command-panel.ts";
 import { baseRevision, fit, Lines } from "./lines.ts";
 import { executeWriteWithDiff } from "./write-diff.ts";
@@ -64,6 +65,8 @@ import {
 } from "./exploration.ts";
 
 const PATH_TOOLS = new Set<ToolName>(["read", "write", "edit", "ls"]);
+/** Calls whose headline shows a live elapsed time while running. */
+const TIMED_TOOLS = new Set(["bash", "codemode"]);
 
 /** Grouped rows also depend on sibling calls, which change without recreating the leader. */
 const groupedRevision = (): string => `${baseRevision()}:${explorationRevision()}`;
@@ -450,6 +453,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		// Register other overrides immediately before the first session event,
 		// then rebind to the authoritative session cwd (which /resume can change).
 		registerOverrides(process.cwd());
+		const restyleCodemode = codemodeRestyler(pi);
 
 		// Exploration grouping: track runs of read/grep/find/ls, broken by any
 		// other tool or a new assistant message.
@@ -465,18 +469,19 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 		};
 		pi.on("session_start", async (_event: any, ctx: any) => {
 			if (typeof ctx?.cwd === "string" && ctx.cwd) registerOverrides(ctx.cwd, true);
+			restyleCodemode();
 			restoreGroups(ctx);
 			// Pi awaits public lifecycle handlers. Registration stays synchronous;
 			// repeated starts reuse this extension's cached highlighter.
 			if (ctx?.mode === "tui") await initializeSyntax();
 		});
 		pi.on("tool_execution_start", (event: any) => {
-			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "start");
+			if (TIMED_TOOLS.has(event?.toolName)) noteBashTime(event.toolCallId, "start");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) noteStart(event.toolCallId, event.toolName, event.args);
 			else closeGroup();
 		});
 		pi.on("tool_execution_end", (event: any) => {
-			if (event?.toolName === "bash") noteBashTime(event.toolCallId, "end");
+			if (TIMED_TOOLS.has(event?.toolName)) noteBashTime(event.toolCallId, "end");
 			if (EXPLORATION_TOOLS.has(event?.toolName)) {
 				const count = event.isError
 					? `failed: ${labelText(firstLine(resultText(event.result).text)).slice(0, 240) || "unknown error"}`
