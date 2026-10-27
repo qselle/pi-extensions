@@ -110,6 +110,11 @@ function buildRows(report: ContextReport, expanded: boolean): Row[] {
       detail: providerDetail(report),
     });
   }
+  const provider = report.provider;
+  const prompt = provider ? provider.input + provider.cacheRead + provider.cacheWrite : 0;
+  if (provider && prompt > 0) rows.push({ kind: "footnote", indent: 0, label: "cache read", value: sharePercent(provider.cacheRead, prompt), detail: "of the last turn's prompt" });
+  if (report.outside?.compacted) rows.push({ kind: "footnote", indent: 0, label: "compacted away", value: formatCount(report.outside.compacted), detail: "this branch, outside context" });
+  if (report.outside?.inactive) rows.push({ kind: "footnote", indent: 0, label: "inactive branches", value: formatCount(report.outside.inactive), detail: "outside context" });
   return rows;
 }
 

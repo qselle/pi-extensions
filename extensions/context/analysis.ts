@@ -31,6 +31,8 @@ export interface ContextReport {
   conversation: Section;
   /** Heaviest individual entries, largest first. */
   largest: Bucket[];
+  /** Tokens outside model context: compacted or omitted on this branch, and on other branches. */
+  outside?: { compacted: number; inactive: number };
 }
 
 export interface Estimators {
@@ -68,6 +70,13 @@ export interface AnalyzeInput {
   /** Raw usage components from the last response, when available. */
   providerUsage?: Partial<ProviderUsage>;
   largestCount?: number;
+  /** Branch entries hidden from model context by compaction or context edits. */
+  compactedEntries?: readonly unknown[];
+  /** Session entries on branches other than the current one. */
+  inactiveEntries?: readonly unknown[];
+  /** Shortens file targets of the largest tool results. */
+  cwd?: string;
+  home?: string;
 }
 
 const DEFAULT_LARGEST = 5;
@@ -75,8 +84,11 @@ const DEFAULT_LARGEST = 5;
 export function analyzeContext(input: AnalyzeInput, estimate: Estimators): ContextReport {
   const system = systemSection(input, estimate);
   const tools = toolSection(input.tools ?? [], estimate);
-  const { section: conversation, entries } = conversationSection(input.entries ?? [], estimate);
+  const { section: conversation, entries } = conversationSection(input.entries ?? [], estimate, (path) => shortenPath(path, input.cwd, input.home));
   const window = positive(input.window);
+  const outsideTokens = (list: readonly unknown[] = []) => list.reduce<number>((sum, entry) => sum + (classify(entry).length ? Math.max(0, estimate.entry(entry)) : 0), 0);
+  const compacted = outsideTokens(input.compactedEntries);
+  const inactive = outsideTokens(input.inactiveEntries);
 
   return {
     window,
@@ -89,6 +101,7 @@ export function analyzeContext(input: AnalyzeInput, estimate: Estimators): Conte
     largest: entries
       .sort((a, b) => b.tokens - a.tokens)
       .slice(0, Math.max(0, input.largestCount ?? DEFAULT_LARGEST)),
+    ...(compacted || inactive ? { outside: { compacted, inactive } } : {}),
   };
 }
 
@@ -165,12 +178,33 @@ interface ConversationResult {
   entries: Bucket[];
 }
 
+const TARGET_KEYS = ["path", "file_path", "command", "pattern", "url", "query"] as const;
+/** The file, command, or query a tool call acted on, as a short one-line label. */
+function callTarget(args: unknown, shorten: (path: string) => string): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  for (const key of TARGET_KEYS) {
+    const value = (args as Record<string, unknown>)[key];
+    if (typeof value !== "string" || !value.trim()) continue;
+    const text = sanitizeLabel(key === "path" || key === "file_path" ? shorten(value) : value);
+    return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+  }
+  return undefined;
+}
+
 /** Group extension context by customType to expose each extension's contribution. */
-function conversationSection(entries: readonly unknown[], estimate: Estimators): ConversationResult {
+function conversationSection(entries: readonly unknown[], estimate: Estimators, shorten: (path: string) => string): ConversationResult {
   const grouped = new Map<string, Bucket & { count: number }>();
   const individual: Bucket[] = [];
+  const targets = new Map<string, string>();
 
   entries.forEach((entry, index) => {
+    const message = (entry as { type?: string; message?: { role?: string; content?: unknown; toolCallId?: unknown } })?.message;
+    if (message?.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content as { type?: string; id?: unknown; arguments?: unknown }[]) {
+        const target = part?.type === "toolCall" && typeof part.id === "string" ? callTarget(part.arguments, shorten) : undefined;
+        if (target) targets.set(part.id as string, target);
+      }
+    }
     const kinds = classify(entry);
     if (kinds.length === 0) return;
     const tokens = Math.max(0, estimate.entry(entry));
@@ -193,7 +227,8 @@ function conversationSection(entries: readonly unknown[], estimate: Estimators):
     if (tokens > 0) {
       // Position keeps otherwise identical rows (three big bash results) apart.
       const kind = largestEntryKind(entry);
-      const detail = [kind.detail, `#${index + 1}`].filter(Boolean).join(" ");
+      const target = message?.role === "toolResult" && typeof message.toolCallId === "string" ? targets.get(message.toolCallId) : undefined;
+      const detail = [kind.detail, target, `#${index + 1}`].filter(Boolean).join(" ");
       individual.push({ id: sanitizeLabel(kind.id) || "unknown", label: sanitizeLabel(kind.label), tokens, detail: sanitizeLabel(detail) });
     }
   });

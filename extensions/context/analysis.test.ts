@@ -272,3 +272,25 @@ test("degrades gracefully on unknown windows, junk entries, and unserializable s
   expect(report.conversation.total).toBe(0);
   expect(report.tools.buckets[0]?.label).toBe("circular");
 });
+
+test("names the command or file behind the largest tool results", () => {
+  const report = analyze({
+    entries: [
+      message("assistant", 10, { content: [{ type: "toolCall", id: "run", name: "bash", arguments: { command: "npm\ntest" } }, { type: "toolCall", id: "open", name: "read", arguments: { path: "/repo/src/app.ts" } }] }),
+      message("toolResult", 900, { toolName: "bash", toolCallId: "run" }),
+      message("toolResult", 800, { toolName: "read", toolCallId: "open" }),
+      message("toolResult", 700, { toolName: "custom", toolCallId: "unknown" }),
+    ],
+    cwd: "/repo",
+  });
+  expect(report.largest.map((bucket) => bucket.detail)).toEqual(["bash npm test #2", "read src/app.ts #3", "custom #4", "#1"]);
+});
+
+test("totals context-bearing entries compacted away and on inactive branches", () => {
+  const report = analyze({
+    compactedEntries: [message("user", 300), message("system", 50), { type: "custom", customType: "state", tokens: 40 }],
+    inactiveEntries: [message("assistant", 120)],
+  });
+  expect(report.outside).toEqual({ compacted: 300, inactive: 120 });
+  expect(analyze({}).outside).toBeUndefined();
+});

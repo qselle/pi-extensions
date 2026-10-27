@@ -88,6 +88,7 @@ export interface ContextCommandContext {
     buildSessionProjection?: () => SessionProjection;
     buildContextEntries?: () => unknown[];
     getBranch?: () => unknown[];
+    getEntries?: () => unknown[];
   };
 }
 
@@ -109,6 +110,12 @@ export function collectReport(
     ?? safeCall(() => ctx.sessionManager?.getBranch?.())
     ?? [];
   const projection = safeCall(() => ctx.sessionManager?.buildSessionProjection?.());
+  // Entries outside model context: hidden on this branch, or on other branches.
+  const branch = (safeCall(() => ctx.sessionManager?.getBranch?.()) ?? []) as { id?: unknown }[];
+  const projected = projection ? new Set(projection.entries.filter(({ messages }) => messages.length).map(({ sourceEntry }) => sourceEntry.id)) : undefined;
+  const onBranch = new Set(branch.map((entry) => entry?.id));
+  const compactedEntries = projected ? branch.filter((entry) => !projected.has(entry?.id as string)) : [];
+  const inactiveEntries = ((safeCall(() => ctx.sessionManager?.getEntries?.()) ?? []) as { id?: unknown }[]).filter((entry) => !onBranch.has(entry?.id));
   const entries = projection ? projection.entries.flatMap<SessionEntry>(({ sourceEntry, messages }) => {
     if (!messages.length) return [];
     // Raw history retains omitted/replaced content; attribution must use the
@@ -130,8 +137,9 @@ export function collectReport(
   const lastUsage = safeCall(() => readLastUsage(rawEntries));
 
   // Absolute paths would push every number off the right edge of the table.
+  const home = safeCall(() => homedir());
   const contextFiles = (options.contextFiles ?? []).map((file) => ({
-    path: shortenPath(file?.path ?? "", ctx.cwd, safeCall(() => homedir())),
+    path: shortenPath(file?.path ?? "", ctx.cwd, home),
     content: file?.content ?? "",
   }));
 
@@ -146,6 +154,10 @@ export function collectReport(
     skills: options.skills,
     appendSystemPrompt: options.appendSystemPrompt,
     customPrompt: options.customPrompt,
+    compactedEntries,
+    inactiveEntries,
+    cwd: ctx.cwd,
+    home,
     window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0,
     ...(reported !== undefined ? { reportedTokens: reported } : {}),
     ...(lastUsage

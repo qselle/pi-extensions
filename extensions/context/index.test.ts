@@ -263,3 +263,16 @@ test("reported zero is retained and unavailable or invalid totals stay unknown",
     expect(report.reported).toBe(tokens === 0 ? 0 : undefined);
   }
 });
+
+test("measures branch entries hidden by compaction and entries on other branches", () => {
+  const kept = { type: "message", id: "kept", tokens: 50, message: { role: "user" } };
+  const hidden = { type: "message", id: "hidden", tokens: 400, message: { role: "user" } };
+  const omitted = { type: "message", id: "omitted", tokens: 30, message: { role: "toolResult", toolName: "bash" } };
+  const elsewhere = { type: "message", id: "elsewhere", tokens: 70, message: { role: "assistant" } };
+  const ctx = commandContext({ sessionManager: {
+    getBranch: () => [hidden, omitted, kept],
+    getEntries: () => [hidden, omitted, kept, elsewhere],
+    buildSessionProjection: () => ({ entries: [{ sourceEntry: kept, messages: [kept.message] }, { sourceEntry: omitted, messages: [] }] }) as any,
+  } });
+  expect(collectReport(new MockPi() as any, ctx, estimators).outside).toEqual({ compacted: 430, inactive: 70 });
+});
