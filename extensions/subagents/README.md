@@ -33,7 +33,7 @@ onto its schema:
 | `name`, or a one-entry `agent_names`, on send/queue/read/interrupt/close | `agent_name` |
 | `agent_name` or `name` on wait | `agent_names: [name]` |
 | `return_when: "any" \| "all"` | `wait_mode` |
-| `timeout_ms` outside 0–3,600,000 | clamped into range |
+| `timeout_ms` outside the configured wait bounds | clamped into range |
 
 ### Statuses
 
@@ -82,7 +82,7 @@ Already finished targets return immediately in an `any` wait. Default targets
 include running children and retained unread results. Only one wait may own a
 child at once; cancellation and timeouts leave child processes running.
 `timeout_ms` defaults to 300,000 (5 minutes) and is clamped to at most 3,600,000
-(1 hour). A timed-out result states that the children keep working and that the
+(1 hour); both are configurable. A timed-out result states that the children keep working and that the
 model must not interrupt, close, or ask healthy children to finalize because of
 the timeout.
 
@@ -152,15 +152,31 @@ the parent session for recovery and can be removed when that session is discarde
 
 ## Configuration
 
-Set the open-child limit before starting Pi:
+Optional `subagents.json` in Pi's agent directory (`~/.pi/agent/` or
+`$PI_CODING_AGENT_DIR`) is read when the extension loads, including after `/reload`.
+The defaults are:
+
+```json
+{
+  "wait": { "minimumMs": 0, "defaultMs": 300000, "maximumMs": 3600000 },
+  "maxOpen": 6
+}
+```
+
+Wait bounds must satisfy 0 ≤ minimum ≤ default ≤ maximum ≤ 3,600,000; otherwise the
+whole `wait` section falls back to the defaults. `timeout_ms` is clamped into these
+bounds, and the tool description states the configured default and maximum.
+A missing or malformed file uses the defaults.
+
+`maxOpen` accepts 1–16. A valid `PI_SUBAGENT_MAX_OPEN` overrides it:
 
 ```bash
 export PI_SUBAGENT_MAX_OPEN=4
 ```
 
-Accepted values are 1–16; the default is 6. The limit counts live child processes: starting and running children, plus settled children of in-memory parents. Hibernated, paused and restored children consume no process capacity until resumed. At most 16 child conversations remain retained in a session; close one before adding more.
+The open-child limit counts live child processes: starting and running children, plus settled children of in-memory parents. Hibernated, paused and restored children consume no process capacity until resumed. At most 16 child conversations remain retained in a session; close one before adding more.
 
-Tasks and follow-ups are limited to 16,000 characters; wait timeouts to 1 hour (default 5 minutes); queued messages to 8 per child; final results to 24 KiB; combined tool output to 48 KiB.
+Tasks and follow-ups are limited to 16,000 characters; wait timeouts to the configured bounds (default 5 minutes, at most 1 hour); queued messages to 8 per child; final results to 24 KiB; combined tool output to 48 KiB.
 
 RPC records above 2 MiB are discarded while streaming instead of failing the child. Pi's `agent_end` repeats every message of a run, so long runs exceed this routinely. The child's activity notes each skipped record type and size; an oversized assistant `message_end` replaces the retained result with a note pointing to the child session file, and an oversized command response rejects only that command.
 

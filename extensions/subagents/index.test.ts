@@ -5,6 +5,7 @@ import type { AgentClient, AgentClientOptions, RpcEvent } from "./rpc.ts";
 import { SUBAGENT_STATE } from "./persistence.ts";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from "./arguments.ts";
+import { DEFAULT_SUBAGENTS_CONFIG, type SubagentsConfig } from "./config.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -62,7 +63,7 @@ afterEach(() => {
   }
 });
 
-async function setup() {
+async function setup(config: SubagentsConfig = DEFAULT_SUBAGENTS_CONFIG) {
   // The parent side must load even when this test runs inside a child agent.
   for (const key of childEnvironment) delete process.env[key];
   const pi = new MockPi();
@@ -86,6 +87,7 @@ async function setup() {
     createClient: (options) => { const client = new FakeClient(options); clients.push(client); return client; },
     createContext: createContext as any,
     registerCard: ((definition: any) => { card = definition; return { invalidate() {}, unregister() {} }; }) as any,
+    config,
   })!;
   const ctx = {
     cwd: "/tmp/project",
@@ -186,6 +188,20 @@ test("wait defaults to five minutes, clamps long timeouts and honours return_whe
   (coordinator as any).wait = (names: string[] | undefined, timeout: number, ...rest: any[]) => { seen.push(timeout); return original(names, 0, ...rest); };
   await call({ action: "wait", timeout_ms: 9_000_000 });
   expect(seen.at(-1)).toBe(MAX_WAIT_MS);
+});
+
+test("configured wait bounds shape the schema, description, clamping and default", async () => {
+  const { tool, call, coordinator } = await setup({ wait: { minimumMs: 1_000, defaultMs: 60_000, maximumMs: 120_000 }, maxOpen: 1 });
+  expect(tool.parameters.properties.timeout_ms).toMatchObject({ minimum: 1_000, maximum: 120_000 });
+  expect(tool.description).toContain("Wait times out after 1 minute by default, at most 2 minutes.");
+  expect(tool.prepareArguments({ action: "wait", timeout_ms: 5 }).timeout_ms).toBe(1_000);
+  expect(tool.prepareArguments({ action: "wait", timeout_ms: 600_000 }).timeout_ms).toBe(120_000);
+  const seen: number[] = [];
+  (coordinator as any).wait = async (_names: unknown, timeout: number) => { seen.push(timeout); return { agents: [], timedOut: false, interrupted: false, alreadyReportedIds: [] }; };
+  await call({ action: "wait" });
+  expect(seen).toEqual([60_000]);
+  await call({ action: "spawn", name: "One", task: "Work" });
+  await expect(call({ action: "spawn", name: "Two", task: "Work" })).rejects.toThrow("At most 1");
 });
 
 test("a timed-out wait tells the model not to stop healthy children", async () => {

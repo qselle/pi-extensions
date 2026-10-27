@@ -19,7 +19,6 @@ import {
   type ParentSummarizer,
 } from "./context.ts";
 import {
-  DEFAULT_MAX_OPEN_AGENTS,
   MAX_MESSAGE_CHARS,
   MAX_TASK_CHARS,
   SubagentCoordinator,
@@ -38,7 +37,8 @@ import {
   type AgentClientFactory,
 } from "./rpc.ts";
 import { resolveRuntimeSelection } from "./runtime-selection.ts";
-import { DEFAULT_WAIT_MS, MAX_WAIT_MS, prepareSubagentArguments, waitTimeout } from "./arguments.ts";
+import { prepareSubagentArguments, waitTimeout, type WaitBounds } from "./arguments.ts";
+import { loadSubagentsConfig, type SubagentsConfig } from "./config.ts";
 import { REPORT_MESSAGE_TYPE, REPORT_TOOL_NAME, decodeParentReport, registerChildReporter, renderParentReport } from "./report.ts";
 import { SharedWork } from "./shared-work.ts";
 import { ChildTranscriptBrowser, navigableAgents } from "./transcript.ts";
@@ -69,6 +69,7 @@ export interface SubagentsExtensionOptions {
   summarizeContext?: ParentSummarizer;
   registerCard?: typeof registerOverlayCard;
   maxOpenAgents?: number;
+  config?: SubagentsConfig;
 }
 
 const ActionSchema = StringEnum(["spawn", "send", "queue", "read", "interrupt", "wait", "list", "close"] as const);
@@ -76,7 +77,7 @@ const ContextSchema = StringEnum(["fresh", "summary", "fork"] as const);
 const ThinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 const WaitModeSchema = StringEnum(["any", "all"] as const);
 
-const Parameters = Type.Object({
+const parametersFor = (wait: WaitBounds) => Type.Object({
   action: ActionSchema,
   name: Type.Optional(Type.String({ maxLength: 64, description: "Unique human-readable name for spawn" })),
   task: Type.Optional(Type.String({ maxLength: MAX_TASK_CHARS, description: "Concrete delegated task for spawn" })),
@@ -88,7 +89,7 @@ const Parameters = Type.Object({
   agent_names: Type.Optional(Type.Array(Type.String(), { description: "Names to wait for; defaults to running children and unread results" })),
   wait_mode: Type.Optional(WaitModeSchema),
   wake_on: Type.Optional(StringEnum(["any", "final"] as const, { description: "For wait_mode any: final (default) waits for a final; any also wakes for an explicit interim report. Ordinary commentary never wakes wait." })),
-  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout; default ${DEFAULT_WAIT_MS} (5 minutes), maximum ${MAX_WAIT_MS} (1 hour)` })),
+  timeout_ms: Type.Optional(Type.Integer({ minimum: wait.minimumMs, maximum: wait.maximumMs, description: `Wait timeout; default ${wait.defaultMs} (${durationWords(wait.defaultMs)}), maximum ${wait.maximumMs} (${durationWords(wait.maximumMs)})` })),
 });
 
 export default function registerSubagents(
@@ -101,7 +102,8 @@ export default function registerSubagents(
   const createContext = options.createContext ?? createChildContext;
   const summarizeContext = options.summarizeContext ?? summarizeParent;
   const registerCard = options.registerCard ?? registerOverlayCard;
-  const maxOpenAgents = options.maxOpenAgents ?? configuredMaxOpenAgents();
+  const config = options.config ?? loadSubagentsConfig();
+  const maxOpenAgents = options.maxOpenAgents ?? config.maxOpen;
   const summaryWork = new SharedWork<string>();
   let card: ReturnType<typeof registerOverlayCard>;
   let activeContext: ExtensionContext | undefined;
@@ -235,7 +237,7 @@ export default function registerSubagents(
       "Coordinate bounded, persistent child agents in isolated Pi sessions.",
       "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Send steers a running child or resumes a settled, paused, or stopped one. Read retrieves the latest result. Settled children stop their process and keep their conversation; reload/quit also stop processes and retain conversations.",
       "Spawn returns immediately; completions are delivered automatically.",
-      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after 5 minutes by default, at most 1 hour.",
+      `Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after ${durationWords(config.wait.defaultMs)} by default, at most ${durationWords(config.wait.maximumMs)}.`,
       "Children inherit the current model, thinking level, active tools, working directory, and project instructions.",
       "Spawn may override model and thinking for a clear task-specific reason.",
       "Context defaults to fresh; summary provides a compact handoff and fork copies the active parent conversation.",
@@ -253,10 +255,13 @@ export default function registerSubagents(
       "Close completed subagents after collecting final results when no follow-up is needed; settled children stop their process but keep a retained conversation slot.",
       "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
-    parameters: Parameters,
-    prepareArguments: (raw) => prepareSubagentArguments(raw, (name) => {
-      const key = name.trim().toLocaleLowerCase();
-      return coordinator.list().some((agent) => isActive(agent) && (agent.name.toLocaleLowerCase() === key || agent.id === name));
+    parameters: parametersFor(config.wait),
+    prepareArguments: (raw) => prepareSubagentArguments(raw, {
+      wait: config.wait,
+      isRunning: (name) => {
+        const key = name.trim().toLocaleLowerCase();
+        return coordinator.list().some((agent) => isActive(agent) && (agent.name.toLocaleLowerCase() === key || agent.id === name));
+      },
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.action === "spawn") {
@@ -298,7 +303,7 @@ export default function registerSubagents(
           : `${agent.name} is ${agent.status}; no run was active. Queued messages were cleared.`);
       }
       if (params.action === "wait") {
-        const timeout = waitTimeout(params.timeout_ms);
+        const timeout = waitTimeout(params.timeout_ms, config.wait);
         const waited = await coordinator.wait(
           params.agent_names,
           timeout,
@@ -514,11 +519,12 @@ function buildChildArgs(pi: ExtensionAPI, ctx: any, context: ChildContext, reque
   return args;
 }
 
-function configuredMaxOpenAgents(): number {
-  const raw = process.env.PI_SUBAGENT_MAX_OPEN;
-  if (!raw) return DEFAULT_MAX_OPEN_AGENTS;
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 1 && value <= 16 ? value : DEFAULT_MAX_OPEN_AGENTS;
+/** Model-facing duration text, fixed for the process so the tool definition stays cacheable. */
+function durationWords(ms: number): string {
+  const [amount, unit] = ms >= 3_600_000 && ms % 3_600_000 === 0 ? [ms / 3_600_000, "hour"]
+    : ms >= 60_000 && ms % 60_000 === 0 ? [ms / 60_000, "minute"]
+      : ms % 1_000 === 0 ? [ms / 1_000, "second"] : [ms, "millisecond"];
+  return `${amount} ${unit}${amount === 1 ? "" : "s"}`;
 }
 
 function completionContext(agent: AgentSnapshot): string {
