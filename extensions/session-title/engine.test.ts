@@ -14,6 +14,7 @@ import {
   FOCUS_SYSTEM_PROMPT,
   parseFocusResponse,
   titleState,
+  redactClipboardPaths,
 } from "./engine.ts";
 
 test("manual names preserve wording, remove controls, and cap Unicode characters", () => {
@@ -135,6 +136,20 @@ describe("buildTitlePrompt", () => {
     const prompt = buildTitlePrompt(["x".repeat(5_000), "y".repeat(5_000)]);
     expect(prompt.length).toBeLessThanOrEqual(4_100);
     expect(prompt).toContain("…");
+  });
+
+  test("keeps the head and tail of long requests", () => {
+    const prompt = buildTitlePrompt([`${"a".repeat(1_000)} the real ask`]);
+    expect(prompt).toContain("a … a");
+    expect(prompt).toContain("the real ask");
+  });
+
+  test("replaces pasted clipboard image paths with a placeholder", () => {
+    const path = "/var/folders/T/pi-clipboard-0f2c1d3e-1a2b-4c5d-8e9f-0123456789ab.png";
+    expect(redactClipboardPaths(`why is ${path} blurry? file://${path}`)).toBe("why is [clipboard image] blurry? [clipboard image]");
+    expect(buildTitlePrompt([`fix the layout in ${path}`])).toContain("fix the layout in [clipboard image]");
+    const context = buildTitleContext([{ type: "message", message: { role: "user", content: `see ${path}` } }]);
+    expect(context.request).toBe("see [clipboard image]");
   });
 
   test("handles an empty conversation", () => {

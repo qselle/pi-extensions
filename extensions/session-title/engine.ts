@@ -102,13 +102,24 @@ export const TITLE_SYSTEM_PROMPT = [
   "Prefer concrete product, component, or problem names over generic words such as task, help, session, chat, or code.",
 ].join("\n");
 
+/** Keep the start and the end: long requests often close with the actual ask. */
 function clip(text: string, limit: number): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+  if (normalized.length <= limit) return normalized;
+  const head = Math.ceil((limit - 3) * 0.6);
+  return `${normalized.slice(0, head).trimEnd()} … ${normalized.slice(head + normalized.length - limit + 3).trimStart()}`;
+}
+
+const CLIPBOARD_IMAGE = /(?:file:\/\/)?[^\s"'`<>]*pi-clipboard-[0-9a-f-]{8,}\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
+
+/** Pasted images arrive as temporary file paths; the model sees a placeholder instead. */
+export function redactClipboardPaths(text: string): string {
+  return text.replace(CLIPBOARD_IMAGE, "[clipboard image]");
 }
 
 /** Include user text only, excluding assistant output, tools, and reasoning. */
-export function buildTitlePrompt(userTexts: readonly string[]): string {
+export function buildTitlePrompt(rawTexts: readonly string[]): string {
+  const userTexts = rawTexts.map(redactClipboardPaths);
   const anchor = pickAnchor(userTexts);
   const parts: string[] = [];
   if (anchor) parts.push(`first_request: ${clip(anchor, MAX_ANCHOR_CHARS)}`);
@@ -213,7 +224,7 @@ function turnsOf(entries: readonly Entry[]): { request: string; outcome?: string
   const turns: { request: string; outcome?: string }[] = [];
   for (const entry of entries) {
     if (entry.type !== "message") continue;
-    const text = messageText(entry.message?.content);
+    const text = redactClipboardPaths(messageText(entry.message?.content));
     if (!text) continue;
     const current = turns.at(-1);
     if (entry.message?.role === "user") {
