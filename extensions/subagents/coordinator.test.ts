@@ -267,6 +267,49 @@ test("supports persistent follow-ups, interrupt, usage, and close", async () => 
   expect(cleanups.get("Reviewer")).toBe(1);
 });
 
+test("interrupt ends the run as resumable without a completion, ignoring late events", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Worker"));
+  const client = clients.get("Worker")!;
+  client.abort = async () => {
+    client.abortCalls++;
+    client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "aborted", errorMessage: "Request was aborted" } });
+    client.emit({ type: "agent_settled", aborted: true });
+  };
+  const interrupted = await coordinator.interrupt("Worker");
+  client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "late" }], stopReason: "stop" } });
+  client.emit({ type: "agent_settled", aborted: false });
+  await flushMicrotasks();
+  expect(interrupted).toMatchObject({ status: "interrupted", output: "partial", unread: false });
+  expect(interrupted.error).toBeUndefined();
+  expect(coordinator.list()[0]).toMatchObject({ status: "interrupted", output: "partial" });
+  expect(completions, "no completion card or parent turn").toEqual([]);
+  expect((await coordinator.wait(undefined, 0, "any")).agents, "default waits skip interrupted children").toEqual([]);
+
+  await coordinator.send("Worker", "Continue");
+  expect(client.promptCalls.at(-1)).toBe("Continue");
+  client.emit({ type: "agent_settled", aborted: false });
+  await flushMicrotasks();
+  expect(coordinator.list()[0]!.status).toBe("completed");
+  expect(completions).toEqual(["Worker"]);
+  await coordinator.shutdown();
+});
+
+test("a run that settles before the abort arrives keeps its final", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Fast"));
+  const client = clients.get("Fast")!;
+  client.abort = async () => {
+    client.abortCalls++;
+    client.emit({ type: "agent_settled", aborted: false });
+  };
+  const result = await coordinator.interrupt("Fast");
+  await flushMicrotasks();
+  expect(result.status).toBe("completed");
+  expect(completions).toEqual(["Fast"]);
+  await coordinator.shutdown();
+});
+
 test("conversation creation time survives follow-ups and saved-session recovery", async () => {
   let now = 10;
   const clients = new Map<string, FakeClient>();

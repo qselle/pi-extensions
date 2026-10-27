@@ -191,6 +191,19 @@ test("a rate-limited child pauses, stops its process and resumes the same sessio
   await pi.emit("session_shutdown", { reason: "quit" }, {});
 });
 
+test("interrupt keeps the child resumable without a completion message", async () => {
+  const { pi, call, clients } = await setup();
+  await call({ action: "spawn", name: "Long", task: "Work" });
+  const result = await call({ action: "interrupt", agent_name: "Long" });
+  clients[0]!.emit({ type: "agent_settled", aborted: true });
+  await Bun.sleep(0);
+  expect(result.content[0].text).toBe("Interrupted Long; send resumes its conversation.");
+  expect(result.details.agents[0].status).toBe("interrupted");
+  expect(pi.sent).toEqual([]);
+  expect(pi.stateEntries().at(-1)!.data.agents[0].agent.status).toBe("interrupted");
+  await pi.emit("session_shutdown", { reason: "quit" }, {});
+});
+
 test("child tool activity appends no subagent state between lifecycle transitions", async () => {
   const { pi, call, clients, reads } = await setup();
   await call({ action: "spawn", name: "Busy", task: "Run many tools" });

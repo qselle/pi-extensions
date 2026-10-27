@@ -12,7 +12,7 @@ The `subagents` tool supports:
 | `send` | Steer a running child or resume a settled, paused or stopped one, consuming queued messages |
 | `queue` | Store a message without starting or steering a child; consumed by the next send |
 | `read` | Retrieve the latest output and acknowledge an unread final |
-| `interrupt` | Stop the current child turn but keep its conversation |
+| `interrupt` | Stop the current child run without a completion; `send` resumes it |
 | `wait` | Wait for selected children without killing them on cancellation |
 | `list` | Show child state |
 | `close` | Stop a child, remove temporary context, and release capacity |
@@ -43,6 +43,7 @@ onto its schema:
 | `completed` | Run finished; result delivered once |
 | `paused` | Run ended on a provider quota, rate-limit (429) or overload error; the conversation is kept. `send` resumes it after the limit resets |
 | `failed` | Run or process failed |
+| `interrupted` | Stopped by `interrupt`; no completion is delivered and late child events are ignored. `send` resumes it |
 | `stopped` | Restored after reload, quit or tree navigation; `send` resumes it |
 | `closed` | Closed; no longer resumable |
 

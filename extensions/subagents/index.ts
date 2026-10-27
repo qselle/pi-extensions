@@ -289,7 +289,9 @@ export default function registerSubagents(
       }
       if (params.action === "interrupt") {
         const agent = await coordinator.interrupt(params.agent_name ?? "");
-        return toolResult("interrupt", [agent], `Interrupt requested for ${agent.name}.`);
+        return toolResult("interrupt", [agent], agent.status === "interrupted"
+          ? `Interrupted ${agent.name}; send resumes its conversation.`
+          : `${agent.name} is ${agent.status}; no run was active. Queued messages were cleared.`);
       }
       if (params.action === "wait") {
         const timeout = waitTimeout(params.timeout_ms);
@@ -551,6 +553,7 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean, includeReport
   if (agent.queued) lines.push(`queued: ${agent.queued} message(s); delivered only by send`);
   if (agent.unread) lines.push("unread result available: use read or wait");
   if (agent.status === "stopped") lines.push("stopped after session transition; send explicitly resumes the saved conversation");
+  if (agent.status === "interrupted") lines.push("interrupted by the parent; send resumes the conversation");
   if (agent.status === "paused") lines.push(PAUSED_GUIDANCE);
   if (agent.error) lines.push(`error: ${agent.error}`);
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
@@ -579,6 +582,7 @@ function statusSymbol(agent: AgentSnapshot): string {
   if (agent.status === "completed") return "✓";
   if (agent.status === "paused") return "‖";
   if (agent.status === "failed") return "×";
+  if (agent.status === "interrupted") return "↯";
   return "■";
 }
 

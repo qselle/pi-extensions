@@ -209,6 +209,7 @@ function statusSymbol(status: AgentSnapshot["status"]): string {
   if (status === "completed") return "✓";
   if (status === "paused") return "‖";
   if (status === "failed") return "×";
+  if (status === "interrupted") return "↯";
   return "■";
 }
 
