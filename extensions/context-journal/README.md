@@ -18,7 +18,7 @@ navigation.
 | Tool | Purpose |
 |---|---|
 | `context_notes` | List, read, write (replace a key), or delete notes |
-| `context_history` | Search text on the current branch, including before compaction |
+| `context_history` | Search messages and tool calls on the current branch, including before compaction |
 | `context_budget` | Read Pi's context estimate and checkpoint budget |
 | `context_rollover` | Request fresh context from saved notes, without a generated summary |
 
@@ -33,7 +33,9 @@ Deleting a note leaves older versions in the session file and backups.
 History search is literal and case-insensitive, newest first. Omit `query` for
 recent text; pass `nextBefore` as `before` for older results. It returns up to
 20 matches, with 2,000 characters per excerpt and 12,000 combined, plus headers.
-It excludes reasoning, images, custom extension messages, and other branches.
+It covers message text and tool calls (`[tool call: name] {arguments}`), labels
+tool results `tool:<name>`, and searches thinking only with `includeReasoning`.
+It excludes images, custom extension messages, and other branches.
 
 ### Rollover
 
