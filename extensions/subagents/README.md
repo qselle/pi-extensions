@@ -65,7 +65,7 @@ Children share the working tree. Parallel writers must use disjoint files; the p
 
 ### Results and persistence
 
-Completed children deliver one bounded result to the parent unless a `wait` call already owns it. Running children appear in [`overlay-stack`](../overlay-stack/), and `/subagents` opens a live transcript. Each child response stores its usage as a non-context parent session entry. The [`footer`](../footer/) adds these deltas to its main token/cache/cost counters, including after reload; context percentage remains specific to the parent. Omitted or invalid metrics remain unknown rather than being saved as zero. Child state snapshots and completion cards do not add usage a second time.
+Completed children deliver one bounded result to the parent unless a `wait` call already owns it. Running children and children with unread results appear in [`overlay-stack`](../overlay-stack/), whose title counts them (`✉ N unread`), and `/subagents` opens a live transcript. Each child response stores its usage as a non-context parent session entry. The [`footer`](../footer/) adds these deltas to its main token/cache/cost counters, including after reload; context percentage remains specific to the parent. Omitted or invalid metrics remain unknown rather than being saved as zero. Child state snapshots and completion cards do not add usage a second time.
 
 Children can call `report_to_parent({ message })` for a material interim finding
 that unblocks or redirects the parent. Ordinary commentary remains local. Reports

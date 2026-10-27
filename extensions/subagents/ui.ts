@@ -170,7 +170,8 @@ function overlayAgent(agent: AgentSnapshot, width: number, theme: Theme): string
   const identity = `${symbol} ${theme.bold(name)}`;
   const gap = " ".repeat(Math.max(1, width - visibleWidth(identity) - visibleWidth(usage)));
   const task = truncateToWidth(compact(agent.task, 200), Math.max(1, width - 2), "…");
-  const latest = compact(agent.activity.at(-1) || (agent.status === "starting" ? "starting" : "working"), 160);
+  const latest = !isActive(agent) ? "✉ unread result"
+    : compact(agent.activity.at(-1) || (agent.status === "starting" ? "starting" : "working"), 160);
   const runtime = runtimeLabel(agent);
   const activity = truncateToWidth([runtime, latest].filter(Boolean).join(" · "), Math.max(1, width - 4), "…");
   return [

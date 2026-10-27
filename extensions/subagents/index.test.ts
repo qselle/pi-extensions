@@ -68,6 +68,7 @@ async function setup() {
   const pi = new MockPi();
   const clients: FakeClient[] = [];
   let checkpointReads = 0;
+  let card: any;
   const contextNames: (string | undefined)[] = [];
   const createContext = async (_ctx: unknown, _mode: unknown, _summary?: string, resume?: unknown, name?: string): Promise<ChildContext> => {
     contextNames.push(name);
@@ -84,7 +85,7 @@ async function setup() {
   const coordinator = registerSubagents(pi as any, {
     createClient: (options) => { const client = new FakeClient(options); clients.push(client); return client; },
     createContext: createContext as any,
-    registerCard: (() => ({ invalidate() {}, unregister() {} })) as any,
+    registerCard: ((definition: any) => { card = definition; return { invalidate() {}, unregister() {} }; }) as any,
   })!;
   const ctx = {
     cwd: "/tmp/project",
@@ -98,8 +99,23 @@ async function setup() {
   const tool = pi.tools.get("subagents");
   const call = (args: Record<string, unknown>, signal?: AbortSignal) =>
     tool.execute("call", tool.prepareArguments ? tool.prepareArguments(args) : args, signal, undefined, ctx);
-  return { pi, ctx, tool, call, clients, coordinator, contextNames, reads: () => checkpointReads };
+  return { pi, ctx, tool, call, clients, coordinator, contextNames, card: () => card, reads: () => checkpointReads };
 }
+
+test("the overlay counts unread results and hides once they are consumed", async () => {
+  const { call, clients, card } = await setup();
+  const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+  await call({ action: "spawn", name: "Scout", task: "Look" });
+  const waiting = call({ action: "wait", agent_name: "Scout", wake_on: "final" });
+  clients[0]!.emit({ type: "tool_execution_end", toolName: "report_to_parent", toolCallId: "r1", isError: false,
+    result: { content: [], details: { version: 1, report: { id: "r1", message: "Found it", createdAt: 1 } } } });
+  await Bun.sleep(0);
+  expect(card().title(theme)).toBe(" Subagents ● 1 running · ✉ 1 unread ");
+  clients[0]!.finish("Done");
+  await waiting;
+  expect(card().visible()).toBe(false);
+  expect(card().title(theme)).toBe(" Subagents ● 0 running ");
+});
 
 test("child sessions carry the subagent name and link to the parent session", async () => {
   const { call, clients, contextNames } = await setup();

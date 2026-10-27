@@ -204,13 +204,14 @@ export default function registerSubagents(
     minBodyHeight: 3,
     minTerminalWidth: 90,
     minTerminalHeight: 12,
-    visible: () => coordinator.list().some(isActive),
+    visible: () => coordinator.list().some((agent) => isActive(agent) || agent.unread),
     title: (theme) => {
-      const count = coordinator.list().filter(isActive).length;
-      return `${theme.bold(" Subagents ")}${theme.fg("accent", `● ${count} running `)}`;
+      const agents = coordinator.list();
+      const running = agents.filter(isActive).length, unread = agents.filter((agent) => agent.unread).length;
+      return `${theme.bold(" Subagents ")}${theme.fg("accent", `● ${running} running${unread ? ` · ✉ ${unread} unread` : ""} `)}`;
     },
     renderBody: (width, maxHeight, theme) =>
-      renderSubagentsOverlay(coordinator.list().filter(isActive), width, maxHeight, theme),
+      renderSubagentsOverlay(coordinator.list().filter((agent) => isActive(agent) || agent.unread), width, maxHeight, theme),
   });
 
   pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, (message, renderOptions, theme) => {
