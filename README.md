@@ -26,7 +26,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 
 | Extension | Purpose |
 |---|---|
-| [`background-jobs`](extensions/background-jobs/) | Managed pipe/PTY jobs with cursor logs, input, resizing, and cleanup |
+| [`background-jobs`](extensions/background-jobs/) | Managed pipe/PTY jobs with cursor logs, live wait cards, input, resizing, cleanup, and completion notices |
 | [`cat-buddy`](extensions/cat-buddy/) | Animated cat above the input bar |
 | [`code-blocks`](extensions/code-blocks/) | Shiki Gruvbox syntax, streaming code captions and native fallback |
 | [`codex-prompt`](extensions/codex-prompt/) | Flat `›` editor prompt |
@@ -35,7 +35,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`context-journal`](extensions/context-journal/) | Working notes and older-message retrieval |
 | [`doctor`](extensions/doctor/) | Read-only dependency and configuration health report |
 | [`file-changes`](extensions/file-changes/) | Current and previous run file changes |
-| [`fast-mode`](extensions/fast-mode/) | Request fast processing for supported OpenAI models |
+| [`fast-mode`](extensions/fast-mode/) | Request fast processing for OpenAI models, with a footer badge |
 | [`footer`](extensions/footer/) | Model, context, usage, cost, and local Git status |
 | [`goal`](extensions/goal/) | Persistent goals that continue across turns |
 | [`handoff`](extensions/handoff/) | Hand off work to a new session, pane, tab, or workspace that starts from a summary |
@@ -56,19 +56,19 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`questions`](extensions/questions/) | Structured terminal and Telegram questions |
 | [`schedule`](extensions/schedule/) | Project reminders and cron prompts |
 | [`session-search`](extensions/session-search/) | Full-text search across saved sessions |
-| [`session-title`](extensions/session-title/) | Automatic session titles and Herdr tab synchronization |
+| [`session-title`](extensions/session-title/) | Session titles that follow the work each turn, and Herdr tab synchronization |
 | [`side-chat`](extensions/side-chat/) | Background side conversations |
 | [`subagents`](extensions/subagents/) | Durable child conversations, interim reports and keyboard transcript navigation |
 | [`telegram`](extensions/telegram/) | Session topics, Markdown notifications, diagnostics, and question replies |
 | [`terminal-processes`](extensions/terminal-processes/) | Explicit controls for visible Herdr process panes that survive Pi exit |
-| [`tool-render`](extensions/tool-render/) | Compact tools, soft command panels and brief command-purpose captions |
+| [`tool-render`](extensions/tool-render/) | Compact tools, codemode script cards, soft command panels and brief command-purpose captions |
 | [`transcript`](extensions/transcript/) | Searchable full-session history with live updates and Markdown |
 | [`turn-separator`](extensions/turn-separator/) | Optional quiet timing separators between tool-work blocks; off by default |
 | [`turn-stats`](extensions/turn-stats/) | Per-run timing, response counts, and usage |
 | [`usage-export`](extensions/usage-export/) | Export recorded usage as JSON or CSV |
 | [`verify`](extensions/verify/) | Run focused checks after file edits |
 | [`working-status`](extensions/working-status/) | Live phase, active file/executable, concurrent tools, and elapsed time |
-| [`web-search`](extensions/web-search/) | Web search and page reading |
+| [`web-search`](extensions/web-search/) | Web search (Exa, Firecrawl, Mistral) and page reading with remote fallbacks |
 
 Each extension's README lists its commands, configuration, dependencies, and limitations.
 Job and workflow controls activate when used; context and image-history tools are opt-in.
