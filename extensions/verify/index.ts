@@ -71,7 +71,8 @@ export default function verifyExtension(pi: ExtensionAPI, options: VerifyExtensi
       last = outcome;
       if (outcome.ok || !outcome.text) return undefined;
       // Append to the existing result; never set isError, because the edit did apply.
-      return { content: [...(event.content ?? []), { type: "text", text: outcome.text }] };
+      // Replacing content drops structuredContent unless it is returned too.
+      return { content: [...(event.content ?? []), { type: "text", text: outcome.text }], structuredContent: event.structuredContent };
     } finally {
       if (hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
     }
