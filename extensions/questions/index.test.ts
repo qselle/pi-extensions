@@ -419,3 +419,27 @@ test("redacts collected secret values from every tool result, including structur
   });
   pi.fire("session_shutdown", {});
 });
+
+test("uses select and input dialogs when an RPC client provides UI", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
+  const prompts: string[] = [];
+  const ctx = {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      notify() {},
+      select: async (title: string, choices: string[]) => { prompts.push(title); return choices.at(-1); },
+      input: async (title: string) => { prompts.push(title); return "  Custom  "; },
+    },
+  };
+  const result = await pi.tool.execute("call", {
+    questions: [{ id: "pick", question: "Pick one", options: ["A", "B"] }],
+  }, new AbortController().signal, undefined, ctx);
+  expect(prompts).toEqual(["Question 1/1 · Pick one", "Question 1/1 · Pick one"]);
+  expect(result.details.answers).toEqual([{ id: "pick", question: "Pick one", answer: "Custom", source: "terminal" }]);
+
+  const secret = await pi.tool.execute("call", { questions: [{ id: "token", question: "Token?", secret: true }] }, new AbortController().signal, undefined, ctx);
+  expect(secret.content[0].text).toContain("Secret questions require Pi in TUI mode");
+  expect(prompts).toHaveLength(2);
+});

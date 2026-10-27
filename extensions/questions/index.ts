@@ -242,7 +242,7 @@ export default function questionsExtension(
       const suffix = unavailable
         ? answers[0].secret
           ? "Secret questions require Pi in TUI mode."
-          : "No reply channel is available. Open Pi in TUI mode or configure Telegram."
+          : "No reply channel is available. Open Pi in TUI or RPC mode, or configure Telegram."
         : "Questionnaire interrupted";
       return {
         content: [{ type: "text", text: [interrupted ? `${response}\n${suffix}`.trim() : response, handled ? SECRET_HANDLE_HINT : ""].filter(Boolean).join("\n\n") }],
@@ -265,7 +265,7 @@ function sourcesUnavailable(
   telegram: TelegramService | undefined,
   secret: boolean,
 ): boolean {
-  return ctx.mode !== "tui" && (!telegram || secret);
+  return ctx.mode !== "tui" && (secret || (!ctx.hasUI && !telegram));
 }
 
 export function telegramContextLabel(sessionName: string | undefined, cwd: string, home = homedir()): string {

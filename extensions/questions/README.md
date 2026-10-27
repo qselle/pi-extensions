@@ -34,6 +34,8 @@ Session changes and shutdown cancel pending questions and discard late replies.
 
 While a question waits, the extension emits `herdr:blocked` events (`{ active: true, label: "Waiting for user input" }`, then `{ active: false }`) so Herdr shows the pane as blocked rather than working. The label never contains question text.
 
+RPC clients without custom components get Pi's select and input dialogs instead of the terminal picker.
+
 ### Telegram
 
 When [`telegram`](../telegram/) is configured, non-secret questions are sent after its configured delay. Terminal and Telegram answers race; the first valid answer wins and closes the other channel. Telegram failures do not disable terminal input.
@@ -52,5 +54,5 @@ Secret values are never persisted and handles expire on shutdown, branch change,
 - Optionally uses [`telegram`](../telegram/); no third-party packages.
 - Terminal interaction is cross-platform. Telegram requires outbound HTTPS.
 - Freeform answers are limited to 4,000 characters.
-- Without a TUI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.
+- Without a TUI, RPC UI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.
 - Redaction matches exact values only; encoded or transformed secrets are not detected.
