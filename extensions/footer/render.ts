@@ -26,10 +26,13 @@ const plain = (segments: Segment[]) => segments.map(({ text, label }) => `${labe
 const styled = (segments: Segment[], theme: FooterTheme) => segments.map(({ text, color, label }) =>
   `${label ? `${theme.fg("muted", label)} ` : ""}${theme.fg(color, text)}`).join(" ");
 const shorten = (value: string, width: number) => truncateToWidth(value, width, "…");
-function shortenModel(model: string, width: number): string {
-  if (visibleWidth(model) <= width) return model;
-  const effort = / (minimal|low|medium|high|xhigh|max)$/.exec(model)?.[0] ?? "";
-  return shorten(effort ? model.slice(0, -effort.length) : model, Math.max(1, width - effort.length)) + effort;
+/** The name shortens around the reasoning effort, which keeps Pi's per-level thinking color. */
+function modelSegments(model: string, width: number): Segment[] {
+  const effort = / (minimal|low|medium|high|xhigh|max)$/.exec(model)?.[1];
+  if (!effort) return [segment(shorten(model, width), "accent")];
+  const name = model.slice(0, -effort.length - 1);
+  return [segment(visibleWidth(model) <= width ? name : shorten(name, Math.max(1, width - effort.length - 1)), "accent"),
+    segment(effort, `thinking${effort[0]!.toUpperCase()}${effort.slice(1)}` as Color)];
 }
 
 type UsageField = "input" | "output" | "cacheRead" | "cacheWrite" | "cost";
@@ -50,10 +53,10 @@ function groupsFor(input: FooterView): Group[] {
   };
   const hide = (priority: number): Reduction => ({ priority, segments: [] });
   const session = compactInlineText(input.session, 80) || "pi";
-  const model = shortenModel(compactInlineText(input.model, Number.MAX_SAFE_INTEGER) || "no-model", 160);
+  const model = compactInlineText(input.model, Number.MAX_SAFE_INTEGER) || "no-model";
   const badges = input.badges.map((badge) => compactInlineText(badge, 18)).filter(Boolean);
   // Badges describe the model (e.g. fast); they shorten with it instead of vanishing first.
-  const modelGroup = (width: number, badgeWidth?: number) => [segment(shortenModel(model, width), "accent"),
+  const modelGroup = (width: number, badgeWidth?: number) => [...modelSegments(model, width),
     ...badgeWidth ? badges.map((badge) => segment(shorten(badge, badgeWidth), "muted")) : []];
   add("identity", modelGroup(160, 18), [
     { priority: 60, segments: modelGroup(24, 18) },

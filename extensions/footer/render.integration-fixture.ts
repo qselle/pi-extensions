@@ -15,8 +15,9 @@ const telemetry = ["context 6% 15.5K/258K", "in 1.2K out 521", "cache R 8.4K W 4
 for (const field of telemetry) assert(wide.includes(field), wide);
 assert(wide.includes("15.5K/258K · in 1.2K out 521"));
 assert(!wide.includes("prompt "), "the cumulative prompt sum must not compete with actual context");
-assert(colors.every(({ color }) => ["accent", "muted", "text", "dim"].includes(color)), "normal telemetry must use the quiet palette");
-assert(colors.filter(({ color }) => color === "accent").every(({ value }) => value === sample.model), "only the model gets accent color");
+assert(colors.every(({ color }) => ["accent", "muted", "text", "dim", "thinkingHigh"].includes(color)), "normal telemetry must use the quiet palette");
+assert(colors.filter(({ color }) => color === "accent").every(({ value }) => value === "GPT-5.6 Sol"), "only the model name gets accent color");
+assert.deepEqual(colors.filter(({ color }) => color.startsWith("thinking")), [{ color: "thinkingHigh", value: "high" }], "effort uses Pi's thinking-level color");
 for (const label of ["context", "in", "out", "cache", "R", "W", "hit", "changed", "new"]) {
   assert(colors.some(({ color, value }) => color === "muted" && value === label), `${label} must remain legible`);
 }
@@ -65,8 +66,11 @@ assert(!line(statusSample, 100).includes("agents"), "statuses yield before core 
 for (const field of telemetry) assert(line(sample, 180).includes(field), `missing roomy metric ${field}`);
 for (const effort of ["minimal", "low", "medium", "high", "xhigh", "max"]) {
   for (const width of [40, 60, 100]) {
+    colors.length = 0;
     const rendered = line({ ...sample, model: `very-long-model-name ${effort}` }, width);
     assert(rendered.includes(` ${effort}`), `lost effort at ${width}: ${rendered}`);
+    const level = `thinking${effort[0]!.toUpperCase()}${effort.slice(1)}`;
+    assert(colors.some(({ color, value }) => color === level && value === effort), `${effort} lost its level color`);
   }
 }
 const unknown = line({ ...sample, usage: undefined, contextWindow: 258000 }, 280);

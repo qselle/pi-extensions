@@ -1,6 +1,7 @@
 # footer
 
-A readable **single-line** footer. The model uses the theme accent; normal labels,
+A readable **single-line** footer. The model uses the theme accent and its reasoning
+effort uses Pi's thinking-level color, matching the editor border; normal labels,
 values and workspace details stay neutral. Quiet dots separate related groups.
 
 ```text
