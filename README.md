@@ -44,6 +44,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`image-history`](extensions/image-history/) | Opt-in image deferral, compact previews, original viewing, portable export and storage cleanup |
 | [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
+| [`mistral-connectors`](extensions/mistral-connectors/) | Mistral account connectors as Pi MCP servers, with write tools hidden by default |
 | [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
 | [`notify`](extensions/notify/) | Desktop and terminal notifications |
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
