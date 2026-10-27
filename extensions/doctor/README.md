@@ -11,7 +11,8 @@ Read-only checks for local dependencies and configuration, with suggested fixes.
 
 Checks Pi version and settings, model authentication metadata, keybinding conflicts,
 the shell, loaded tools, search credentials, ax, PTY setup, Telegram, rendering,
-notifications, and macOS sleep prevention. Optional integrations are checked only
+notifications, macOS sleep prevention, and the Mistral connector cache (age, ready
+count, and the last refresh failure as an HTTP status or known cause). Optional integrations are checked only
 when loaded; disabled features are not errors. Exa uses its API key when present
 and public access otherwise.
 
@@ -35,7 +36,8 @@ to refresh; reports are not saved or sent to the model.
   contact providers, test notifications, or modify settings.
 - Credentials, paths, and raw parser errors are omitted. Finding a binary or
   credential does not verify functionality, authentication, or account eligibility.
-- JSON reads are capped at 64 KiB and reject symlinks and non-regular files.
+- JSON reads are capped at 64 KiB (4 MiB for the connector cache) and reject
+  symlinks and non-regular files.
   Telegram configuration has additional ownership and permission checks.
 - Resource checks inspect global settings only. They do not resolve project
   overrides, compare npm/git versions, scan package contents, or detect every

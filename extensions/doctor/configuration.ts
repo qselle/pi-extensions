@@ -8,18 +8,18 @@ import type { Finding } from "./checks.ts";
 export type ConfigRead = { status: "absent" | "invalid" } | { status: "valid"; data: Record<string, unknown> };
 
 /** Bounded, non-following JSON reads shared by the configuration diagnostics. */
-export async function readConfig(agentDir: string, name: string): Promise<ConfigRead> {
+export async function readConfig(agentDir: string, name: string, limit = 64 * 1024): Promise<ConfigRead> {
   let file;
   try {
     const path = join(agentDir, name);
     const info = await lstat(path);
-    if (!info.isFile() || info.size > 64 * 1024) return { status: "invalid" };
+    if (!info.isFile() || info.size > limit) return { status: "invalid" };
     file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const infoAfterOpen = await file.stat();
-    if (!infoAfterOpen.isFile() || infoAfterOpen.size > 64 * 1024) return { status: "invalid" };
-    const bytes = Buffer.alloc(64 * 1024 + 1);
+    if (!infoAfterOpen.isFile() || infoAfterOpen.size > limit) return { status: "invalid" };
+    const bytes = Buffer.alloc(limit + 1);
     const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-    if (bytesRead > 64 * 1024) return { status: "invalid" };
+    if (bytesRead > limit) return { status: "invalid" };
     const data = JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
     return data && typeof data === "object" && !Array.isArray(data) ? { status: "valid", data } : { status: "invalid" };
   } catch (error) {

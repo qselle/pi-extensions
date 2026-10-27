@@ -7,6 +7,7 @@ import { parseAccent } from "../codex-prompt/config.ts";
 import { supportsFastMode } from "../fast-mode/index.ts";
 import { notificationEscape } from "../notify/deliver.ts";
 import { readConfig, resourceFindings, type ConfigRead } from "./configuration.ts";
+import { age, CACHE_FILE, CACHE_TTL_MS, parseCache, type ConnectorCache } from "../mistral-connectors/cache.ts";
 
 export interface Finding { id: string; label: string; status: "ok" | "warn" | "off"; detail: string; fix?: string }
 export interface DoctorInput {
@@ -15,12 +16,14 @@ export interface DoctorInput {
   tools: readonly string[]; activeTools: readonly string[]; commands: readonly string[];
   telegram: "enabled" | "disabled" | "invalid"; shell?: string;
   model?: { provider: string; api: string; id: string; baseUrl: string };
+  now?: number;
 }
 export interface Probe {
   executable(name: string): Promise<boolean>;
   config(name: string): Promise<"absent" | "valid" | "invalid">;
   pty(): Promise<boolean>;
   resources?(): Promise<Finding[]>;
+  connectorCache?(): Promise<ConnectorCache | "absent" | "invalid">;
 }
 
 /** Metadata checks only: no executable is launched and no network is contacted. */
@@ -54,6 +57,11 @@ export function localProbe(input: DoctorInput): Probe {
     async resources() {
       const result = await read("settings.json");
       return result.status === "valid" ? resourceFindings(result.data, input.agentDir) : [];
+    },
+    async connectorCache() {
+      // The connector list can exceed the 64 KiB settings cap.
+      const result = await readConfig(input.agentDir, CACHE_FILE, 4 * 1024 * 1024);
+      return result.status === "valid" ? parseCache(result.data) ?? "invalid" : result.status;
     },
     async pty() {
       try {
@@ -103,6 +111,18 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
     const pty = !input.bun && await probe.pty();
     add("pty", "Interactive terminals", pty ? "ok" : "warn", input.bun ? "PTY jobs are unavailable under Bun; pipe jobs work." : pty ? "PTY package/helper found; native loading and terminal launch not tested." : "PTY package or executable helper is missing.", pty ? undefined : input.bun ? "Launch Pi with Node.js for pty=true jobs." : "Reinstall package dependencies with install scripts enabled; on macOS run node scripts/prepare-pty.mjs from the package root.");
     add("cleanup", "Process cleanup", input.platform === "win32" ? "warn" : "ok", input.platform === "win32" ? "Windows cleanup is best effort and has not been verified on a Windows host." : "POSIX process-group cleanup is available; detached/escaped processes are outside that guarantee.");
+  }
+  if (input.commands.includes("mistral-connectors") && probe.connectorCache) {
+    const cache = await probe.connectorCache();
+    if (cache === "absent" || cache === "invalid") add("mistral-connectors", "Mistral connectors", "warn", cache === "absent" ? "No connector list is cached, so no connector servers are registered." : "The connector cache is unreadable or has an unknown format.", "Run /mistral-connectors refresh with a Mistral API key configured.");
+    else {
+      const fetched = age(Math.max(0, (input.now ?? Date.now()) - cache.fetchedAt));
+      const ready = cache.connectors.filter((connector) => connector.ready).length;
+      // Only the status or a known cause is shown; remote error bodies stay out of the report.
+      const cause = cache.lastError ? cache.lastError.match(/HTTP \d{3}/)?.[0] ?? (/No API key/.test(cache.lastError) ? "no Mistral API key" : "request failed") : undefined;
+      const stale = (input.now ?? Date.now()) - cache.fetchedAt > 24 * 60 * 60 * 1000;
+      add("mistral-connectors", "Mistral connectors", cause || stale ? "warn" : "ok", `${ready} ready connector${ready === 1 ? "" : "s"}; list fetched ${fetched}${cause ? `; last refresh failed (${cause})` : ""}. Refreshes run at session start when older than ${CACHE_TTL_MS / 60_000} minutes.`, cause || stale ? "Run /mistral-connectors status for details, then /mistral-connectors refresh." : undefined);
+    }
   }
   if (input.commands.includes("telegram")) add("telegram", "Telegram configuration", input.telegram === "invalid" ? "warn" : input.telegram === "disabled" ? "off" : "ok", input.telegram === "enabled" ? "Local configuration validated; credentials and delivery not tested." : input.telegram === "disabled" ? "Optional Telegram service is disabled." : "Configuration is invalid or its file cannot be read securely.", input.telegram === "invalid" ? "Use /telegram setup; check owner-only file permissions and environment overrides." : undefined);
   for (const name of ["notify", "tool-render", "codex-prompt", "hyperlinks"]) if (input.commands.includes(name)) {

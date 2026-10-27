@@ -154,3 +154,30 @@ test("host and access diagnostics use metadata without printing raw config or re
   const publicAccess = await diagnose({ ...input, env: {} }, good);
   expect(publicAccess.find((row) => row.id === "search-keys")?.detail).toContain("keyless");
 });
+
+test("Mistral connector cache reports age and refresh failures without remote error text", async () => {
+  const now = Date.parse("2026-01-02T00:00:00Z");
+  const cache = { version: 1 as const, fetchedAt: now - 5 * 60_000, account: "a", connectors: [{ id: "1", alias: "notes", displayName: "Notes", ready: true, authAction: "none" as const, tools: [] }] };
+  const run = async (state: Awaited<ReturnType<NonNullable<Probe["connectorCache"]>>>) =>
+    (await diagnose({ ...input, now, commands: ["mistral-connectors"] }, { ...good, connectorCache: async () => state })).find((row) => row.id === "mistral-connectors");
+  expect(await run(cache)).toMatchObject({ status: "ok", detail: expect.stringContaining("1 ready connector; list fetched 5 min ago") });
+  const failed = await run({ ...cache, lastError: "HTTP 503 from /v1/connectors/bootstrap: private body" });
+  expect(failed).toMatchObject({ status: "warn", detail: expect.stringContaining("last refresh failed (HTTP 503)") });
+  expect(JSON.stringify(failed)).not.toContain("private body");
+  expect((await run({ ...cache, fetchedAt: now - 3 * 86_400_000 }))?.status).toBe("warn");
+  expect((await run("absent"))?.fix).toContain("/mistral-connectors refresh");
+  expect((await diagnose({ ...input, commands: [] }, { ...good, connectorCache: async () => { throw new Error("unexpected"); } })).some((row) => row.id === "mistral-connectors")).toBe(false);
+});
+
+test("connector cache probe reads caches beyond the settings size cap", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-doctor-connectors-"));
+  try {
+    const probe = localProbe({ ...input, agentDir: dir });
+    expect(await probe.connectorCache!()).toBe("absent");
+    const connectors = Array.from({ length: 400 }, (_, i) => ({ id: String(i), alias: `c${i}`, displayName: "x".repeat(200), ready: false, authAction: "none", tools: [] }));
+    await writeFile(join(dir, "mistral-connectors-cache.json"), JSON.stringify({ version: 1, fetchedAt: 1, account: "a", connectors }));
+    expect(await probe.connectorCache!()).toMatchObject({ version: 1, connectors: { length: 400 } });
+    await writeFile(join(dir, "mistral-connectors-cache.json"), JSON.stringify({ version: 2 }));
+    expect(await probe.connectorCache!()).toBe("invalid");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
