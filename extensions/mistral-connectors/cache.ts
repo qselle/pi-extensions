@@ -4,7 +4,7 @@ export const CACHE_FILE = "mistral-connectors-cache.json";
 /** Same lifetime as Mistral Vibe's bootstrap cache. */
 export const CACHE_TTL_MS = 10 * 60 * 1000;
 
-/** Version 1 matches the reference extension, so an existing cache keeps working. */
+/** Cache format version 1; bump only on incompatible changes so existing caches keep working. */
 export interface ConnectorCache {
   version: 1;
   fetchedAt: number;

@@ -33,7 +33,7 @@ const CALL_ROWS = 6;
 const EXPANDED_CALL_ROWS = 200;
 const SCRIPT_HEADER = /^Script (?:completed|failed)\nWall time ([\d.]+) seconds\nOutput:\n/;
 
-/** Same wording as the reference extension, so switching keeps the prompt identical. */
+/** Keep this wording stable: it is part of the cached prompt prefix. */
 export const INTENT_GUIDELINE = "Start each codemode script with a `// <≤8-word present-tense intent>` comment line, after any `// @options:` line.";
 
 const OPTIONS_LINE = /^\s*\/\/\s*@options:.*(?:\n|$)/;
