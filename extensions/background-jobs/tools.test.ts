@@ -68,11 +68,13 @@ test("an omitted cursor continues from the last agent read without repeating out
   const started = await run("bash", { command: "cat", stdin: true, yield_ms: 0 });
   const id = started.details.id;
   const reads: string[] = [outputOf(started).replace("No new output.", "")];
-  await run("job_write", { id, text: "one\n" });
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  const first = await run("job_wait", { id, wait_ms: 0 });
-  reads.push(outputOf(first).replace("No new output.", ""));
-  await run("job_write", { id, text: "two\n", eof: true });
+  const unread = (value: any) => reads.push(outputOf(value).replace("No new output.", ""));
+  // A write waits for the reply, so its result already carries the echoed line.
+  const reply = await run("job_write", { id, text: "one\n" });
+  expect(reply.details.wait.end).toBe("output");
+  unread(reply);
+  unread(await run("job_wait", { id, wait_ms: 0 }));
+  unread(await run("job_write", { id, text: "two\n", eof: true, wait_ms: 0 }));
   const second = await run("job_wait", { id });
   expect(second.details.status).toBe("completed");
   reads.push(outputOf(second).replace("No new output.", ""));
@@ -136,10 +138,11 @@ test("argument aliases from other shell tool sets validate", async () => {
   const { tools } = await session();
   const cases: [string, Record<string, unknown>, Record<string, unknown>][] = [
     ["job_wait", { job_id: "abc", waitMs: 5000, max_output_tokens: 100, cursor: 3 }, { id: "abc", wait_ms: 5000, max_chars: 400, cursor: 3 }],
-    ["job_output", { job_id: "abc", wait: true }, { id: "abc", wait_ms: MAX_WAIT_MS }],
+    ["job_wait", { job_id: "abc", wait: true }, { id: "abc", wait_ms: MAX_WAIT_MS }],
+    ["job_output", { job_id: "abc", wait: true }, { id: "abc", wait: true }],
     ["bash", { command: "ls", "yield-time_ms": 2000, max_output_tokens: 1000, reasoning: "List files", tty: false }, { command: "ls", yield_ms: 2000, max_chars: 4000, purpose: "List files", pty: false }],
     ["job_start", { name: "Server", command: "true", timeout: 5 }, { name: "Server", command: "true", timeout_seconds: 5 }],
-    ["job_write", { job_id: "abc", chars: "x", close_stdin: true }, { id: "abc", text: "x", eof: true }],
+    ["job_write", { job_id: "abc", chars: "x", close_stdin: true, "yield-time_ms": 100 }, { id: "abc", text: "x", eof: true, wait_ms: 100 }],
     ["job_stop", { job_id: "abc" }, { id: "abc" }],
   ];
   for (const [name, raw, expected] of cases) {
@@ -274,4 +277,17 @@ test("waits stream output and labelled timers into the card, then freeze", async
   expect(outputOf(done)).toBe("firstsecond");
   const card = tools.get("job_wait").renderResult(done, { expanded: false, isPartial: false }, plain, { isError: false });
   expect(card.render(120)[0]).toMatch(/^  └ ✓ .+ · completed · \d+s · exit 0$/);
+});
+
+test("job_output waits return on the next output; wait=true waits for exit", async () => {
+  const { run } = await session();
+  const id = (await run("bash", { command: "sleep 0.3; printf tick; sleep 0.5; printf done", yield_ms: 0 })).details.id;
+  const started = Date.now();
+  const next = await run("job_output", { id, wait_ms: 5000 });
+  expect(Date.now() - started).toBeLessThan(700);
+  expect(next.details).toMatchObject({ status: "running", wait: { end: "output" } });
+  expect(outputOf(next)).toBe("tick");
+  const exit = await run("job_output", { id, wait: true });
+  expect(exit.details).toMatchObject({ status: "completed", wait: { end: "exit", limitMs: MAX_WAIT_MS } });
+  expect(outputOf(exit)).toBe("done");
 });

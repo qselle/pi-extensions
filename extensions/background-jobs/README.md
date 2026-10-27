@@ -75,8 +75,12 @@ The agent can also use:
 - `job_wait`: wait for the job to exit, up to `wait_ms` (default and cap
   300000; larger values are clamped, not rejected), then return its status and
   output. An interrupted wait leaves the job managed.
-- `job_output`: read output without waiting (`wait_ms` defaults to 0).
-- `job_write`: write literal stdin text, optionally sending EOF. Pipe jobs need
+- `job_output`: read output. `wait_ms` (default 0) waits for the next output,
+  returning once it has been quiet for 25 ms (at most 250 ms after it starts),
+  or when the job exits. `wait: true` waits for exit instead; its `wait_ms`
+  defaults to 300000.
+- `job_write`: write literal stdin text, optionally sending EOF, then wait up to
+  `wait_ms` (default 5000) for a reply the same way. Pipe jobs need
   `stdin: true` at start. Cancelling or timing out a backpressured pipe write
   closes stdin; it does not kill the process. PTYs accept terminal control bytes
   such as `\u0003` (Ctrl+C) and `\u0004` (Ctrl+D). They reject `eof: true`: a
@@ -123,8 +127,9 @@ before validation when the canonical name is absent: `job_id`/`jobId` → `id`,
 `waitMs` → `wait_ms`, `yield-time_ms`/`yieldMs` → `yield_ms`,
 `max_output_tokens` → `max_chars` (×4 characters per token), `maxChars` →
 `max_chars`, `reasoning` → `purpose`, `tty` → `pty`, `chars` → `text`,
-`close_stdin` → `eof`, `timeout` → `timeout_seconds` (`job_start`), and
-`wait: true` → `wait_ms: 300000` (`job_output`). `cursor` passes through.
+`close_stdin` → `eof`, `timeout` → `timeout_seconds` (`job_start`),
+`yield-time_ms` → `wait_ms` (`job_write`), and `wait: true` →
+`wait_ms: 300000` (`job_wait`). `cursor` passes through.
 
 ### Result details
 

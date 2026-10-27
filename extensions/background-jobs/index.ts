@@ -11,7 +11,7 @@ import { BASH_OWNER, BASH_STYLE, type BashOwnerRequest, type BashStyleRequest, t
 import { JOB_HISTORY_ENTRY, JobHistory } from "./history.ts";
 import { deferredTools } from "../../lib/deferred-tools.ts";
 import { commandPurposeParameter, COMMAND_PURPOSE_GUIDELINE, toolPurpose, toolPurposeParameter } from "../../lib/tool-purpose.ts";
-import { argumentAliases, DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS, MAX_OUTPUT_CHARS, MAX_YIELD_MS, outputBudget, START_YIELD_MS, waitDuration, yieldDuration } from "./arguments.ts";
+import { argumentAliases, DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS, MAX_OUTPUT_CHARS, MAX_YIELD_MS, outputBudget, START_YIELD_MS, waitDuration, WRITE_WAIT_MS, yieldDuration } from "./arguments.ts";
 import { headline, lines, renderJobList, renderJobResult } from "./render.ts";
 const JOB_CONTROLS = ["job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"];
 /** Pi's built-in bash guideline, kept when the managed executor replaces bash. */
@@ -335,23 +335,30 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderCall: (args, theme, context) => jobHeading(`Start job · ${safeLabel(args.name) || "command"}`, args, theme, context), renderResult: renderStartResult,
   });
-  const readParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(),
-    cursor: Type.Optional(Type.Integer({ minimum: 0, description: "Absolute offset to page forward from. Omit to get the newest output since your last read of this job." })),
-    wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for the job to exit, capped at ${MAX_WAIT_MS}.` })),
-    max_chars: budgetParameter });
+  const cursorParameter = Type.Optional(Type.Integer({ minimum: 0, description: "Absolute offset to page forward from. Omit to get the newest output since your last read of this job." }));
+  const readParameters = {
+    job_wait: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), cursor: cursorParameter,
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for the job to exit, capped at ${MAX_WAIT_MS}.` })),
+      max_chars: budgetParameter }),
+    job_output: Type.Object({ purpose: toolPurposeParameter, id: Type.String(), cursor: cursorParameter,
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for new output or exit (default 0, capped at ${MAX_WAIT_MS}).` })),
+      wait: Type.Optional(Type.Boolean({ description: `Wait for exit instead, ignoring progress output; wait_ms defaults to ${MAX_WAIT_MS}.` })),
+      max_chars: budgetParameter }),
+  };
   for (const name of ["job_output", "job_wait"] as const) pi.registerTool({
     name, label: name === "job_wait" ? "Wait for job" : "Read job output",
     description: name === "job_wait"
       ? `Wait for a managed job to exit, up to wait_ms (default and cap ${MAX_WAIT_MS}), then return its status and output since your last read. Waits end early, leaving the job running, when the user interrupts or sends a message.`
-      : "Read managed job output without waiting (wait_ms optional). Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
-    parameters: readParameters,
-    prepareArguments: argumentAliases(readParameters),
+      : "Read managed job output. wait_ms waits for the next output; wait=true waits for exit. Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
+    parameters: readParameters[name],
+    prepareArguments: argumentAliases(readParameters[name]),
     renderShell: "self",
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(_id, params: any, signal, onUpdate, ctx) {
       const jobs = service;
       const request = { cursor: params.cursor, budget: outputBudget(params.max_chars) };
       if (!jobs.list().some((job) => job.id === params.id)) { signal?.throwIfAborted(); return result(params.id, request, jobs); }
-      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), { signal, ctx, onUpdate });
+      const exit = name === "job_wait" || params.wait === true;
+      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, exit ? MAX_WAIT_MS : 0), { signal, ctx, onUpdate, until: exit ? "exit" : "output" });
     },
     renderCall: (args, theme, context) => jobHeading(`${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
@@ -368,13 +375,19 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     },
     renderCall: (args, theme, context) => jobHeading("List background jobs", args, theme, context), renderResult: renderJobList,
   });
-  const writeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()), cursor: Type.Optional(Type.Integer({ minimum: 0 })), max_chars: budgetParameter });
+  const writeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), text: Type.String({ maxLength: 16000 }), eof: Type.Optional(Type.Boolean()),
+    wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for a reply after writing (default ${WRITE_WAIT_MS}, capped at ${MAX_WAIT_MS}).` })),
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })), max_chars: budgetParameter });
   pi.registerTool({
     name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs need stdin=true at start and support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
     parameters: writeParameters,
     prepareArguments: argumentAliases(writeParameters),
     renderShell: "self",
-    async execute(_id, params, signal) { const jobs = service; await jobs.write(params.id, params.text, params.eof, signal); return result(params.id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, jobs); },
+    async execute(_id, params, signal, onUpdate, ctx) {
+      const jobs = service;
+      await jobs.write(params.id, params.text, params.eof, signal);
+      return waitAndRead(jobs, params.id, { cursor: params.cursor, budget: outputBudget(params.max_chars) }, waitDuration(params.wait_ms, WRITE_WAIT_MS), { signal, ctx, onUpdate, until: "output" });
+    },
     renderCall: (args, theme, context) => jobHeading(`Write job input · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
   const resizeParameters = Type.Object({ purpose: toolPurposeParameter, id: Type.String(), columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) });
