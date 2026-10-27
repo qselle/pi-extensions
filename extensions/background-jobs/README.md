@@ -26,14 +26,26 @@ system-prompt file change is needed.
 /jobs stop all           Request termination of every active job
 ```
 
+With a UI, `/jobs stop` lists the affected jobs and asks for confirmation first.
+Job tools and `/jobs` accept a full job ID or an unambiguous prefix of a current
+or recent job's ID; an ambiguous prefix fails and lists the matches.
+
 With this extension enabled, `bash` uses the managed executor. It accepts the
 usual `command` and `timeout` (seconds), plus `yield_ms` (default 10000, capped
 at 30000), `max_chars` (output budget, default 24000, capped at 50000),
-`stdin`, optional `name`, `purpose`, `pty`, `columns`, and `rows`. Quick commands
-finish inline. Longer commands return a job ID and a hint to call `job_wait`;
+`stdin`, optional `name`, `purpose`, `pty`, `columns`, `rows`, and `cwd`. A
+relative `cwd` resolves against Pi's working directory; a missing directory
+fails before launch, and the call card shows “in <dir>” when it differs. Quick
+commands finish inline. Longer commands return a job ID and a hint to call `job_wait`;
 use it for the final status and exit code. Commands that fail during the initial
 wait return an error result that still carries the job details. Cancelling the
-initial wait stops the command; cancelling a later `job_wait` leaves it running.
+initial wait stops the command, like Pi's built-in bash.
+
+Later `job_wait` and `job_output` waits never stop the job. When the user
+interrupts one, or queues a message (checked every 250 ms), the wait returns a
+normal result: the output so far, an advanced cursor, and a note that the job is
+still running and not hung. Its card shows “interrupted after 12s” or “new
+message after 12s”.
 The 16-job limit also applies to bash calls.
 
 Pipe jobs start with stdin closed, so commands that read input see EOF instead
@@ -68,9 +80,13 @@ The agent can also use:
 - `job_list`: inspect active and recently finished jobs.
 - `job_wait`: wait for the job to exit, up to `wait_ms` (default and cap
   300000; larger values are clamped, not rejected), then return its status and
-  output. Cancelling that wait leaves the job managed.
-- `job_output`: read output without waiting (`wait_ms` defaults to 0).
-- `job_write`: write literal stdin text, optionally sending EOF. Pipe jobs need
+  output. An interrupted wait leaves the job managed.
+- `job_output`: read output. `wait_ms` (default 0) waits for the next output,
+  returning once it has been quiet for 25 ms (at most 250 ms after it starts),
+  or when the job exits. `wait: true` waits for exit instead; its `wait_ms`
+  defaults to 300000.
+- `job_write`: write literal stdin text, optionally sending EOF, then wait up to
+  `wait_ms` (default 5000) for a reply the same way. Pipe jobs need
   `stdin: true` at start. Cancelling or timing out a backpressured pipe write
   closes stdin; it does not kill the process. PTYs accept terminal control bytes
   such as `\u0003` (Ctrl+C) and `\u0004` (Ctrl+D). They reject `eof: true`: a
@@ -83,11 +99,21 @@ The agent can also use:
 Run the command in the foreground; do not use `&`, `nohup`, `disown`, or
 `setsid` to escape management. The bash guidelines say so and keep Pi's note about
 `PI_*` environment variables. Sixteen jobs can run concurrently; the most recent
-50 jobs are retained. The shared overlay shows active job names on sufficiently
-large terminals. The panel shares the transcript viewer's scrolling/search controls
-and shows the latest 2000 characters per job. Commands and control tools do not
-send completion messages to the model or trigger extra turns; use a wait when
-results are needed.
+50 jobs are retained. On sufficiently large terminals, the shared overlay titled
+“● N running” lists jobs that outlived their yield window; a command still inside
+it shows only in its own card. The panel shares the transcript viewer's scrolling/search controls
+and shows the latest 2000 characters per job.
+
+### Completion notices
+
+A job the agent left running when it went idle is handed off. When a handed-off
+job exits or times out, and the model has not already seen its final state in a
+result, the extension sends one “Finished” message that starts a turn. It holds
+the exit status and the unread output; several jobs share an 8192-character
+budget. The message waits until the agent is idle with no queued message, and
+is retried when the agent next settles. Jobs that finish during a run, and stops
+requested through `job_stop`, `/jobs stop`, cancellation, or shutdown, are never
+reported. Use a wait when a result is needed within the current run.
 
 ### Reading output
 
@@ -117,8 +143,9 @@ before validation when the canonical name is absent: `job_id`/`jobId` → `id`,
 `waitMs` → `wait_ms`, `yield-time_ms`/`yieldMs` → `yield_ms`,
 `max_output_tokens` → `max_chars` (×4 characters per token), `maxChars` →
 `max_chars`, `reasoning` → `purpose`, `tty` → `pty`, `chars` → `text`,
-`close_stdin` → `eof`, `timeout` → `timeout_seconds` (`job_start`), and
-`wait: true` → `wait_ms: 300000` (`job_output`). `cursor` passes through.
+`close_stdin` → `eof`, `timeout` → `timeout_seconds` (`job_start`),
+`yield-time_ms` → `wait_ms` (`job_write`), and `wait: true` →
+`wait_ms: 300000` (`job_wait`). `cursor` passes through.
 
 ### Result details
 
@@ -133,6 +160,13 @@ Managed `bash` and job results set `details` for renderers:
 | `startedAt`, `endedAt` | Epoch milliseconds; `endedAt` is absent while running |
 | `durationMs` | Elapsed time, so far for active jobs; absent for `interrupted` |
 | `cursor`, `more`, `lost`, `omitted` | Read position, another page available, evicted and skipped characters |
+| `wait` | For waits: `startedAt`, `limitMs`, `observedAt`, and `end` (`exit`, `output`, `deadline`, `interrupted`, or `message`; unset while waiting) |
+
+Managed `bash` also declares an output schema and returns `structuredContent`,
+which programmatic callers such as codemode scripts receive instead of the text.
+Field names follow Pi's built-in bash: `output` (the whole retained log, not the
+newest-first budget), `truncated`, `exit_code` (absent while running or after a
+signal), and `wall_time_seconds`, plus `status` and, while running, `job_id`.
 
 `job_list` details hold `jobs` with `id`, `name`, `status`, `icon`, `exitCode`,
 `signal`, `startedAt`, and `endedAt`.
@@ -144,6 +178,11 @@ action and purpose, then a gutter with the status line and the last four output
 rows. Expanding shows the full result. `job_list` shows a job count and one row
 per job.
 
+While a `job_wait` or `job_output` wait runs, its card streams new output and a
+once-per-second counter such as “27s / 5m · job running 13m”: the wait against
+its limit, then the job's runtime. The finished card shows the final snapshot
+and never changes afterwards. Live updates never advance the agent's cursor.
+
 ### Redaction
 
 Known questionnaire secret values are redacted from metadata and output before
@@ -154,7 +193,7 @@ remain known to that job during session teardown.
 
 ## Dependencies and limitations
 
-Foreground waits stream output at most ten times per second, with elapsed-time updates for quiet commands.
+Foreground and job waits stream output at most ten times per second, with elapsed-time updates for quiet commands.
 
 - Pi 1.0 public shell, tool, session, and overlay APIs; Node.js built-ins;
   [`node-pty`](https://github.com/microsoft/node-pty) 1.1.x for PTY jobs.
@@ -178,7 +217,9 @@ Foreground waits stream output at most ten times per second, with elapsed-time u
   Managed `bash` and `job_start` use the same execution service.
 - Shutdown stops managed processes and finishes within the TERM grace period plus
   two seconds; jobs still unsettled then are killed, detached, and marked stopped.
-  Processes that escape the process group may survive cleanup.
+  Processes that escape the process group may survive cleanup. If Pi exits
+  without a shutdown, a synchronous exit hook kills live process groups; it is
+  shared across reloads and registered only while jobs run.
 - When the process group exits but an escaped daemon (for example after
   `setsid`) keeps the output pipes open, the job settles after a 500 ms drain and
   stops reading from those pipes.

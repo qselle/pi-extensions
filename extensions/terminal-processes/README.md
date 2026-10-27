@@ -21,6 +21,8 @@ An explicit `direction` can be `right` or `down`. Otherwise the first split foll
 
 `list` reports saved ownership and submission state, not live process state. Use `status` and `read` for current information. A command whose acknowledgement was lost remains marked **launch unconfirmed**; inspect its pane before retrying. Cancellation cannot undo an action Herdr has already accepted.
 
+Each call renders as one compact card: a present-tense verb while it runs (“Starting”, “Reading”), then the past tense with a success or error bullet (“Started”, “Read”, “Interrupt failed”), the optional purpose, and a row naming the label or pane. Read, status, and list cards show up to eight output rows until expanded; failures show their error.
+
 Output is limited to 2,000 lines and 50 KiB, with a 1 MiB socket-response ceiling. `input` results and renderers do not echo submitted text; process status omits argv and command lines. Tool arguments remain in Pi's transcript, and a terminal can echo input into subsequent `read` output, so this is not a secret-input channel.
 
 ## Configuration

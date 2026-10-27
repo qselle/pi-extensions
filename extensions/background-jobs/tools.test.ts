@@ -1,31 +1,40 @@
 import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import extension, { FOREGROUND_GUIDELINE, PI_ENV_GUIDELINE } from "./index.ts";
+import { Value } from "typebox/value";
+import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, NOTICE_TYPE, PI_ENV_GUIDELINE } from "./index.ts";
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
 import { COLLAPSED_TAIL_ROWS } from "./render.ts";
+import { encodeJob, JOB_HISTORY_ENTRY } from "./history.ts";
 
 initTheme("dark");
 const plain = { fg: (_color: string, text: string) => text };
 const shutdowns: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const stop of shutdowns.splice(0)) await stop(); });
 
-async function session(mode = "json") {
+async function session(mode = "json", extra: Record<string, unknown> = {}, seed: unknown[] = []) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function>();
-  const entries: unknown[] = [];
+  const commands = new Map<string, any>();
+  const entries: unknown[] = [...seed];
+  const messages: { message: any; options: any }[] = [];
+  const renderers = new Map<string, any>();
   extension({
-    registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, getThinkingLevel: () => "off",
+    sendMessage: (message: any, options: any) => messages.push({ message, options }), registerMessageRenderer: (type: string, renderer: any) => renderers.set(type, renderer),
+    registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand: (name: string, command: any) => commands.set(name, command), getThinkingLevel: () => "off",
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     events: { emit() {}, on() { return () => {}; } }, on: (name: string, handler: Function) => handlers.set(name, handler),
   } as never);
-  const ctx = { mode, cwd: process.cwd(), sessionManager: { getSessionId: () => "tools-test", getSessionFile: () => undefined, getBranch: () => entries }, ui: { notify() {} } };
+  const ctx = { mode, cwd: process.cwd(), sessionManager: { getSessionId: () => "tools-test", getSessionFile: () => undefined, getBranch: () => entries }, ui: { notify() {} },
+    isIdle: () => true, hasPendingMessages: () => false, ...extra };
   await handlers.get("session_start")!({}, ctx);
   shutdowns.push(async () => { await handlers.get("session_shutdown")!({}, ctx); });
-  const run = (name: string, args: Record<string, unknown>): Promise<any> => tools.get(name).execute("call", args, undefined, undefined, ctx);
-  return { tools, run };
+  const run = (name: string, args: Record<string, unknown>, signal?: AbortSignal, update?: (value: any) => void): Promise<any> => tools.get(name).execute("call", args, signal, update, ctx);
+  return { tools, run, ctx, handlers, messages, renderers, commands };
 }
 const outputOf = (value: any): string => value.content[0].text.slice(value.content[0].text.indexOf("\n\n") + 2);
 
@@ -66,11 +75,13 @@ test("an omitted cursor continues from the last agent read without repeating out
   const started = await run("bash", { command: "cat", stdin: true, yield_ms: 0 });
   const id = started.details.id;
   const reads: string[] = [outputOf(started).replace("No new output.", "")];
-  await run("job_write", { id, text: "one\n" });
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  const first = await run("job_wait", { id, wait_ms: 0 });
-  reads.push(outputOf(first).replace("No new output.", ""));
-  await run("job_write", { id, text: "two\n", eof: true });
+  const unread = (value: any) => reads.push(outputOf(value).replace("No new output.", ""));
+  // A write waits for the reply, so its result already carries the echoed line.
+  const reply = await run("job_write", { id, text: "one\n" });
+  expect(reply.details.wait.end).toBe("output");
+  unread(reply);
+  unread(await run("job_wait", { id, wait_ms: 0 }));
+  unread(await run("job_write", { id, text: "two\n", eof: true, wait_ms: 0 }));
   const second = await run("job_wait", { id });
   expect(second.details.status).toBe("completed");
   reads.push(outputOf(second).replace("No new output.", ""));
@@ -83,8 +94,8 @@ test("an omitted cursor continues from the last agent read without repeating out
 
 test("bash yields after ten seconds by default and one job_wait covers five minutes", async () => {
   const waits: number[] = [];
-  const original = JobService.prototype.wait;
-  JobService.prototype.wait = function (id, milliseconds, signal) { waits.push(milliseconds ?? -1); return original.call(this, id, milliseconds, signal); };
+  const original = JobService.prototype.waitFor;
+  JobService.prototype.waitFor = function (id, milliseconds, options) { waits.push(milliseconds); return original.call(this, id, milliseconds, options); };
   try {
     const { run, tools } = await session();
     expect((await run("bash", { command: "true" })).details.status).toBe("completed");
@@ -104,7 +115,7 @@ test("bash yields after ten seconds by default and one job_wait covers five minu
     await run("bash", { command: "true", yield_ms: 999_999 });
     expect(waits.at(-1)).toBe(30_000);
     expect(DEFAULT_YIELD_MS + MAX_WAIT_MS).toBeGreaterThanOrEqual(180_000);
-  } finally { JobService.prototype.wait = original; }
+  } finally { JobService.prototype.waitFor = original; }
 });
 
 test("bash keeps the PI_* guideline and yielded results say how to follow up", async () => {
@@ -134,10 +145,11 @@ test("argument aliases from other shell tool sets validate", async () => {
   const { tools } = await session();
   const cases: [string, Record<string, unknown>, Record<string, unknown>][] = [
     ["job_wait", { job_id: "abc", waitMs: 5000, max_output_tokens: 100, cursor: 3 }, { id: "abc", wait_ms: 5000, max_chars: 400, cursor: 3 }],
-    ["job_output", { job_id: "abc", wait: true }, { id: "abc", wait_ms: MAX_WAIT_MS }],
+    ["job_wait", { job_id: "abc", wait: true }, { id: "abc", wait_ms: MAX_WAIT_MS }],
+    ["job_output", { job_id: "abc", wait: true }, { id: "abc", wait: true }],
     ["bash", { command: "ls", "yield-time_ms": 2000, max_output_tokens: 1000, reasoning: "List files", tty: false }, { command: "ls", yield_ms: 2000, max_chars: 4000, purpose: "List files", pty: false }],
     ["job_start", { name: "Server", command: "true", timeout: 5 }, { name: "Server", command: "true", timeout_seconds: 5 }],
-    ["job_write", { job_id: "abc", chars: "x", close_stdin: true }, { id: "abc", text: "x", eof: true }],
+    ["job_write", { job_id: "abc", chars: "x", close_stdin: true, "yield-time_ms": 100 }, { id: "abc", text: "x", eof: true, wait_ms: 100 }],
     ["job_stop", { job_id: "abc" }, { id: "abc" }],
   ];
   for (const [name, raw, expected] of cases) {
@@ -181,6 +193,25 @@ test("job cards render compactly without the default boxed shell", async () => {
   expect(rows.length).toBeLessThanOrEqual(3 + COLLAPSED_TAIL_ROWS + 1);
 });
 
+test("bash returns a structured result shaped like Pi's built-in bash", async () => {
+  const { run, tools } = await session();
+  expect(tools.get("bash").outputSchema).toBe(BASH_OUTPUT_SCHEMA);
+  const failed = await run("bash", { command: "printf ok; exit 3", yield_ms: 5000 });
+  expect(failed.isError).toBe(true);
+  expect(failed.structuredContent).toMatchObject({ output: "ok", truncated: false, exit_code: 3, status: "failed" });
+  expect(failed.structuredContent.job_id).toBeUndefined();
+  expect(Value.Check(BASH_OUTPUT_SCHEMA, failed.structuredContent)).toBe(true);
+  const running = await run("bash", { command: "printf start; sleep 5", yield_ms: 300 });
+  expect(running.structuredContent).toMatchObject({ output: "start", status: "running", job_id: running.details.id });
+  expect("exit_code" in running.structuredContent).toBe(false);
+  expect(Value.Check(BASH_OUTPUT_SCHEMA, running.structuredContent)).toBe(true);
+  await run("job_stop", { id: running.details.id });
+  // The whole retained log, not the model's newest-first budget.
+  const long = await run("bash", { command: "seq 1 20000", yield_ms: 5000, max_chars: 300 });
+  expect(long.structuredContent.output.startsWith("1\n2\n")).toBe(true);
+  expect(long.structuredContent.exit_code).toBe(0);
+});
+
 test("managed results carry exit, signal, status and timing details", async () => {
   const { run } = await session();
   const done = await run("bash", { command: "printf ok", yield_ms: 5000 });
@@ -196,4 +227,175 @@ test("managed results carry exit, signal, status and timing details", async () =
   const stopped = await run("job_wait", { id: (await run("job_stop", { id: running.details.id })).details.id, wait_ms: 5000 });
   expect(stopped.details).toMatchObject({ status: "stopped", signal: "SIGTERM" });
   expect(typeof stopped.details.endedAt).toBe("number");
+});
+
+const abortAfter = (milliseconds: number) => { const controller = new AbortController(); setTimeout(() => controller.abort(), milliseconds); return controller.signal; };
+
+test("an interrupted wait returns the output so far and says the job is still running", async () => {
+  const { run, tools } = await session();
+  const started = await run("bash", { command: "printf ready; sleep 5", yield_ms: 300 });
+  const id = started.details.id;
+  const waited = await run("job_wait", { id }, abortAfter(150));
+  expect(waited.details.status).toBe("running");
+  expect(waited.details.wait).toMatchObject({ limitMs: MAX_WAIT_MS, end: "interrupted" });
+  expect(waited.content[0].text).toContain("The user interrupted this wait after 0s; the job is still running, so this does not mean it hung.");
+  const card = tools.get("job_wait").renderResult(waited, { expanded: false, isPartial: false }, plain, { isError: false });
+  expect(card.render(120)[0]).toContain(" · interrupted after 0s");
+  expect(outputOf(await run("job_output", { id }))).toBe("No new output.");
+  await run("job_stop", { id });
+});
+
+test("a queued user message ends a wait promptly", async () => {
+  let queued = false;
+  const { run } = await session("json", { hasPendingMessages: () => queued });
+  const id = (await run("bash", { command: "sleep 5", yield_ms: 0 })).details.id;
+  setTimeout(() => { queued = true; }, 100);
+  const started = Date.now();
+  const waited = await run("job_wait", { id });
+  expect(Date.now() - started).toBeLessThan(800);
+  expect(waited.details.wait.end).toBe("message");
+  expect(waited.content[0].text).toContain("because a new user message is queued; the job is still running.");
+  await run("job_stop", { id });
+});
+
+test("cancelling the initial bash wait stops the command", async () => {
+  const { run } = await session();
+  await expect(run("bash", { command: "sleep 5", yield_ms: 5000 }, abortAfter(150))).rejects.toThrow("Command cancelled; the job was stopped.");
+  const jobs = (await run("job_list", {})).details.jobs;
+  expect(["stopping", "stopped"]).toContain(jobs.at(-1).status);
+});
+
+test("waits stream output and labelled timers into the card, then freeze", async () => {
+  const { run, tools } = await session();
+  const id = (await run("bash", { command: "printf first; sleep 0.4; printf second; sleep 0.9", yield_ms: 0 })).details.id;
+  const updates: any[] = [];
+  const done = await run("job_wait", { id }, undefined, (value) => updates.push(value));
+  expect(updates.length).toBeGreaterThanOrEqual(2);
+  const last = updates.at(-1);
+  expect(last.details.wait).toMatchObject({ limitMs: MAX_WAIT_MS });
+  expect(last.details.wait.end).toBeUndefined();
+  expect(last.content[0].text).toMatch(/^● .+ · [1-9]s \/ 5m · job running [1-9]s\n/);
+  expect(last.content[0].text).not.toContain("Still running");
+  expect(updates.some((value) => outputOf(value).includes("first") && !outputOf(value).includes("second"))).toBe(true);
+  const live = tools.get("job_wait").renderResult(last, { expanded: false, isPartial: true }, plain, { isError: false }).render(120);
+  expect(live[0]).toMatch(/[1-9]s \/ 5m · job running [1-9]s$/);
+  // Progress never advances the agent's read position.
+  expect(done.details.wait.end).toBe("exit");
+  expect(outputOf(done)).toBe("firstsecond");
+  const card = tools.get("job_wait").renderResult(done, { expanded: false, isPartial: false }, plain, { isError: false });
+  expect(card.render(120)[0]).toMatch(/^  └ ✓ .+ · completed · \d+s · exit 0$/);
+});
+
+test("job_output waits return on the next output; wait=true waits for exit", async () => {
+  const { run } = await session();
+  const id = (await run("bash", { command: "sleep 0.3; printf tick; sleep 0.5; printf done", yield_ms: 0 })).details.id;
+  const started = Date.now();
+  const next = await run("job_output", { id, wait_ms: 5000 });
+  expect(Date.now() - started).toBeLessThan(700);
+  expect(next.details).toMatchObject({ status: "running", wait: { end: "output" } });
+  expect(outputOf(next)).toBe("tick");
+  const exit = await run("job_output", { id, wait: true });
+  expect(exit.details).toMatchObject({ status: "completed", wait: { end: "exit", limitMs: MAX_WAIT_MS } });
+  expect(outputOf(exit)).toBe("done");
+});
+
+const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function until(check: () => boolean, limit = 3000) {
+  const deadline = Date.now() + limit;
+  while (!check()) { if (Date.now() > deadline) throw new Error("Condition did not become true"); await sleep(10); }
+}
+
+test("a job left running when the agent settles reports its completion with a turn", async () => {
+  const { run, handlers, ctx, messages, renderers } = await session();
+  const id = (await run("bash", { command: "sleep 0.3; printf finished-output; exit 4", yield_ms: 0 })).details.id;
+  await handlers.get("agent_settled")!({}, ctx);
+  await until(() => messages.length === 1);
+  const { message, options } = messages[0]!;
+  expect(options).toEqual({ triggerTurn: true });
+  expect(message).toMatchObject({ customType: NOTICE_TYPE, display: true });
+  expect(message.content).toStartWith("A background job finished after you last checked it.");
+  expect(message.content).toContain("· failed ·");
+  expect(message.content).toContain("exit 4");
+  expect(message.content).toContain("finished-output");
+  // The notice is the model's read: nothing is unread or reported twice.
+  expect(outputOf(await run("job_output", { id }))).toBe("No new output.");
+  const rows = renderers.get(NOTICE_TYPE)(message, { expanded: false, outputPad: 1 }, plain).render(100);
+  expect(rows[0]).toMatch(/^• Finished job · /);
+  expect(rows.join("\n")).toContain("finished-output");
+  await handlers.get("agent_settled")!({}, ctx);
+  await sleep(50);
+  expect(messages).toHaveLength(1);
+});
+
+test("notices skip stopped, already-read and in-run jobs, and wait for an idle agent without queued messages", async () => {
+  let idle = false;
+  let queued = false;
+  const { run, handlers, ctx, messages } = await session("json", { isIdle: () => idle, hasPendingMessages: () => queued });
+  const start = async (command: string) => (await run("bash", { command, yield_ms: 0 })).details.id;
+  const seen = await start("sleep 0.2");
+  const stopped = await start("sleep 5");
+  const later = await start("sleep 0.2; printf later");
+  await handlers.get("agent_settled")!({}, ctx);
+  const quick = await start("sleep 0.1");
+  await run("job_wait", { id: seen });
+  await run("job_stop", { id: stopped });
+  await sleep(400);
+  idle = true;
+  queued = true;
+  await handlers.get("agent_settled")!({}, ctx);
+  await sleep(50);
+  expect(messages).toHaveLength(0);
+  queued = false;
+  await handlers.get("agent_settled")!({}, ctx);
+  await until(() => messages.length === 1);
+  const content: string = messages[0]!.message.content;
+  expect(content).toContain(`Job: ${later}`);
+  for (const id of [seen, stopped, quick]) expect(content).not.toContain(id);
+});
+
+test("the overlay shows only yielded jobs under a running count", async () => {
+  const { run } = await session("tui");
+  const card = ((globalThis as any)[Symbol.for("@qselle/pi-extensions.overlay-stack.v1")].cards.get("background-jobs")).definition;
+  const pending = run("bash", { command: "sleep 5", purpose: "Serve the fixture", yield_ms: 400 });
+  await sleep(150);
+  expect(card.visible()).toBe(false);
+  const { details } = await pending;
+  expect(card.visible()).toBe(true);
+  expect(card.title({ ...plain, bold: (text: string) => text })).toBe(" Jobs ● 1 running · /jobs ");
+  expect(card.renderBody(60, 5, plain)).toEqual(["● Serve the fixture"]);
+  await run("job_wait", { id: (await run("job_stop", { id: details.id })).details.id, wait_ms: 3000 });
+  expect(card.visible()).toBe(false);
+});
+
+test("job IDs accept an unambiguous prefix", async () => {
+  const saved = (id: string) => ({ type: "custom", customType: JOB_HISTORY_ENTRY, data: encodeJob({ id, name: id, command: "true", cwd: "/", status: "completed", startedAt: 1, endedAt: 2, code: 0, outputStart: 0, outputEnd: 2, tail: `${id}\n` }) });
+  const { run } = await session("json", {}, [saved("zz111111"), saved("zz122222")]);
+  await expect(run("job_output", { id: "zz1" })).rejects.toThrow("Job ID prefix zz1 is ambiguous: zz111111, zz122222.");
+  expect(outputOf(await run("job_output", { id: "zz12", cursor: 0 }))).toBe("zz122222\n");
+  const live = (await run("bash", { command: "sleep 5", yield_ms: 0 })).details.id;
+  expect((await run("job_stop", { id: live.slice(0, 6) })).details.id).toBe(live);
+});
+
+test("/jobs stop asks for confirmation when a UI is available", async () => {
+  const answers: boolean[] = [false, true];
+  const prompts: string[] = [];
+  const ui = { notify() {}, confirm: async (title: string, body: string) => { prompts.push(`${title}\n${body}`); return answers.shift()!; } };
+  const { run, commands, ctx } = await session("json", { hasUI: true, ui });
+  const id = (await run("bash", { command: "sleep 5", purpose: "Serve the fixture", yield_ms: 0 })).details.id;
+  await commands.get("jobs").handler(`stop ${id}`, ctx);
+  expect(prompts[0]).toStartWith(`Stop background job?\nServe the fixture · ${id}\n`);
+  expect(["starting", "running"]).toContain((await run("job_output", { id })).details.status);
+  await commands.get("jobs").handler("stop all", ctx);
+  expect(prompts).toHaveLength(2);
+  expect(["stopping", "stopped"]).toContain((await run("job_output", { id })).details.status);
+});
+
+test("bash runs in an optional cwd and shows it when it differs", async () => {
+  const { run, tools } = await session();
+  const ran = await run("bash", { command: "pwd", cwd: "extensions", yield_ms: 5000 });
+  expect(outputOf(ran).trim()).toBe(realpathSync(join(process.cwd(), "extensions")));
+  await expect(run("bash", { command: "pwd", cwd: "missing-directory" })).rejects.toThrow(`Working directory not found: ${join(process.cwd(), "missing-directory")}`);
+  const call = (args: Record<string, unknown>) => tools.get("bash").renderCall(args, plain, { cwd: process.cwd() }).render(80);
+  expect(call({ command: "pwd", cwd: "extensions" }).at(-1)).toBe("in extensions");
+  expect(call({ command: "pwd", cwd: "." })).toEqual(["$ pwd"]);
 });

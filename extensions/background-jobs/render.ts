@@ -1,5 +1,6 @@
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { elapsed } from "../working-status/state.ts";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 type RenderOptions = { expanded: boolean; isPartial: boolean };
@@ -36,19 +37,40 @@ const textOf = (value: any): string => value?.content?.filter((part: any) => par
 /** Status headline plus a short output tail under a gutter; expanded shows the full result. */
 export function renderJobResult(value: any, options: RenderOptions, theme: Palette, context?: Partial<ToolRenderContext>) {
   if (options.isPartial && !value?.content?.length) return lines(gutter([theme.fg("muted", "Waiting for job…")]).join("\n"));
+  return lines(resultRows(value, options, theme, context).join("\n"));
+}
+
+/** A completion notice: a “Finished” headline per job, then its status and unread output. */
+export function renderJobNotice(message: { content: unknown; details?: any }, expanded: boolean, theme: Palette) {
+  const jobs: { name?: unknown; status?: unknown; text?: unknown }[] = Array.isArray(message.details?.jobs) ? message.details.jobs : [];
+  if (!jobs.length) return lines(gutter([theme.fg("muted", typeof message.content === "string" ? message.content : "Background job finished.")]).join("\n"));
+  return lines(jobs.flatMap((job) => [
+    theme.fg(FAILED.has(String(job.status)) ? "error" : "success", "•") + " " + theme.fg("toolTitle", `Finished job · ${String(job.name ?? "")}`),
+    ...resultRows({ content: [{ type: "text", text: String(job.text ?? "") }], details: job }, { expanded, isPartial: false }, theme),
+  ]).join("\n"));
+}
+
+function resultRows(value: any, options: RenderOptions, theme: Palette, context?: Partial<ToolRenderContext>): string[] {
   const text = textOf(value);
   const split = text.indexOf("\n\n");
   const header = (split >= 0 ? text.slice(0, split) : text).split("\n");
   const body = split >= 0 ? text.slice(split + 2).replace(/\n+$/, "").split("\n") : [];
   const failed = context?.isError || FAILED.has(value?.details?.status);
-  const rows = [theme.fg(failed ? "error" : "muted", header[0] || "Job result")];
+  const rows = [theme.fg(failed ? "error" : "muted", header[0] || "Job result") + waitEnd(value?.details?.wait, theme)];
   const extra = options.expanded ? header.slice(1) : header.slice(1).filter((row) => row.startsWith("Still running"));
   rows.push(...extra.map((row) => theme.fg("dim", row)));
   const limit = options.expanded ? EXPANDED_ROWS : COLLAPSED_TAIL_ROWS;
   const hidden = Math.max(0, body.length - limit);
   if (hidden) rows.push(theme.fg("dim", `… ${hidden} earlier lines${options.expanded ? "" : " · expand to view"}`));
   rows.push(...body.slice(hidden).map((row) => theme.fg("toolOutput", row)));
-  return lines(gutter(rows).join("\n"));
+  return gutter(rows);
+}
+
+/** Why a wait ended early, from the result's own timestamps so settled rows never change. */
+function waitEnd(wait: any, theme: Palette): string {
+  if (wait?.end !== "interrupted" && wait?.end !== "message") return "";
+  const waited = elapsed(Number(wait.observedAt) - Number(wait.startedAt));
+  return wait.end === "interrupted" ? theme.fg("warning", ` · interrupted after ${waited}`) : theme.fg("dim", ` · new message after ${waited}`);
 }
 
 /** Job list: one counted headline and one row per job. */

@@ -2,6 +2,8 @@ import { MAX_WAIT_MS } from "./service.ts";
 
 export const DEFAULT_YIELD_MS = 10_000;
 export const START_YIELD_MS = 1000;
+/** job_write waits this long for a reply by default. */
+export const WRITE_WAIT_MS = 5000;
 export const MAX_YIELD_MS = 30_000;
 export const DEFAULT_OUTPUT_CHARS = 24_000;
 export const MIN_OUTPUT_CHARS = 200;
@@ -27,6 +29,8 @@ const ALIASES: readonly (readonly [alias: string, name: string, convert?: (value
   ["job_id", "id"], ["jobId", "id"],
   ["waitMs", "wait_ms"], ["wait_time_ms", "wait_ms"],
   ["yield-time_ms", "yield_ms"], ["yield_time_ms", "yield_ms"], ["yieldMs", "yield_ms"],
+  // Tools that wait after acting (job_write) take the same spelling as wait_ms.
+  ["yield-time_ms", "wait_ms"],
   ["max_output_tokens", "max_chars", tokens], ["maxOutputTokens", "max_chars", tokens], ["maxChars", "max_chars"],
   ["reasoning", "purpose"], ["tty", "pty"], ["chars", "text"], ["close_stdin", "eof"],
   ["timeout", "timeout_seconds"],
