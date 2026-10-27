@@ -191,6 +191,28 @@ test("a rate-limited child pauses, stops its process and resumes the same sessio
   await pi.emit("session_shutdown", { reason: "quit" }, {});
 });
 
+test("reopening delivers an unacknowledged final passively and only once", async () => {
+  const { pi, ctx, call, clients } = await setup();
+  await call({ action: "spawn", name: "Done", task: "Finish" });
+  clients[0]!.finish("Final answer");
+  await Bun.sleep(0);
+  expect(pi.sent.map((sent) => sent.options)).toEqual([{ deliverAs: "steer", triggerTurn: true }]);
+  // The live notification never reached the branch, so the result is still unread.
+  await pi.emit("session_shutdown", { reason: "reload" }, ctx);
+  await pi.emit("session_start", { reason: "reload" }, ctx);
+  await Bun.sleep(0);
+  expect(pi.sent).toHaveLength(2);
+  expect(pi.sent[1]!.options).toEqual({ triggerTurn: false });
+  expect(pi.sent[1]!.message.details).toMatchObject({ name: "Done", status: "completed", output: "Final answer" });
+
+  (pi.entries as any[]).push({ type: "custom_message", customType: pi.sent[1]!.message.customType, details: pi.sent[1]!.message.details });
+  await pi.emit("session_shutdown", { reason: "reload" }, ctx);
+  await pi.emit("session_start", { reason: "reload" }, ctx);
+  await Bun.sleep(0);
+  expect(pi.sent, "branch evidence prevents a repeat").toHaveLength(2);
+  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+});
+
 test("interrupt keeps the child resumable without a completion message", async () => {
   const { pi, call, clients } = await setup();
   await call({ action: "spawn", name: "Long", task: "Work" });

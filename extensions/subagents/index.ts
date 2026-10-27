@@ -174,13 +174,13 @@ export default function registerSubagents(
         const signature = JSON.stringify(agents);
         if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
       },
-      onCompletion: (agent) => {
+      onCompletion: (agent, restored) => {
         pi.sendMessage({
           customType: COMPLETION_MESSAGE_TYPE,
           content: completionContext(agent),
           display: true,
           details: agent,
-        }, { deliverAs: "steer", triggerTurn: true });
+        }, restored ? { triggerTurn: false } : { deliverAs: "steer", triggerTurn: true });
       },
       onUsage: (message, agent) => {
         const record = usageRecord(message, agent);
@@ -456,6 +456,7 @@ export default function registerSubagents(
     coordinator.restore(restoreAgents(ctx.sessionManager.getBranch()));
     lastCheckpoint = JSON.stringify(coordinator.checkpoint());
     restoring = false;
+    coordinator.deliverRestored();
     installNavigation(ctx);
   });
 
@@ -465,6 +466,7 @@ export default function registerSubagents(
     try { await coordinator.suspend(); } finally {
       activeContext = ctx; coordinator.restore(saved);
       lastCheckpoint = JSON.stringify(coordinator.checkpoint()); restoring = false;
+      coordinator.deliverRestored();
     }
   });
 

@@ -121,8 +121,9 @@ has produced events since the last read.
 Closed-child transcripts retain the latest 500 entries in memory until the parent
 runtime ends. Persisted parents keep child conversation files under
 `<parent-session-file>.subagents/`, with state and pinned conversation leaves in
-non-context parent entries. Reload/quit stop child processes. Reopening restores
-stopped children and unread final results; it never starts a model call. `send`
+non-context parent entries. Reload/quit stop child processes. Reopening or tree
+navigation restores stopped children and adds unread reports and final results to
+the parent as passive messages; it never starts a model call. `send`
 explicitly resumes from a copy of the saved conversation. Older branch checkpoints
 do not include later child turns. `/subagents` can inspect saved transcripts.
 
@@ -132,8 +133,8 @@ Queue-only messages survive a normal reload. `interrupt` discards this inbox and
 clears the RPC input queue before and after aborting. Submitted queued messages
 are removed before RPC dispatch, so an ambiguous failure cannot replay them.
 Automatic completions count as delivered after the message actually appears in
-the parent branch; a queued but unpersisted notification remains readable after
-reload. `read`/`wait` retrieve retained results without an automatic wakeup.
+the parent branch; a queued but unpersisted notification is added again, passively,
+after reload. `read`/`wait` retrieve retained results without an automatic wakeup.
 
 Reports follow the same restoration rule: actual parent message or `read`/`wait`
 entries acknowledge delivery, not an optimistic queued flag. The latest eight

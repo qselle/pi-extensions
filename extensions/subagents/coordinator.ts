@@ -81,7 +81,8 @@ export interface CoordinatorHooks {
   onChange?(): void;
   /** Durable state should be saved: lifecycle transitions and throttled progress. */
   onPersist?(): void;
-  onCompletion?(agent: AgentSnapshot): void | Promise<void>;
+  /** `restored` results were saved before a reload or tree navigation and must not start a parent turn. */
+  onCompletion?(agent: AgentSnapshot, restored: boolean): void | Promise<void>;
   onUsage?(message: unknown, agent: AgentSnapshot): void;
   onReport?(report: ParentReport, agent: AgentSnapshot): void | Promise<void>;
 }
@@ -306,6 +307,14 @@ export class SubagentCoordinator {
       this.agents.set(agent.id, agent); this.usedNames.add(agent.name.toLocaleLowerCase());
     }
     this.changed();
+  }
+
+  /** Hands restored unread reports and finals to the parent passively; branch evidence prevents repeats. */
+  deliverRestored(): void {
+    for (const agent of this.ordered()) {
+      for (const record of agent.reportRecords) void this.deliverReport(agent, record);
+      if (agent.settled && FINAL_STATUSES.includes(agent.status)) void this.deliverCompletion(agent, true);
+    }
   }
 
   async suspend(): Promise<SavedAgent[]> {
@@ -746,11 +755,11 @@ export class SubagentCoordinator {
     queueMicrotask(() => void this.deliverCompletion(agent));
   }
 
-  private async deliverCompletion(agent: ManagedAgent): Promise<void> {
+  private async deliverCompletion(agent: ManagedAgent, restored = false): Promise<void> {
     if (!this.active || agent.generation !== this.generation || agent.suppressCompletion || agent.waiters > 0 || agent.delivery !== "none" || agent.status === "closed") return;
     agent.delivery = "automatic";
     try {
-      await this.options.hooks?.onCompletion?.(this.snapshot(agent));
+      await this.options.hooks?.onCompletion?.(this.snapshot(agent), restored);
     } catch {
       agent.delivery = "none";
     } finally { this.changed(); }

@@ -198,6 +198,33 @@ test("report restoration trusts actual branch delivery evidence and keeps bounde
   await coordinator.shutdown();
 });
 
+test("restored unread reports and finals are delivered passively once", async () => {
+  const delivered: string[] = [];
+  const clients = new Map<string, FakeClient>();
+  const coordinator = new SubagentCoordinator({
+    createRuntime: async (request) => { const client = new FakeClient(); clients.set(request.name, client); return { client, cleanup: async () => {} }; },
+    hooks: { onCompletion: (agent, restored) => { delivered.push(`final ${agent.name} restored=${restored}`); }, onReport: (report) => { delivered.push(`report ${report.id}`); } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Done"));
+  await coordinator.spawn(request("Busy"));
+  const waiting = coordinator.wait(["Done", "Busy"], 10_000, "all");
+  clients.get("Done")!.emit(reportEvent("finding"));
+  clients.get("Done")!.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  const saved = (await coordinator.suspend()).map((row) => ({ ...row, delivery: "none" as const, reports: row.reports!.map((record) => ({ ...record, delivery: "none" as const })) }));
+  await waiting;
+  expect(delivered).toEqual([]);
+
+  coordinator.restore(saved);
+  coordinator.deliverRestored();
+  coordinator.deliverRestored();
+  await flushMicrotasks();
+  expect(delivered).toEqual(["report finding", "final Done restored=true"]);
+  expect(coordinator.list().map((agent) => [agent.name, agent.status, agent.unread]).sort()).toEqual([["Busy", "stopped", false], ["Done", "completed", false]]);
+  await coordinator.shutdown();
+});
+
 test("reserves names and capacity before concurrent asynchronous startup", async () => {
   const gates = new Map<string, ReturnType<typeof deferred>>();
   const clients = new Map<string, FakeClient>();
