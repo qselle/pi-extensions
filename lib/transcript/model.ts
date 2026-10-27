@@ -1,3 +1,5 @@
+import { commandPurpose, purposeArgument, withoutPurpose } from "../tool-purpose.ts";
+
 export interface TranscriptBlock {
   id: string;
   label: string;
@@ -16,6 +18,38 @@ export function plainText(value: unknown): string {
   return value.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+}
+
+const MAX_ARGUMENT_CHARS = 600;
+
+function compactValue(value: unknown): string {
+  let text: string;
+  if (typeof value === "string") text = plainText(value);
+  else {
+    try { text = plainText(JSON.stringify(value) ?? ""); }
+    catch { return "[could not be serialized]"; }
+  }
+  return text.length > MAX_ARGUMENT_CHARS ? `${text.slice(0, MAX_ARGUMENT_CHARS)}… (${text.length} chars)` : text;
+}
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/** Purpose first, then one bounded line per argument; edit and write bodies are summarized. */
+function toolArguments(name: string, args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return compactValue(args ?? {});
+  const lines: string[] = [];
+  const purpose = commandPurpose(purposeArgument(args));
+  if (purpose) lines.push(purpose);
+  for (const [key, value] of Object.entries(withoutPurpose(args as RecordValue))) {
+    if (key === "edits" && Array.isArray(value)) lines.push(`${key}  ${plural(value.length, "replacement")}`);
+    else if (name === "write" && key === "content" && typeof value === "string") {
+      lines.push(`${key}  ${plural(value.split("\n").length, "line")} · ${plural(value.length, "char")}`);
+    } else {
+      const formatted = compactValue(value);
+      if (formatted) lines.push(`${key}  ${formatted}`);
+    }
+  }
+  return lines.join("\n") || "(no arguments)";
 }
 
 function contentText(content: unknown): string {
@@ -55,10 +89,8 @@ export function transcriptBlocks(entries: readonly unknown[]): TranscriptBlock[]
         if (part.type === "text") add("assistant", "Assistant", plainText(part.text), { markdown: true });
         else if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking) add("thinking", "Thinking", plainText(part.thinking));
         else if (part.type === "toolCall") {
-          let args: string;
-          try { args = JSON.stringify(part.arguments ?? {}, null, 2); }
-          catch { args = "[Arguments could not be serialized]"; }
-          add("tool", `Tool call · ${plainText(part.name) || "unknown"}`, plainText(args));
+          const name = plainText(part.name) || "unknown";
+          add("tool", `Tool call · ${name}`, toolArguments(name, part.arguments));
         }
       }
       if (message.errorMessage) add("assistant", "Assistant error", plainText(message.errorMessage), { failed: true });

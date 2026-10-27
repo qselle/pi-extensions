@@ -33,3 +33,24 @@ test("removes terminal controls without truncating large transcript content", ()
   const blocks = transcriptBlocks([{ id: "u", type: "message", message: { role: "user", content } }]);
   expect(blocks[0]!.body).toBe("row\n".repeat(100000));
 });
+
+test("tool calls show the purpose and one bounded line per argument", () => {
+  const call = (name: string, args: unknown) => ({ type: "toolCall", name, arguments: args });
+  const blocks = transcriptBlocks([{ id: "a", type: "message", message: { role: "assistant", content: [
+    call("bash", { purpose: "Run the focused tests", command: "bun test", timeout: 30 }),
+    call("read", { reasoning: "check config", path: "a.ts", options: { limit: 5 } }),
+    call("edit", { purpose: "Fix retry", path: "a.ts", edits: [{ oldText: "secret-old", newText: "new" }, { oldText: "x", newText: "y" }] }),
+    call("write", { path: "b.ts", content: "one\ntwo\nthree" }),
+    call("bash", { command: "x".repeat(700) }),
+    call("noop", {}),
+  ] } }]);
+  expect(blocks.map((block) => block.body)).toEqual([
+    "Run the focused tests\ncommand  bun test\ntimeout  30",
+    "check config\npath  a.ts\noptions  {\"limit\":5}",
+    "Fix retry\npath  a.ts\nedits  2 replacements",
+    "path  b.ts\ncontent  3 lines · 13 chars",
+    `command  ${"x".repeat(600)}… (700 chars)`,
+    "(no arguments)",
+  ]);
+  expect(JSON.stringify(blocks)).not.toContain("secret-old");
+});
