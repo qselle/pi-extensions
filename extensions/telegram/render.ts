@@ -1,23 +1,26 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, wrapTextWithAnsi, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { PlainOutput } from "../../lib/output.ts";
-import { expansionHint, fitToolRow } from "../../lib/tool-ui.ts";
+import { fitToolRow } from "../../lib/tool-ui.ts";
 
-export const COLLAPSED_NOTIFICATION_ROWS = 12;
-export const EXPANDED_NOTIFICATION_ROWS = 400;
+/** Safety bound only: the tool schema limits the source to 16k characters. */
+export const MAX_NOTIFICATION_ROWS = 400;
 
 /**
- * The sent Markdown source under the tool headline, with any error below it.
- * Rows are cached per width so a settled result renders identically each frame.
+ * The sent message, rendered as Markdown the way Telegram formats it, under the tool headline,
+ * with any error below it. The whole message shows without expansion: it is short, and the user
+ * wants to read exactly what was sent. Rows are cached per width so a settled result renders
+ * identically each frame.
  */
 export function notificationResult(
   message: string,
   error: string | undefined,
   theme: Pick<Theme, "fg">,
-  expanded: boolean,
+  /** Ignored: the full message shows collapsed and expanded alike. */
+  _expanded = false,
+  markdownTheme?: MarkdownTheme,
 ) {
-  const text = new PlainOutput().push(message).replace(/\t/gu, "  ").trimEnd();
-  const lines = text ? text.split("\n") : [];
+  const text = new PlainOutput().push(message).replace(/\t/gu, "  ").trim();
   let cache: { width: number; rows: string[] } | undefined;
   return {
     invalidate() { cache = undefined; },
@@ -27,15 +30,15 @@ export function notificationResult(
       const indent = width >= 8 ? "  " : "";
       const gutter = width >= 6 ? "│ " : "";
       const inner = Math.max(2, width - indent.length - gutter.length);
-      const limit = expanded ? EXPANDED_NOTIFICATION_ROWS : COLLAPSED_NOTIFICATION_ROWS;
-      // The tool schema bounds the source to 16k characters, so wrapping it all is cheap.
-      const wrapped = lines.flatMap((line) => line ? wrapTextWithAnsi(line, inner) : [""]);
-      const rows = wrapped.slice(0, limit).map((line) =>
-        fitToolRow(`${indent}${gutter ? theme.fg("border", gutter) : ""}${theme.fg("muted", line)}`, width));
-      if (wrapped.length > limit) {
-        const omitted = wrapped.length - limit;
-        const notice = `… ${omitted} more ${omitted === 1 ? "line" : "lines"} · ${expanded ? "preview limit" : expansionHint()}`;
-        rows.push(fitToolRow(`${indent}${theme.fg("muted", notice)}`, width));
+      // Muted body text reads as quoted content, quieter than the assistant's prose.
+      const style = { color: (value: string) => theme.fg("muted", value) };
+      // Markdown pads rows to the full width; drop the padding so short lines leave no trailing blanks.
+      const formatted = text ? new Markdown(text, 0, 0, markdownTheme ?? getMarkdownTheme(), style).render(inner).map((row) => row.replace(/ +$/u, "")) : [];
+      const rows = formatted.slice(0, MAX_NOTIFICATION_ROWS).map((line) =>
+        fitToolRow(`${indent}${gutter ? theme.fg("border", gutter) : ""}${line}`, width));
+      if (formatted.length > MAX_NOTIFICATION_ROWS) {
+        const omitted = formatted.length - MAX_NOTIFICATION_ROWS;
+        rows.push(fitToolRow(`${indent}${theme.fg("muted", `… ${omitted} more ${omitted === 1 ? "line" : "lines"} · preview limit`)}`, width));
       }
       if (error) {
         for (const line of wrapTextWithAnsi(error, Math.max(2, width - indent.length))) {

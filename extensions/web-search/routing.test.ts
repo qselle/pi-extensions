@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import { formatSearch, searchWeb, type SearchInput } from "./client.ts";
 import { searchPreview } from "./render.ts";
 
-const env = { EXA_API_KEY: "exa-fixture", FIRECRAWL_API_KEY: "firecrawl-fixture", MISTRAL_API_KEY: "mistral-fixture" };
+const env = { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "exa-fixture", FIRECRAWL_API_KEY: "firecrawl-fixture", MISTRAL_API_KEY: "mistral-fixture" };
 const results = [{ title: "Docs", url: "https://example.com/docs/current", description: "Reference" }];
 
 test("default failures try only configured compatible providers and retain route provenance", async () => {
   const calls: string[] = [];
   const result = await searchWeb({ query: "documentation", domains: ["example.com/docs"], exclude_domains: ["example.com/docs/old"], date_range: { start: "2025-01-01" } }, undefined, env, async (url, init) => {
     calls.push(url);
-    if (url.includes("exa.ai")) return new Response(null, { status: 429, headers: { "retry-after": "10" } });
+    if (url.includes("exa.ai")) return new Response(null, { status: 429, headers: { "retry-after": "60" } });
     expect(JSON.parse(String(init?.body))).toMatchObject({ includeDomains: ["example.com"], tbs: "cdr:1,cd_min:1/1/2025,cd_max:" });
     return Response.json({ data: { web: [...results, { url: "https://example.com/docs/old/removed" }, { url: "https://outside.example/" }] } });
   });
@@ -18,7 +18,7 @@ test("default failures try only configured compatible providers and retain route
   expect(result.results.map((hit) => hit.url)).toEqual([results[0]!.url]);
   expect(result.attempts).toEqual([{ provider: "exa", outcome: "failed", reason: "HTTP 429" }, { provider: "firecrawl", outcome: "succeeded" }]);
   expect(formatSearch(result)).toContain("exa: failed (HTTP 429) → firecrawl: succeeded");
-  expect(searchPreview(result, { fg: (_: string, text: string) => text } as never).render(100).join("\n")).toContain("2 attempts");
+  expect(searchPreview(result, { fg: (_: string, text: string) => text } as never).render(100).join("\n")).toContain("Firecrawl · API · via Exa → Firecrawl");
 });
 
 test("explicit provider pins, unsupported alternate constraints, bad input and empty results never fan out", async () => {
@@ -64,4 +64,19 @@ test("transport failures remain bounded and do not expose raw errors across fall
   let calls = 0;
   await expect(searchWeb({ query: "q" }, undefined, env, async () => { calls++; return new Response(null, { status: 400 }); })).rejects.toThrow("HTTP 400");
   expect(calls).toBe(1);
+});
+
+test("PI_WEB_SEARCH_PROVIDER goes first in default routes only when configured and compatible", async () => {
+  const hosts = async (input: SearchInput, extra: Record<string, string>) => {
+    const calls: string[] = [];
+    await searchWeb(input, undefined, { ...env, ...extra }, async (url) => { calls.push(new URL(url).host); return new Response(null, { status: 503 }); }).catch(() => {});
+    return calls;
+  };
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "Mistral" })).toEqual(["api.mistral.ai", "api.exa.ai", "api.firecrawl.dev"]);
+  // Exa-only constraints, fast mode, explicit pins and missing keys keep Exa first or the pin alone.
+  expect(await hosts({ query: "q", category: "news" }, { PI_WEB_SEARCH_PROVIDER: "mistral" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q", quality: "fast" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q", provider: "exa" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl", FIRECRAWL_API_KEY: "" })).toEqual(["api.exa.ai", "api.mistral.ai"]);
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "unknown" })).toEqual(["api.exa.ai", "api.firecrawl.dev", "api.mistral.ai"]);
 });

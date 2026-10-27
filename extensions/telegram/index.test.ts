@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -514,6 +516,7 @@ test("doctor command performs only read-only checks and leaves the bot untouched
 });
 
 test("notify_user results show the full sent Markdown instead of a short preview", async () => {
+  initTheme("dark", false);
   const pi = new MockPi();
   telegramExtension(pi as any, { isSubagentChild: false, env: validEnv, configFile: false, fetch: async () => success() });
   const tool = pi.tools.get("notify_user");
@@ -523,14 +526,14 @@ test("notify_user results show the full sent Markdown instead of a short preview
     { content: [{ type: "text", text: "Telegram notification sent." }], details: { sent: true, messageId: 1 } },
     { expanded: false, isPartial: false }, theme, { args: { message }, isError: false },
   );
-  const rows = settled.render(200).map((row: string) => row.trimEnd());
-  expect(rows).toEqual(["  │ # Build complete", "  │", `  │ ${"Details ".repeat(20).trim()}`]);
+  const rows = settled.render(200).map((row: string) => stripVTControlCharacters(row).trimEnd());
+  expect(rows).toEqual(["  │ Build complete", "  │", `  │ ${"Details ".repeat(20).trim()}`]);
   expect(settled.render(200)).toEqual(settled.render(200));
   const headline = tool.renderCall({ message }, theme, { isPartial: false, isError: false }).render(200).join("\n");
   expect(headline).not.toContain("Build complete");
   const failed = tool.renderResult(
     { content: [{ type: "text", text: "Telegram rejected the request (HTTP 403)." }], details: { sent: false }, isError: true },
     { expanded: false, isPartial: false }, theme, { args: { message: "Hello" }, isError: true },
-  ).render(200).map((row: string) => row.trimEnd());
+  ).render(200).map((row: string) => stripVTControlCharacters(row).trimEnd());
   expect(failed).toEqual(["  │ Hello", "  Telegram rejected the request (HTTP 403)."]);
 });

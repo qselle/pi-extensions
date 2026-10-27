@@ -15,7 +15,7 @@ test("source scopes preserve path case and enforce host and segment boundaries a
   const rows = urls.map((url) => ({ url, title: "Documentation" }));
   for (const provider of ["exa", "firecrawl", "mistral"] as const) {
     const raw = provider === "exa" ? { results: rows } : provider === "firecrawl" ? { data: { web: rows } }
-      : { outputs: [{ type: "message.output", role: "assistant", content: rows.map((row) => ({ ...row, type: "tool_reference", tool: "web_search" })) }] };
+      : Object.fromEntries(rows.map((row, rank) => [`id${rank}`, { ...row, rank, snippets: [], source: "brave" }]));
     const result = inspectResults(raw, provider, 10, ["DOCS.EXAMPLE.COM/API"], undefined, ["docs.example.com/API/old"]);
     expect(result.results.map((row) => row.url)).toEqual([urls[0]!, urls[1]!, urls[3]!]);
     expect(result.diagnostics).toMatchObject({ received: 10, outsideDomains: 5, excludedDomains: 2 });
@@ -57,7 +57,7 @@ test("malformed path escapes cannot bypass host or path exclusions", () => {
 
 test("freshness is explicit and distinct from publication dates in requests, results and display", async () => {
   for (const max_age_hours of [-1, 0, 24, 720]) {
-    const result = await searchWeb({ query: "current API", domains: ["docs.example.com/API"], max_age_hours, date_range: { start: "2026-01-01" } }, undefined, { EXA_API_KEY: "key" }, async (_url, init) => {
+    const result = await searchWeb({ query: "current API", domains: ["docs.example.com/API"], max_age_hours, date_range: { start: "2026-01-01" } }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "key" }, async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ contents: { highlights: { query: "current API", maxCharacters: 1200 }, maxAgeHours: max_age_hours }, startPublishedDate: "2026-01-01T00:00:00.000Z", includeDomains: ["docs.example.com/API"] });
       return Response.json({ results: [{ url: "https://docs.example.com/API/v2" }, { url: "https://docs.example.com/api/v1" }] });
     });

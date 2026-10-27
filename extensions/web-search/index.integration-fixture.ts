@@ -18,7 +18,7 @@ extension({
 } as never);
 assert.deepEqual([...tools.keys()], ["web_search", "web_read"]);
 assert(commands.has("web"));
-const keyNames = ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY"];
+const keyNames = ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY", "PI_EXA_ACCESS"];
 const savedKeys = keyNames.map((key) => process.env[key]);
 try {
   for (const key of keyNames) delete process.env[key];
@@ -29,6 +29,9 @@ try {
   assert(!notices.at(-1)!.includes("not configured"));
   process.env.EXA_API_KEY = "fixture-never-send";
   process.env.FIRECRAWL_API_KEY = "fixture-never-send";
+  await commands.get("web").handler("", ctx);
+  assert(notices.at(-1)!.includes("Exa · public access first · API key after rate limits or access errors · automatic"));
+  process.env.PI_EXA_ACCESS = "api-key";
   await commands.get("web").handler("", ctx);
   assert(notices.at(-1)!.includes("Exa · API key · automatic"));
   assert(notices.at(-1)!.includes("Fallbacks: Firecrawl when compatible"));
@@ -59,9 +62,9 @@ assert(search.renderResult(result, { expanded: false, isPartial: false }, theme)
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(120).join("\n").includes("example.com/API"));
 assert(search.renderResult(result, { expanded: false, isPartial: false }, theme).render(80).join("\n").includes("ctrl+e to expand"));
 assert.equal(search.renderShell, "self");
-const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search citations" } };
-const citationView = search.renderResult(citations, { expanded: false, isPartial: false }, theme);
-assert(citationView.render(80).join("\n").includes("model-selected citations"));
+const citations = { ...result, details: { ...result.details, provider: "mistral", quality: "balanced", searchType: "web_search", results: [...result.details.results, { title: "Wire story", articleId: "AFP-123", snippet: "News" }] } };
+const citationView = search.renderResult(citations, { expanded: true, isPartial: false }, theme);
+assert(citationView.render(80).join("\n").includes("Wire story · article AFP-123"));
 for (const width of [1, 12, 40, 80]) assert(citationView.render(width).every((line: string) => visibleWidth(line) <= width));
 const expanded = search.renderResult(result, { expanded: true, isPartial: false }, theme).render(80).join("\n");
 assert(expanded.includes("snippet"));
@@ -77,7 +80,7 @@ for (const tool of [search, reader]) {
   assert(!component.render(80).join("\n").includes("hidden"));
   for (let width = 0; width <= 80; width++) assert(component.render(width).every((line: string) => visibleWidth(line) <= width));
 }
-for (const [provider, received, expected] of [["exa", 0, "No matches returned"], ["exa", 2, "No usable sources remain"], ["mistral", 0, "No web citations returned"]] as const) {
+for (const [provider, received, expected] of [["exa", 0, "No matches returned"], ["exa", 2, "No usable sources remain"], ["mistral", 0, "No matches returned"]] as const) {
   const empty = { ...result, details: { ...result.details, provider, results: [], diagnostics: { received, invalid: received, duplicate: 0, outsideDomains: 0, omitted: 0 } } };
   assert(search.renderResult(empty, { expanded: false, isPartial: false }, theme).render(40).join("\n").includes(expected));
 }
@@ -118,7 +121,10 @@ for (const pagination of [undefined, { state: "more", nextOffset: 42 }, { state:
   if (pagination?.state === "more") assert(component.render(24).join("\n").includes("next offset 42"));
 }
 const fallbackView = reader.renderResult({ content: [], details: { url: "https://example.com", reader: "exa", access: "keyless", truncated: true, fallback: { from: "ax", reason: "ax returned no readable content." } } }, { expanded: false, isPartial: false }, theme);
-assert(fallbackView.render(120).join("\n").includes("ax fallback"));
+// Results saved before routes existed still show the ax fallback.
+assert(fallbackView.render(120).join("\n").includes("via ax → Exa"));
+const routeView = reader.renderResult({ content: [], details: { url: "https://example.com", reader: "firecrawl", truncated: false, route: [{ reader: "ax", outcome: "failed" }, { reader: "exa", outcome: "failed" }, { reader: "firecrawl", outcome: "succeeded" }] } }, { expanded: false, isPartial: false }, theme);
+assert(routeView.render(120).join("\n").includes("Firecrawl · via ax → Exa → Firecrawl"));
 for (const width of [1, 12, 40, 80]) assert(fallbackView.render(width).every((line: string) => visibleWidth(line) <= width));
 
 // Inspect actual host cards too: their padding reduces the renderer's available width.
@@ -143,7 +149,7 @@ try {
     const plain = lines.map(stripTerminalSequences).join("\n");
     assert(plain.includes("public"), plain);
     assert(plain.includes("Searched"), plain);
-    for (const hit of sources.results) assert(plain.includes(new URL(hit.url).host));
+    for (const hit of sources.results) assert(plain.includes(new URL(hit.url!).host));
     frames.push({ name: "search", width, lines });
     card.setExpanded(true);
     const expandedLines = card.render(width);

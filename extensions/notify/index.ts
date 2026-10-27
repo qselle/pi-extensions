@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { decodeGoalEntry } from "../goal/goal.ts";
 import { GOAL_ATTENTION_EVENT, GOAL_CHANGED_EVENT, isGoalAttentionEvent } from "../goal/events.ts";
 import {
+	bannerMethod,
 	bellSequence,
 	isDuplicate,
 	notificationEscape,
@@ -87,6 +88,9 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 	let sessionId: string | undefined;
 	const eventUnsubscribers: Array<() => void> = [];
 	let notifiedThisRun = false;
+	let focusReports = 0;
+	let pendingTest: ReturnType<typeof setTimeout> | undefined;
+	const cancelTest = () => { clearTimeout(pendingTest); pendingTest = undefined; };
 
 	const deliver = (title: string, body: string): void => {
 		if (options.deliver) { options.deliver(title, body); return; }
@@ -128,13 +132,42 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 		deliver(title, body);
 	};
 
+	const diagnostics = (): string => {
+		const focus = !focusAware ? "not tracked" : focused === undefined ? "unknown" : focused ? "focused" : "unfocused";
+		return [
+			`now=${cfg.enabled && shouldEmit(focusAware, focused) ? "would notify" : "suppressed"}`,
+			`focus=${focus}`, `focusReports=${focusReports}`,
+			`banner=${cfg.banner ? bannerMethod(process.env, process.platform) : "off"}`, `bell=${cfg.bell ? "on" : "off"}`,
+			`tmux=${process.env.TMUX ? "yes" : "no"}`, `goal=${goalActive ? "active (turn pings quiet)" : "none"}`,
+		].join(" · ");
+	};
+
 	pi.registerCommand("notify", {
-		description: "Toggle native desktop notifications for agent activity",
+		description: "Toggle, inspect, or test desktop notifications: /notify [on|off|test [seconds|force]]",
 		handler: async (args, ctx) => {
-			const a = String(args ?? "").trim().toLowerCase();
+			const [a = "", value] = String(args ?? "").trim().toLowerCase().split(/\s+/);
 			if (a === "test") {
-				deliver(`${project}: test`, "Notification test — click to focus this window.");
-				ctx.ui.notify("Sent a test notification (bypasses the focus check).", "info");
+				cancelTest();
+				if (value === "force" || value === "now") {
+					deliver(`${project}: test`, "Notification test — click to focus this window.");
+					ctx.ui.notify(`Sent a test notification, bypassing the on/off and focus checks.\n${diagnostics()}`, "info");
+					return;
+				}
+				const seconds = value === undefined ? 3 : Number(value);
+				if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60) {
+					ctx.ui.notify("Usage: /notify test [0-60|force]", "warning");
+					return;
+				}
+				ctx.ui.notify(`Notification test in ${seconds}s; switch away from this terminal to see it.\n${diagnostics()}`, "info");
+				// The test follows the same gates as real notifications, so it shows what a turn would do.
+				pendingTest = setTimeout(() => {
+					pendingTest = undefined;
+					if (!cfg.enabled) return ctx.ui.notify("Notification test suppressed: notifications are off.", "warning");
+					if (!shouldEmit(focusAware, focused)) return ctx.ui.notify("Notification test suppressed: this terminal is focused.", "warning");
+					deliver(`${project}: test`, `Notification test after ${seconds}s — click to focus this window.`);
+					ctx.ui.notify("Notification test sent.", "info");
+				}, Math.round(seconds * 1000));
+				pendingTest.unref?.();
 				return;
 			}
 			if (a === "on" || a === "off") {
@@ -147,7 +180,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 						: `focus-aware — tab is currently ${focused ? "focused, so it will stay quiet" : "unfocused, so it will notify"}`
 					: "this terminal doesn't report focus, so it always notifies";
 				ctx.ui.notify(
-					`Desktop notifications are ${cfg.enabled ? "on" : "off"} (${focusInfo}). Use \`/notify on|off|test\`.`,
+					`Desktop notifications are ${cfg.enabled ? "on" : "off"} (${focusInfo}). Use \`/notify on|off|test [seconds|force]\`.\n${diagnostics()}`,
 					"info",
 				);
 			}
@@ -171,6 +204,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 		failures.clear();
 		notifiedThisRun = false;
 		focused = undefined;
+		focusReports = 0;
 		focusAware = ctx.mode === "tui" && supportsFocusReporting(process.env, !!process.stdout.isTTY);
 		unsubscribe?.();
 		unsubscribe = undefined;
@@ -178,6 +212,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 			unsubscribe = ctx.ui.onTerminalInput((data: string) => {
 				const p = parseFocusReports(data, focused ?? true);
 				if (!p.changed) return undefined;
+				focusReports++;
 				focused = p.focused;
 				return p.data ? { data: p.data } : { consume: true };
 			});
@@ -191,6 +226,7 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 	});
 
 	pi.on("session_shutdown", () => {
+		cancelTest();
 		for (const stop of eventUnsubscribers.splice(0)) stop();
 		sessionId = undefined;
 		unsubscribe?.();

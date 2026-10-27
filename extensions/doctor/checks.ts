@@ -1,4 +1,4 @@
-import { exaAccess } from "../web-search/access.ts";
+import { exaAccessSummary } from "../web-search/access.ts";
 import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
@@ -7,6 +7,7 @@ import { parseAccent } from "../codex-prompt/config.ts";
 import { supportsFastMode } from "../fast-mode/index.ts";
 import { notificationEscape } from "../notify/deliver.ts";
 import { readConfig, resourceFindings, type ConfigRead } from "./configuration.ts";
+import { age, CACHE_FILE, CACHE_TTL_MS, parseCache, type ConnectorCache } from "../mistral-connectors/cache.ts";
 
 export interface Finding { id: string; label: string; status: "ok" | "warn" | "off"; detail: string; fix?: string }
 export interface DoctorInput {
@@ -15,12 +16,37 @@ export interface DoctorInput {
   tools: readonly string[]; activeTools: readonly string[]; commands: readonly string[];
   telegram: "enabled" | "disabled" | "invalid"; shell?: string;
   model?: { provider: string; api: string; id: string; baseUrl: string };
+  now?: number;
+  /** Resolves an exact enabledModels entry against Pi's model registry. */
+  modelStatus?: (provider: string, id: string) => "ok" | "missing" | "unauthenticated";
+  session?: { fileBytes?: number; entries: number };
 }
 export interface Probe {
   executable(name: string): Promise<boolean>;
   config(name: string): Promise<"absent" | "valid" | "invalid">;
   pty(): Promise<boolean>;
   resources?(): Promise<Finding[]>;
+  connectorCache?(): Promise<ConnectorCache | "absent" | "invalid">;
+  settings?(): Promise<Record<string, unknown> | undefined>;
+}
+
+const SESSION_WARN_BYTES = 25 * 1024 * 1024;
+const SESSION_WARN_ENTRIES = 5_000;
+/** `provider/model[:thinking]` without glob characters; patterns are left to Pi. */
+const EXACT_MODEL = /^([\w.-]+)\/([^*?[\]{}\s]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$/;
+
+function formatBytes(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Pi numbers extension commands registered under the same name: `name:1`, `name:2`. */
+export function duplicateCommands(commands: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const name of commands) {
+    const base = /^(.+):\d+$/.exec(name)?.[1];
+    if (base && !name.startsWith("skill:")) counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  return new Map([...counts].filter(([, count]) => count > 1));
 }
 
 /** Metadata checks only: no executable is launched and no network is contacted. */
@@ -55,6 +81,15 @@ export function localProbe(input: DoctorInput): Probe {
       const result = await read("settings.json");
       return result.status === "valid" ? resourceFindings(result.data, input.agentDir) : [];
     },
+    async settings() {
+      const result = await read("settings.json");
+      return result.status === "valid" ? result.data : undefined;
+    },
+    async connectorCache() {
+      // The connector list can exceed the 64 KiB settings cap.
+      const result = await readConfig(input.agentDir, CACHE_FILE, 4 * 1024 * 1024);
+      return result.status === "valid" ? parseCache(result.data) ?? "invalid" : result.status;
+    },
     async pty() {
       try {
         const require = createRequire(import.meta.url);
@@ -84,6 +119,25 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   const hostSettings = await probe.config("settings.json");
   add("host-settings", "Host settings", hostSettings === "invalid" ? "warn" : "ok", hostSettings === "invalid" ? "Global settings JSON is unreadable, oversized or malformed." : hostSettings === "absent" ? "No global settings file; defaults apply." : "Global settings JSON is readable; values and project overrides are not exhaustively validated.", hostSettings === "invalid" ? "Repair settings.json in the Pi agent directory." : undefined);
   if (probe.resources) result.push(...await probe.resources());
+  const duplicates = duplicateCommands(input.commands);
+  add("duplicate-commands", "Extension commands", duplicates.size ? "warn" : "ok", duplicates.size ? `Registered more than once: ${[...duplicates].map(([name, count]) => `/${name} (${count})`).join(", ")}. Pi numbers them, for example /${duplicates.keys().next().value}:1.` : "No extension command name is registered twice. Shortcut conflicts are reported by Pi at startup.", duplicates.size ? "Disable one of the packages or extensions that register the command, then /reload." : undefined);
+  const enabled = input.modelStatus && probe.settings ? (await probe.settings())?.enabledModels : undefined;
+  if (input.modelStatus && Array.isArray(enabled)) {
+    const exact = enabled.filter((spec): spec is string => typeof spec === "string").map((spec) => [spec, EXACT_MODEL.exec(spec.trim())] as const).filter(([, match]) => match);
+    const problems = exact.map(([spec, match]) => [spec, input.modelStatus!(match![1]!, match![2]!)] as const).filter(([, status]) => status !== "ok");
+    const missing = problems.filter(([, status]) => status === "missing").map(([spec]) => spec);
+    const unauthenticated = problems.filter(([, status]) => status === "unauthenticated").map(([spec]) => spec);
+    const list = (specs: string[]) => `${specs.slice(0, 5).join(", ")}${specs.length > 5 ? ` and ${specs.length - 5} more` : ""}`;
+    add("enabled-models", "Enabled models", problems.length ? "warn" : "ok", problems.length
+      ? [missing.length ? `Not found: ${list(missing)}.` : "", unauthenticated.length ? `No configured authentication: ${list(unauthenticated)}.` : ""].filter(Boolean).join(" ")
+      : `${exact.length} exact enabledModels entr${exact.length === 1 ? "y resolves" : "ies resolve"} to authenticated models; patterns are left to Pi.`,
+    problems.length ? "Correct stale enabledModels entries in settings.json, or /login the provider." : undefined);
+  }
+  if (input.session) {
+    const { fileBytes, entries } = input.session;
+    const large = (fileBytes ?? 0) > SESSION_WARN_BYTES || entries > SESSION_WARN_ENTRIES;
+    add("session-size", "Current session", large ? "warn" : "ok", `${fileBytes === undefined ? "Not saved to a file" : `Session file ${formatBytes(fileBytes)}`}, ${entries.toLocaleString("en-US")} entries.${large ? " Large sessions load, branch and search more slowly." : ""}`, large ? "Continue in a fresh session (for example with /new) and keep this one for reference." : undefined);
+  }
   const shellFound = !!input.shell && await probe.executable(input.shell);
   add("shell", "Shell", shellFound ? "ok" : "warn", shellFound ? "Pi resolved an available shell executable." : "Pi could not resolve an available shell executable.", shellFound ? undefined : "Install bash and make it available to Pi, then restart.");
   for (const [name, label] of [["web_search", "Web search"], ["web_read", "Page reader"], ["job_start", "Managed jobs"]]) {
@@ -92,8 +146,7 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   }
   const providers = [input.env.EXA_API_KEY?.trim() ? "Exa" : "", input.env.FIRECRAWL_API_KEY?.trim() ? "Firecrawl (explicit provider selection)" : "", input.env.MISTRAL_API_KEY?.trim() ? "Mistral (explicit provider selection)" : ""].filter(Boolean);
   if (loaded("web_search")) {
-    const access = exaAccess(input.env);
-    add("search-keys", "Search access", "ok", `${access === "api-key" ? "Default: Exa API key." : "Default: Exa keyless; no API key required."} Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
+    add("search-keys", "Search access", "ok", `Default: Exa ${exaAccessSummary(input.env)}${input.env.EXA_API_KEY?.trim() ? "" : "; no API key required"}. Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
   }
   if (loaded("web_read")) {
     const found = await probe.executable("ax");
@@ -103,6 +156,18 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
     const pty = !input.bun && await probe.pty();
     add("pty", "Interactive terminals", pty ? "ok" : "warn", input.bun ? "PTY jobs are unavailable under Bun; pipe jobs work." : pty ? "PTY package/helper found; native loading and terminal launch not tested." : "PTY package or executable helper is missing.", pty ? undefined : input.bun ? "Launch Pi with Node.js for pty=true jobs." : "Reinstall package dependencies with install scripts enabled; on macOS run node scripts/prepare-pty.mjs from the package root.");
     add("cleanup", "Process cleanup", input.platform === "win32" ? "warn" : "ok", input.platform === "win32" ? "Windows cleanup is best effort and has not been verified on a Windows host." : "POSIX process-group cleanup is available; detached/escaped processes are outside that guarantee.");
+  }
+  if (input.commands.includes("mistral-connectors") && probe.connectorCache) {
+    const cache = await probe.connectorCache();
+    if (cache === "absent" || cache === "invalid") add("mistral-connectors", "Mistral connectors", "warn", cache === "absent" ? "No connector list is cached, so no connector servers are registered." : "The connector cache is unreadable or has an unknown format.", "Run /mistral-connectors refresh with a Mistral API key configured.");
+    else {
+      const fetched = age(Math.max(0, (input.now ?? Date.now()) - cache.fetchedAt));
+      const ready = cache.connectors.filter((connector) => connector.ready).length;
+      // Only the status or a known cause is shown; remote error bodies stay out of the report.
+      const cause = cache.lastError ? cache.lastError.match(/HTTP \d{3}/)?.[0] ?? (/No API key/.test(cache.lastError) ? "no Mistral API key" : "request failed") : undefined;
+      const stale = (input.now ?? Date.now()) - cache.fetchedAt > 24 * 60 * 60 * 1000;
+      add("mistral-connectors", "Mistral connectors", cause || stale ? "warn" : "ok", `${ready} ready connector${ready === 1 ? "" : "s"}; list fetched ${fetched}${cause ? `; last refresh failed (${cause})` : ""}. Refreshes run at session start when older than ${CACHE_TTL_MS / 60_000} minutes.`, cause || stale ? "Run /mistral-connectors status for details, then /mistral-connectors refresh." : undefined);
+    }
   }
   if (input.commands.includes("telegram")) add("telegram", "Telegram configuration", input.telegram === "invalid" ? "warn" : input.telegram === "disabled" ? "off" : "ok", input.telegram === "enabled" ? "Local configuration validated; credentials and delivery not tested." : input.telegram === "disabled" ? "Optional Telegram service is disabled." : "Configuration is invalid or its file cannot be read securely.", input.telegram === "invalid" ? "Use /telegram setup; check owner-only file permissions and environment overrides." : undefined);
   for (const name of ["notify", "tool-render", "codex-prompt", "hyperlinks"]) if (input.commands.includes(name)) {

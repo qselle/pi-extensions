@@ -1,13 +1,17 @@
-import { mistralReferenceRows, mistralSearchRequest } from "./mistral.ts";
+import { mistralEndpoint, mistralRows, searchMistral } from "./mistral.ts";
 import { searchExaKeyless } from "./exa-mcp.ts";
-import { exaAccess } from "./access.ts";
+import { exaAccessPlan, exaKeyAvailable, PAID_FALLBACK_STATUSES, type ExaAccess } from "./access.ts";
 import { requestWithRetry } from "./retry.ts";
+import { McpError } from "./mcp.ts";
 import { publicationInWindow } from "./dates.ts";
 import { domainMatcher, freshnessLabel, freshnessOptions, normalizeDomains, SEARCH_CATEGORIES, sourceIdentity, type SearchCategory } from "./filters.ts";
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type Provider = "exa" | "firecrawl" | "mistral";
+/** Default route order; unconfigured providers are skipped. */
+const PROVIDERS: Provider[] = ["exa", "firecrawl", "mistral"];
 export type SearchQuality = "fast" | "balanced" | "deep";
-export const DEFAULT_SEARCH_LIMIT = 8;
+export const DEFAULT_SEARCH_LIMIT = 10;
+export const MAX_SEARCH_LIMIT = 20;
 export interface SearchInput {
   query: string;
   provider?: Provider;
@@ -20,10 +24,11 @@ export interface SearchInput {
   max_age_hours?: number;
   date_range?: { start?: string; end?: string };
 }
-export interface SearchHit { title: string; url: string; snippet: string; published?: string; dateUncertain?: boolean }
+/** A web source, or a news article that has no URL and opens by `articleId` through Mistral. */
+export interface SearchHit { title: string; url?: string; articleId?: string; snippet: string; published?: string; dateUncertain?: boolean }
 export interface SearchDiagnostics { received: number; invalid: number; duplicate: number; outsideDomains: number; omitted: number; excludedDomains?: number; outsideDates?: number; uncertainDates?: number }
 export interface SearchAttempt { provider: Provider; outcome: "failed" | "succeeded"; reason?: string }
-export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: "keyless" | "api-key"; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number; elapsedMs?: number; attempts?: SearchAttempt[] }
+export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: ExaAccess; accessFallback?: string; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number; elapsedMs?: number; attempts?: SearchAttempt[] }
 
 /** Strip terminal controls from remote text before it reaches any renderer. */
 export function cleanText(value: unknown, limit = 1200): string {
@@ -55,13 +60,13 @@ export function selectProvider(requested: Provider | undefined, env: Record<stri
 
 export function dateRangeFilter(range: SearchInput["date_range"], provider: Provider): Record<string, string> {
   if (range === undefined) return {};
-  if (provider === "mistral") throw new Error("Mistral search does not support a strict date_range filter. Choose Exa or Firecrawl. No request was sent.");
   const valid = (value: unknown): value is string => typeof value === "string" && /^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)
     && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`)) && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
   if (!range || (range.start === undefined && range.end === undefined) || (range.start !== undefined && !valid(range.start)) || (range.end !== undefined && !valid(range.end)) || (range.start !== undefined && range.end !== undefined && range.start > range.end)) {
     throw new Error("date_range requires at least one valid YYYY-MM-DD start/end date in chronological order. No request was sent.");
   }
   const calendar = (value: string) => { const [year, month, day] = value.split("-"); return `${Number(month)}/${Number(day)}/${year}`; };
+  if (provider === "mistral") return { ...(range.start ? { start_date: range.start } : {}), ...(range.end ? { end_date: range.end } : {}) };
   return provider === "exa" ? { ...(range.start ? { startPublishedDate: `${range.start}T00:00:00.000Z` } : {}), ...(range.end ? { endPublishedDate: `${range.end}T23:59:59.999Z` } : {}) }
     : { tbs: `cdr:1,cd_min:${range.start ? calendar(range.start) : ""},cd_max:${range.end ? calendar(range.end) : ""}` };
 }
@@ -77,7 +82,7 @@ export function searchRequest(input: SearchInput, provider: Provider) {
   const query = input.query.trim();
   if (!query || query.length > 500) throw new Error("Search query must contain 1–500 characters.");
   const limit = input.limit ?? DEFAULT_SEARCH_LIMIT;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("Search limit must be between 1 and 10.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SEARCH_LIMIT) throw new Error(`Search limit must be between 1 and ${MAX_SEARCH_LIMIT}.`);
   const domains = normalizeDomains(input.domains);
   const excluded = normalizeDomains(input.exclude_domains);
   if (input.category && (provider !== "exa" || !SEARCH_CATEGORIES.includes(input.category))) throw new Error("category requires Exa and a supported source category. No request was sent.");
@@ -88,7 +93,8 @@ export function searchRequest(input: SearchInput, provider: Provider) {
   const dates = dateRangeFilter(input.date_range, provider);
   // Non-Exa providers receive host hints; precise path constraints stay local.
   const filter = domains.length ? { includeDomains: provider === "exa" ? domains : [...new Set(domains.map((domain) => domain.split("/")[0]!))] } : {};
-  if (provider === "mistral") return mistralSearchRequest(query, limit, domains);
+  // Mistral has no domain parameter; domain constraints are applied locally.
+  if (provider === "mistral") return { url: mistralEndpoint(), body: { query, limit, ...dates } };
   return provider === "exa"
     ? { url: "https://api.exa.ai/search", body: { query, numResults: limit, type: quality === "balanced" ? "auto" : quality, contents: { highlights: { query, maxCharacters: 1200 }, ...freshness }, ...(additionalQueries ? { additionalQueries } : {}), ...filter, ...(excluded.length ? { excludeDomains: excluded } : {}), ...(input.category ? { category: input.category } : {}), ...dates } }
     : { url: "https://api.firecrawl.dev/v2/search", body: { query, limit, sources: ["web"], timeout: 25_000, ...filter, ...dates } };
@@ -101,7 +107,7 @@ export function normalizeResults(raw: unknown, provider: Provider, limit: number
 /** Domain and path constraints are checked locally, including citation-only providers. */
 export function inspectResults(raw: unknown, provider: Provider, limit: number, domains: readonly string[] = [], dateRange?: SearchInput["date_range"], excludedDomains: readonly string[] = []): { results: SearchHit[]; diagnostics: SearchDiagnostics; warning?: string } {
   const value = raw as { results?: unknown; success?: boolean; warning?: unknown; data?: { web?: unknown } } | null;
-  const rows = provider === "exa" ? value?.results : provider === "mistral" ? mistralReferenceRows(raw) : value?.data?.web;
+  const rows = provider === "exa" ? value?.results : provider === "mistral" ? mistralRows(raw) : value?.data?.web;
   if (value?.success === false || !Array.isArray(rows)) throw new Error(`${provider} returned an unexpected response.`);
   const results: SearchHit[] = [];
   const diagnostics: SearchDiagnostics = { received: rows.length, invalid: 0, duplicate: 0, outsideDomains: 0, omitted: 0 };
@@ -111,15 +117,17 @@ export function inspectResults(raw: unknown, provider: Provider, limit: number, 
   if (excludedDomains.length) diagnostics.excludedDomains = 0;
   const seen = new Set<string>();
   for (const row of rows) {
-    if (!row || typeof row !== "object" || typeof row.url !== "string" || row.url.length > 4096) { diagnostics.invalid++; continue; }
-    let url: string;
-    try { url = webUrl(row.url); } catch { diagnostics.invalid++; continue; }
-    const canonical = new URL(url);
-    if (domains.length && !allowed(canonical)) { diagnostics.outsideDomains++; continue; }
-    if (denied(canonical)) { diagnostics.excludedDomains!++; continue; }
+    const articleId = typeof row?.articleId === "string" && row.url == null ? row.articleId : undefined;
+    if (!row || typeof row !== "object" || !articleId && (typeof row.url !== "string" || row.url.length > 4096)) { diagnostics.invalid++; continue; }
+    let url: string | undefined;
+    if (!articleId) try { url = webUrl(row.url); } catch { diagnostics.invalid++; continue; }
+    const canonical = url ? new URL(url) : undefined;
+    // Articles without a URL cannot be checked against domain restrictions.
+    if (domains.length && !(canonical && allowed(canonical))) { diagnostics.outsideDomains++; continue; }
+    if (canonical && denied(canonical)) { diagnostics.excludedDomains!++; continue; }
     const dateMatch = dateRange ? publicationInWindow(row.publishedDate, dateRange) : undefined;
     if (dateMatch === "outside") { diagnostics.outsideDates!++; continue; }
-    const identity = sourceIdentity(canonical);
+    const identity = canonical ? sourceIdentity(canonical) : `article:${articleId}`;
     if (seen.has(identity)) { diagnostics.duplicate++; continue; }
     seen.add(identity);
     if (results.length >= limit) { diagnostics.omitted++; continue; }
@@ -127,8 +135,8 @@ export function inspectResults(raw: unknown, provider: Provider, limit: number, 
     // Empty or repeated highlights should not hide a useful description.
     const highlights = Array.isArray(row.highlights) ? [...new Set<string>(row.highlights.map((h: unknown) => cleanText(h)).filter(Boolean))].join(" ") : "";
     results.push({
-      url,
-      title: cleanText(row.title, 240) || new URL(url).hostname,
+      ...(url ? { url } : { articleId }),
+      title: cleanText(row.title, 240) || (url ? new URL(url).hostname : `Article ${articleId}`),
       snippet: cleanText(highlights) || cleanText(row.description) || cleanText(row.text),
       ...(typeof row.publishedDate === "string" ? { published: cleanText(row.publishedDate, 40) } : {}),
       ...(dateMatch === "uncertain" ? { dateUncertain: true } : {}),
@@ -159,31 +167,39 @@ export async function boundedJson(response: Response): Promise<unknown> {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
+export interface SearchOptions {
+  timeoutMs?: number;
+  /** API root of Pi's mistral provider, for the web_search connector. */
+  mistralBaseUrl?: string;
+}
+
 export async function searchWeb(
   input: SearchInput,
   signal?: AbortSignal,
   env: Record<string, string | undefined> = process.env,
   request: Fetch = fetch,
-  options: { timeoutMs?: number } = {},
+  options: SearchOptions = {},
 ): Promise<SearchResult> {
   const started = performance.now();
   signal?.throwIfAborted();
-  const provider = selectProvider(input.provider ?? (input.quality === "fast" || input.quality === "deep" ? "exa" : undefined), env);
-  // Validate the full original contract before sending anything. Alternate
-  // providers are eligible only if they accept all the same constraints.
+  // Providers are eligible only if they are configured and accept all the same
+  // constraints; unsupported constraints are never silently weakened.
+  const eligible = (candidate: Provider) => {
+    if (candidate !== "exa" && !env[providerKey(candidate)]?.trim()) return false;
+    try { searchRequest(input, candidate); return true; } catch { return false; }
+  };
+  // PI_WEB_SEARCH_PROVIDER picks the first provider of a default route; fast and deep need Exa.
+  const preferred = PROVIDERS.find((candidate) => candidate === env.PI_WEB_SEARCH_PROVIDER?.trim().toLowerCase());
+  const first = input.quality === "fast" || input.quality === "deep" ? "exa" : preferred && eligible(preferred) ? preferred : "exa";
+  const provider = selectProvider(input.provider ?? first, env);
+  // Validate the full original contract before sending anything.
   searchRequest(input, provider);
-  if (provider === "exa" && exaAccess(env) === "keyless" && input.quality === "deep") {
-    throw new Error("Deep Exa search requires EXA_API_KEY. Public access supports balanced and fast modes. No request was sent.");
+  if (provider === "exa" && input.quality === "deep" && !exaKeyAvailable(env)) {
+    throw new Error("Deep Exa search requires EXA_API_KEY (and PI_EXA_ACCESS other than keyless). Public access supports balanced and fast modes. No request was sent.");
   }
   const candidates: Provider[] = [provider];
-  if (input.provider === undefined) {
-    for (const alternate of ["firecrawl", "mistral"] as const) {
-      if (!env[providerKey(alternate)]?.trim()) continue;
-      try { searchRequest(input, alternate); candidates.push(alternate); }
-      catch { /* Unsupported constraints never get silently weakened. */ }
-    }
-  }
-  const duration = options.timeoutMs ?? (input.quality === "deep" || provider === "mistral" ? 60_000 : 30_000);
+  if (input.provider === undefined) candidates.push(...PROVIDERS.filter((candidate) => candidate !== provider && eligible(candidate)));
+  const duration = options.timeoutMs ?? (input.quality === "deep" ? 60_000 : 30_000);
   const deadline = AbortSignal.timeout(duration);
   const routeSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   const attempts: SearchAttempt[] = [];
@@ -192,10 +208,11 @@ export async function searchWeb(
     if (deadline.aborted) break;
     // Reserve time for configured fallbacks instead of allowing the first
     // provider to consume the entire route deadline.
-    const attemptSignal = candidates.length === 1 ? routeSignal
-      : AbortSignal.any([routeSignal, AbortSignal.timeout(Math.max(1, Math.floor(duration / candidates.length)))]);
+    const share = candidates.length === 1 ? duration : Math.max(1, Math.floor(duration / candidates.length));
+    const attemptSignal = candidates.length === 1 ? routeSignal : AbortSignal.any([routeSignal, AbortSignal.timeout(share)]);
+    const attemptDeadline = Math.min(started + duration, performance.now() + share);
     try {
-      const result = await searchProvider(input, candidate, attemptSignal, env, request);
+      const result = await searchProvider(input, candidate, attemptSignal, attemptDeadline, env, request, options);
       routeSignal.throwIfAborted();
       attempts.push({ provider: candidate, outcome: "succeeded" });
       return { ...result, elapsedMs: Math.round(performance.now() - started), ...(attempts.length > 1 ? { attempts } : {}) };
@@ -223,8 +240,10 @@ async function searchProvider(
   input: SearchInput,
   provider: Provider,
   requestSignal: AbortSignal,
+  deadline: number,
   env: Record<string, string | undefined>,
   request: Fetch,
+  options: SearchOptions,
 ): Promise<SearchResult> {
   const { url, body } = searchRequest(input, provider);
   const domains = normalizeDomains(input.domains);
@@ -233,17 +252,34 @@ async function searchProvider(
     ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours),
     ...(input.date_range ? { dateRange: { ...input.date_range } } : {}) };
   const key = env[providerKey(provider)]?.trim();
-  if (provider === "exa" && exaAccess(env) === "keyless") {
-    const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? DEFAULT_SEARCH_LIMIT, type: input.quality === "fast" ? "fast" : "auto",
-      ...(domains.length ? { includeDomains: domains } : {}), ...(excludedDomains.length ? { excludeDomains: excludedDomains } : {}), ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours), ...dateRangeFilter(input.date_range, "exa") }, requestSignal, request);
+  if (provider === "mistral") {
+    const raw = await searchMistral(body as never, { apiKey: key!, baseUrl: options.mistralBaseUrl, deadline }, requestSignal, request);
     requestSignal.throwIfAborted();
-    return { provider, access: "keyless", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: input.quality === "fast" ? "fast" : "auto",
-      ...provenance, ...inspectResults(raw, "exa", input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+    return { provider, query: input.query.trim(), quality: "balanced", searchType: "web_search", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+  }
+  let accessFallback: string | undefined;
+  if (provider === "exa") {
+    const plan = exaAccessPlan(env, input.quality === "deep");
+    if (plan.first === "keyless") {
+      try {
+        const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? DEFAULT_SEARCH_LIMIT, type: input.quality === "fast" ? "fast" : "auto",
+          ...(domains.length ? { includeDomains: domains } : {}), ...(excludedDomains.length ? { excludeDomains: excludedDomains } : {}), ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours), ...dateRangeFilter(input.date_range, "exa") },
+          requestSignal, request, { deadline, paidFallback: plan.paidFallback });
+        requestSignal.throwIfAborted();
+        return { provider, access: "keyless", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: input.quality === "fast" ? "fast" : "auto",
+          ...provenance, ...inspectResults(raw, "exa", input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+      } catch (error) {
+        requestSignal.throwIfAborted();
+        // Only free-tier quota or access rejections justify spending the configured key.
+        if (!plan.paidFallback || !(error instanceof McpError) || !PAID_FALLBACK_STATUSES.includes(error.status ?? 0)) throw error;
+        accessFallback = `HTTP ${error.status}`;
+      }
+    }
   }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (provider === "exa") headers["x-api-key"] = key!;
   else headers.Authorization = `Bearer ${key}`;
-  const send: Fetch = provider === "exa" ? (url, init) => requestWithRetry(request, url, init!, false) : request;
+  const send: Fetch = provider === "exa" ? (url, init) => requestWithRetry(request, url, init!, { deadline, rateLimit: true }) : request;
   const response = await send(url, {
     method: "POST", headers, body: JSON.stringify(body), redirect: "error",
     signal: requestSignal,
@@ -256,7 +292,7 @@ async function searchProvider(
   }
   const raw = await boundedJson(response);
   requestSignal.throwIfAborted();
-  return { provider, access: "api-key", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : provider === "mistral" ? "web_search citations" : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+  return { provider, access: "api-key", ...(accessFallback ? { accessFallback } : {}), query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
 }
 
 export function searchConstraints(result: SearchResult): string[] {
@@ -270,9 +306,8 @@ export function searchConstraints(result: SearchResult): string[] {
 
 export function formatSearch(result: SearchResult): string {
   const header = `Search via ${result.provider}: ${cleanText(result.query, 500)}\nUntrusted web snippets; open sources to verify claims.`
-    + (result.access ? `\nAccess: ${result.access === "keyless" ? "keyless hosted search; provider rate limits apply" : "API key"}.` : "")
+    + (result.access ? `\nAccess: ${result.access === "keyless" ? "keyless hosted search; provider rate limits apply" : result.accessFallback ? `API key after keyless access failed (${result.accessFallback})` : "API key"}.` : "")
     + (result.attempts?.length ? `\nSearch route: ${result.attempts.map((attempt) => `${attempt.provider}: ${attempt.outcome}${attempt.reason ? ` (${attempt.reason})` : ""}`).join(" → ")}.` : "")
-    + (result.provider === "mistral" ? "\nSources are model-selected web_search citations, not a raw search listing. Descriptions are provider metadata; generated answer text is omitted. No citations does not prove the web has no matches." : "")
     + (result.quality ? `\nRequested search mode: ${result.quality} (${result.searchType}). This is not a verified quality rating.` : "")
     + (result.dateRange ? `\nRequested date range: ${result.dateRange.start ?? "any start"} through ${result.dateRange.end ?? "any end"}. Known out-of-range dates are excluded locally; verify publication dates on sources.` : "")
     + searchConstraints(result).map((line) => `\n${line}`).join("");
@@ -281,8 +316,8 @@ export function formatSearch(result: SearchResult): string {
   const report = (exclusions.length ? `\nProvider returned ${stats!.received} rows; excluded ${exclusions.join(", ")}.` : "")
     + (stats?.uncertainDates ? `\n${stats.uncertainDates} retained source(s) have unknown or imprecise publication dates; their date-range match is unverified.` : "")
     + (result.warning ? `\nProvider warning (untrusted): ${cleanText(result.warning, 500)}` : "");
-  if (!result.results.length) return `${header}${report}\n${stats?.received ? "No usable results remain. Refine the query or domain filters." : result.warning ? "No sources returned. The provider reported a warning; this does not establish that no matches exist." : result.provider === "mistral" ? "No web citations returned. Search execution is not established by answer text alone." : "No results found."}`;
+  if (!result.results.length) return `${header}${report}\n${stats?.received ? "No usable results remain. Refine the query or domain filters." : result.warning ? "No sources returned. The provider reported a warning; this does not establish that no matches exist." : "No results found."}`;
   return `${header}${report}\n\n${result.results.map((hit, i) =>
-    `[${i + 1}] ${hit.title}\n${hit.url}${hit.published ? `\nPublished: ${hit.published}${hit.dateUncertain ? " (range match unverified)" : ""}` : hit.dateUncertain ? "\nPublished: unknown (range match unverified)" : ""}\n${hit.snippet}`
+    `[${i + 1}] ${hit.title}\n${hit.url ?? `Article ID: ${hit.articleId} (open with web_read)`}${hit.published ? `\nPublished: ${hit.published}${hit.dateUncertain ? " (range match unverified)" : ""}` : hit.dateUncertain ? "\nPublished: unknown (range match unverified)" : ""}\n${hit.snippet}`
   ).join("\n\n")}`;
 }

@@ -70,7 +70,7 @@ test("headless Linux diagnostics do not prescribe desktop notification packages"
 test("keyless search is configured while invalid settings and Windows limitations remain visible", async () => {
   const report = await diagnose({ ...input, platform: "win32", shell: undefined }, { ...good, config: async () => "invalid" });
   expect(report.find((row) => row.id === "search-keys")?.status).toBe("ok");
-  expect(report.find((row) => row.id === "search-keys")?.detail).toContain("Exa keyless; no API key required");
+  expect(report.find((row) => row.id === "search-keys")?.detail).toContain("Exa public access; no API key required");
   expect(report.find((row) => row.id === "search-keys")?.fix).toBeUndefined();
   expect(report.find((row) => row.id === "config-notify")?.status).toBe("warn");
   expect(report.find((row) => row.id === "cleanup")?.status).toBe("warn");
@@ -149,8 +149,51 @@ test("host and access diagnostics use metadata without printing raw config or re
   expect(valid.find((row) => row.id === "host-version")?.status).toBe("ok");
   for (const hostVersion of ["1.4.2", "1.10.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("ok");
   for (const hostVersion of ["0.87.0", "2.0.0", "1.0.0-beta.1"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("warn");
-  expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("Exa API key");
+  expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("API key after rate limits or access errors");
   expect(JSON.stringify(valid)).not.toContain("configured-key");
   const publicAccess = await diagnose({ ...input, env: {} }, good);
-  expect(publicAccess.find((row) => row.id === "search-keys")?.detail).toContain("keyless");
+  expect(publicAccess.find((row) => row.id === "search-keys")?.detail).toContain("public access");
+});
+
+test("Mistral connector cache reports age and refresh failures without remote error text", async () => {
+  const now = Date.parse("2026-01-02T00:00:00Z");
+  const cache = { version: 1 as const, fetchedAt: now - 5 * 60_000, account: "a", connectors: [{ id: "1", alias: "notes", displayName: "Notes", ready: true, authAction: "none" as const, tools: [] }] };
+  const run = async (state: Awaited<ReturnType<NonNullable<Probe["connectorCache"]>>>) =>
+    (await diagnose({ ...input, now, commands: ["mistral-connectors"] }, { ...good, connectorCache: async () => state })).find((row) => row.id === "mistral-connectors");
+  expect(await run(cache)).toMatchObject({ status: "ok", detail: expect.stringContaining("1 ready connector; list fetched 5 min ago") });
+  const failed = await run({ ...cache, lastError: "HTTP 503 from /v1/connectors/bootstrap: private body" });
+  expect(failed).toMatchObject({ status: "warn", detail: expect.stringContaining("last refresh failed (HTTP 503)") });
+  expect(JSON.stringify(failed)).not.toContain("private body");
+  expect((await run({ ...cache, fetchedAt: now - 3 * 86_400_000 }))?.status).toBe("warn");
+  expect((await run("absent"))?.fix).toContain("/mistral-connectors refresh");
+  expect((await diagnose({ ...input, commands: [] }, { ...good, connectorCache: async () => { throw new Error("unexpected"); } })).some((row) => row.id === "mistral-connectors")).toBe(false);
+});
+
+test("connector cache probe reads caches beyond the settings size cap", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-doctor-connectors-"));
+  try {
+    const probe = localProbe({ ...input, agentDir: dir });
+    expect(await probe.connectorCache!()).toBe("absent");
+    const connectors = Array.from({ length: 400 }, (_, i) => ({ id: String(i), alias: `c${i}`, displayName: "x".repeat(200), ready: false, authAction: "none", tools: [] }));
+    await writeFile(join(dir, "mistral-connectors-cache.json"), JSON.stringify({ version: 1, fetchedAt: 1, account: "a", connectors }));
+    expect(await probe.connectorCache!()).toMatchObject({ version: 1, connectors: { length: 400 } });
+    await writeFile(join(dir, "mistral-connectors-cache.json"), JSON.stringify({ version: 2 }));
+    expect(await probe.connectorCache!()).toBe("invalid");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("duplicate extension commands, stale enabled models and large sessions are reported", async () => {
+  const settings: Probe = { ...good, settings: async () => ({ enabledModels: ["anthropic/claude:high", "gone/model", "openai/gpt", "anthropic/*", "sonnet", 42] }) };
+  const status = (provider: string, id: string) => provider === "gone" ? "missing" as const : provider === "openai" ? "unauthenticated" as const : (expect(id).toBe("claude"), "ok" as const);
+  const report = await diagnose({ ...input, commands: ["plan:1", "plan:2", "skill:review", "review", "notify"], modelStatus: status, session: { fileBytes: 30 * 1024 * 1024, entries: 12 } }, settings);
+  expect(report.find((row) => row.id === "duplicate-commands")).toMatchObject({ status: "warn", detail: expect.stringContaining("/plan (2)") });
+  expect(report.find((row) => row.id === "enabled-models")).toMatchObject({ status: "warn", detail: "Not found: gone/model. No configured authentication: openai/gpt." });
+  expect(report.find((row) => row.id === "session-size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Session file 30.0 MB, 12 entries") });
+
+  const healthy = await diagnose({ ...input, commands: ["plan"], modelStatus: () => "ok", session: { entries: 3 } }, { ...good, settings: async () => ({ enabledModels: ["anthropic/claude"] }) });
+  expect(healthy.find((row) => row.id === "duplicate-commands")?.status).toBe("ok");
+  expect(healthy.find((row) => row.id === "enabled-models")).toMatchObject({ status: "ok", detail: expect.stringContaining("1 exact enabledModels entry resolves") });
+  expect(healthy.find((row) => row.id === "session-size")).toMatchObject({ status: "ok", detail: "Not saved to a file, 3 entries." });
+  // Without enabledModels or registry access, no model finding is invented.
+  expect((await diagnose({ ...input, modelStatus: () => "ok" }, { ...good, settings: async () => ({}) })).some((row) => row.id === "enabled-models")).toBe(false);
 });

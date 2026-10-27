@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readPage } from "./reader.ts";
+import { readPage, type ReadOptions } from "./reader.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "pi-web-reader-"));
 const previousPath = process.env.PATH;
@@ -33,6 +33,9 @@ else {
     remoteCalls++;
     return { url: input.url, reader: "exa" as const, access: "keyless" as const, text: "Remote page", notes: "remote notes", truncated: false };
   };
+  const unreachable = async (): Promise<never> => { throw new Error("only Exa is configured"); };
+  // An empty environment configures Exa only, so the remote chain is exactly one reader.
+  const remote = (exa: (input: { url: string }) => Promise<any>): ReadOptions => ({ env: {}, readers: { exa, firecrawl: unreachable, mistral: unreachable } });
   const result = await readPage({ url: "https://example.com/", mode: "extract", selector: "a[href='$(echo bad)']" });
   assert(result.text.startsWith("Page\n"));
   assert(result.text.includes("a[href='$(echo bad)']"));
@@ -44,47 +47,47 @@ else {
   assert(large.truncated);
   await assert.rejects(readPage({ url: "https://example.com/fail" }), (error: Error) => error.message.includes("ax exited with status 22") && !error.message.includes("private remote error"));
   await assert.rejects(readPage({ url: "https://example.com/fail-http" }), (error: Error) => error.message.includes("remote server returned HTTP 401") && !error.message.includes("token=secret"));
-  const fallback = await readPage({ url: "https://example.com/fail-http", reader: "auto" }, undefined, remoteReader);
+  const fallback = await readPage({ url: "https://example.com/fail-http", reader: "auto" }, undefined, remote(remoteReader));
   assert.equal(fallback.text, "Remote page");
-  assert.equal(fallback.fallback?.from, "ax");
-  assert.match(fallback.fallback?.reason ?? "", /HTTP 401/);
+  assert.deepEqual(fallback.route?.map((attempt) => attempt.reader), ["ax", "exa"]);
+  assert.match(fallback.route?.[0]?.reason ?? "", /HTTP 401/);
   assert(!fallback.notes.includes("token=secret"));
   assert.equal(remoteCalls, 1);
-  await assert.rejects(readPage({ url: "https://example.com/fail-http", reader: "auto", mode: "outline" }, undefined, remoteReader), /HTTP 401/);
+  await assert.rejects(readPage({ url: "https://example.com/fail-http", reader: "auto", mode: "outline" }, undefined, remote(remoteReader)), /HTTP 401/);
   assert.equal(remoteCalls, 1, "structured reads must not fall back remotely");
   for (const path of ["empty", "challenge"]) {
     await assert.rejects(readPage({ url: `https://example.com/${path}` }), /no readable content|access challenge/);
-    const recovered = await readPage({ url: `https://example.com/${path}`, reader: "auto" }, undefined, remoteReader);
+    const recovered = await readPage({ url: `https://example.com/${path}`, reader: "auto" }, undefined, remote(remoteReader));
     assert.equal(recovered.text, "Remote page");
-    assert.match(recovered.fallback?.reason ?? "", /no readable content|access challenge/);
+    assert.match(recovered.route?.[0]?.reason ?? "", /no readable content|access challenge/);
   }
   assert.equal(remoteCalls, 3);
-  const article = await readPage({ url: "https://example.com/article", reader: "auto" }, undefined, remoteReader);
+  const article = await readPage({ url: "https://example.com/article", reader: "auto" }, undefined, remote(remoteReader));
   assert.match(article.text, /This article/);
-  const empty = await readPage({ url: "https://example.com/selection-empty", reader: "auto", mode: "extract", selector: ".missing" }, undefined, remoteReader);
+  const empty = await readPage({ url: "https://example.com/selection-empty", reader: "auto", mode: "extract", selector: ".missing" }, undefined, remote(remoteReader));
   assert.equal(empty.pagination?.state, "complete");
   assert.equal(empty.text, "");
   const capped = await readPage({ url: "https://example.com/selection-large", mode: "extract", selector: "main" });
   assert(capped.truncated);
   assert.equal(capped.pagination, undefined, "never skip an incompletely delivered selection");
   assert(!capped.notes.includes("--offset 1"));
-  await assert.rejects(readPage({ url: "https://example.com/malformed", reader: "auto", mode: "extract", selector: "p" }, undefined, remoteReader));
-  await assert.rejects(readPage({ url: "https://example.com/fail", reader: "auto", selector: "p" }, undefined, remoteReader), /mode=extract/);
+  await assert.rejects(readPage({ url: "https://example.com/malformed", reader: "auto", mode: "extract", selector: "p" }, undefined, remote(remoteReader)));
+  await assert.rejects(readPage({ url: "https://example.com/fail", reader: "auto", selector: "p" }, undefined, remote(remoteReader)), /mode=extract/);
   assert.equal(remoteCalls, 3, "successful articles, selections, and invalid input do not use a remote fallback");
-  await assert.rejects(readPage({ url: "https://example.com/fail-http", reader: "auto" }, undefined, async () => { throw new Error("HTTP 503 private token=secret"); }), (error: Error) => error.message.includes("HTTP 401") && error.message.includes("HTTP 503") && !error.message.includes("secret"));
+  await assert.rejects(readPage({ url: "https://example.com/fail-http", reader: "auto" }, undefined, remote(async () => { throw new Error("HTTP 503 private token=secret"); })), (error: Error) => error.message.includes("HTTP 401") && error.message.includes("HTTP 503") && !error.message.includes("secret"));
   const lateAbort = new AbortController();
-  await assert.rejects(readPage({ url: "https://example.com/fail", reader: "auto" }, lateAbort.signal, async () => { lateAbort.abort(); return remoteReader({ url: "https://example.com" }); }));
+  await assert.rejects(readPage({ url: "https://example.com/fail", reader: "auto" }, lateAbort.signal, remote(async () => { lateAbort.abort(); return remoteReader({ url: "https://example.com" }); })));
   assert.equal(remoteCalls, 4);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 100);
-  try { await assert.rejects(readPage({ url: "https://example.com/wait", reader: "auto" }, controller.signal, remoteReader), /cancelled/); }
+  try { await assert.rejects(readPage({ url: "https://example.com/wait", reader: "auto" }, controller.signal, remote(remoteReader)), /cancelled/); }
   finally { clearTimeout(timer); }
   assert.equal(remoteCalls, 4, "cancelled reads must not fall back remotely");
   await rm(join(directory, "ax"));
   await assert.rejects(readPage({ url: "https://example.com/" }), /not installed/);
-  const missingFallback = await readPage({ url: "https://example.com/", reader: "auto" }, undefined, remoteReader);
+  const missingFallback = await readPage({ url: "https://example.com/", reader: "auto" }, undefined, remote(remoteReader));
   assert.equal(missingFallback.reader, "exa");
-  assert.match(missingFallback.fallback?.reason ?? "", /not installed/);
+  assert.match(missingFallback.route?.[0]?.reason ?? "", /not installed/);
   assert.equal(remoteCalls, 5);
   console.log("reader process lifecycle verified");
 } finally {

@@ -10,17 +10,20 @@ const details: SearchResult = {
   results: Array.from({ length: 8 }, (_, i) => ({ title: `Source ${i + 1} 界`, url: `https://docs.example.com/guide/${i + 1}`, snippet: `Evidence ${i + 1} explains the relevant behavior.`, published: "2026-09-21" })),
 };
 
-test("collapsed search is one summary and three sources; expansion reveals all evidence", () => {
-  const preview = searchPreview(details, theme).render(100);
+test("collapsed search is one summary and five sources; expansion reveals all evidence", () => {
+  const component = searchPreview(details, theme);
+  const preview = component.render(100);
   expect(preview[0]).toContain("8 sources · Exa · API · 1.2s");
-  expect(preview).toHaveLength(5);
+  expect(preview).toHaveLength(7);
   expect(stripTerminalSequences(preview[1]!)).toBe("    1. Source 1 界 · docs.example.com");
-  expect(preview.join("\n")).toContain("+5 more");
+  expect(preview.join("\n")).toContain("+3 more");
+  // Settled rows are cached per width and repaint identically.
+  expect(component.render(100)).toEqual(preview);
   expect(preview.join("\n")).not.toContain("Evidence");
   const expanded = searchPreview(details, theme, true).render(100).join("\n");
   for (let i = 1; i <= 8; i++) expect(expanded).toContain(`Evidence ${i}`);
   expect(expanded).toContain("Published 2026-09-21");
-  expect(expanded).not.toContain("+5 more");
+  expect(expanded).not.toContain("+3 more");
 });
 
 test("URL-only titles render once, and expansion preserves long URL text", () => {
