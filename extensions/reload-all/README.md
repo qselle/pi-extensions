@@ -46,7 +46,9 @@ reported missing from the original snapshot, rather than left waiting forever.
 
 Suspended terminals remain in the snapshot and can reload when they resume.
 After 20 seconds without a heartbeat they appear `unresponsive`; this is not a
-claim that their process died. Registrations untouched for seven days are pruned
+claim that their process died. A registration whose PID no longer exists, after
+a crash or kill, is dropped when inspecting or broadcasting and counts as
+`missing` unless it already applied or failed. Registrations untouched for seven days are pruned
 when inspecting or broadcasting. Broadcasts also expire after seven days. A normal
 quit removes that runtime's registration. A PID reused by another process cannot
 inherit a request because its process nonce differs.
@@ -59,7 +61,8 @@ identity/runtime tokens, timestamps and reload states; no conversation content,
 paths, titles or credentials.
 
 Set `PI_RELOAD_ALL_DIR` to an absolute directory to create an isolated coordination
-group. Every participating terminal in that group must use the same directory.
+group. Every participating terminal in that group must use the same directory,
+on one machine and PID namespace, because liveness is checked by local PID.
 Tests and synthetic previews should use a fresh temporary directory. Coordination
 directories must be owned by the current user and are restricted to mode `0700`;
 records use `0600`. Symbolic links, foreign-owner or nonprivate records, malformed

@@ -3,11 +3,11 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Registry, MAX_AGE, MAX_TARGETS, describeStatus, identityFor, validGeneration, validTarget, type Target } from "./store.ts";
+import { Registry, MAX_AGE, MAX_TARGETS, describeStatus, identityFor, processAlive, validGeneration, validTarget, type Target } from "./store.ts";
 const roots: string[] = [];
 const now = 1_800_000_000_000;
 const target = (pid = 100): Target => ({ ...identityFor(pid, randomUUID()), runtimeNonce: randomUUID(), version: 1, updatedAt: now, state: "ready", attempts: 0 });
-async function registry() { const root = await mkdtemp(join(tmpdir(), "pi-reload-store-")); roots.push(root); const store = new Registry(root, () => now); await store.initialize(); return store; }
+async function registry(alive = (_pid: number) => true) { const root = await mkdtemp(join(tmpdir(), "pi-reload-store-")); roots.push(root); const store = new Registry(root, () => now, alive); await store.initialize(); return store; }
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 test("registry creates private atomic records and validates exact process identity", async () => {
   const store = await registry(); const record = target();
@@ -68,4 +68,22 @@ test("capacity overflow rejects the broadcast instead of taking a partial snapsh
   for (let index = 0; index <= MAX_TARGETS; index++) await store.saveTarget(target(1000 + index));
   await expect(store.targets()).rejects.toThrow("at most 256");
   expect(await store.generation()).toBeUndefined();
+});
+test("records of exited processes are dropped and reported missing unless already settled", async () => {
+  const dead = new Set<number>();
+  const store = await registry((pid) => !dead.has(pid));
+  const live = target(100); const crashed = target(101); const applied = target(102); const id = randomUUID();
+  for (const record of [live, crashed, applied]) await store.saveTarget(record);
+  await store.publish({ version: 1, id, createdAt: now, issuer: live.key, targets: [live, crashed, applied] });
+  await store.saveTarget({ ...applied, generation: id, state: "applied", runtimeNonce: randomUUID(), attempts: 1 });
+  dead.add(101); dead.add(102);
+  expect(await describeStatus(store, now)).toBe("3 sessions · 1 applied · 1 waiting · 1 missing");
+  expect((await store.targets()).map((record) => record.key)).toEqual([live.key]);
+  expect(await store.target(crashed.key)).toBeUndefined();
+});
+test("liveness treats EPERM as alive and missing processes as dead", () => {
+  expect(processAlive(process.pid)).toBe(true);
+  expect(processAlive(2 ** 22 + 12_345)).toBe(false);
+  // PID 1 belongs to another user on POSIX systems: EPERM, but alive.
+  expect(processAlive(1)).toBe(true);
 });

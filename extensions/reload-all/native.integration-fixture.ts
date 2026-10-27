@@ -15,7 +15,7 @@ let network = 0;
 globalThis.fetch = (() => { network++; throw new Error("Native reload fixture must not use network"); }) as unknown as typeof fetch;
 const sessions: Array<Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"]> = [];
 const errors: string[] = [];
-const store = new Registry(process.env.PI_RELOAD_ALL_DIR);
+const store = new Registry(process.env.PI_RELOAD_ALL_DIR, Date.now, () => true);
 let nextId = 4000;
 
 async function create(collision = false, mode: "tui" | "rpc" = "tui") {
@@ -24,7 +24,7 @@ async function create(collision = false, mode: "tui" | "rpc" = "tui") {
   let controller!: ReloadRuntime; let reloads = 0; let modelTurns = 0; let releaseDialog: (() => void) | undefined;
   const notices: string[] = [];
   const install = (pi: ExtensionAPI) => {
-    createReloadAllExtension({ identity, intervalMs: 1_000_000, onRuntime: value => { controller = value; } })(pi);
+    createReloadAllExtension({ identity, intervalMs: 1_000_000, alive: () => true, onRuntime: value => { controller = value; } })(pi);
     pi.registerCommand("fixture-dialog", { description: "Isolated fixture", handler: async (_args, ctx) => { await ctx.ui.confirm("Fixture", "Hold reload"); } });
     pi.on("before_agent_start", () => { modelTurns++; throw new Error("Coordination input reached a model turn"); });
   };
