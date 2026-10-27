@@ -18,7 +18,10 @@ const context = { messageType: "assistant", availableWidth: 80, isStreaming: fal
 const transformed = transform(source, context);
 assert(transformed.includes('` typescript · src/app.ts `\n\n```\n'));
 assert.equal(transform(source, { ...context, messageType: "user" }), source);
-assert.equal(transform(source, { ...context, messageType: "assistant-thinking" }), transformed);
+const thinking = transform(source, { ...context, messageType: "assistant-thinking" });
+assert.notEqual(thinking, transformed, "thinking code is styled like thinking text");
+assert.equal(plain(thinking), plain(transformed));
+assert(thinking.includes("\x1b[3m"));
 const component = new Markdown(source, 0, 0, { ...getMarkdownTheme(), codeBlockIndent: "│ " }, undefined, { transform: (text, width) => transform(text, { ...context, availableWidth: width }) });
 for (const width of [1, 20, 80]) {
   const rendered = component.render(width);

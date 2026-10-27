@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Lexer } from "marked";
 import { stripVTControlCharacters as plain } from "node:util";
-import { formatCodeBlocks, createCodeBlockFormatter, MAX_MARKDOWN_LENGTH } from "./format.ts";
+import { formatCodeBlocks, createCodeBlockFormatter, MAX_MARKDOWN_LENGTH, thinkingLine } from "./format.ts";
 const infer = (path: string) => path.endsWith(".ts") ? "typescript" : undefined;
 const code = (text: string) => new Lexer().lex(text).filter((token) => token.type === "code").map((token) => "text" in token ? token.text : "");
 
@@ -84,4 +84,13 @@ test("unsupported and indentation-sensitive blocks retain the native path", () =
     expect(formatCodeBlocks(source, infer, highlight)).toBe(formatCodeBlocks(source, infer));
   }
   expect(formatCodeBlocks('```ts\nx\n```', infer, () => undefined)).toBe('```typescript\nx\n```');
+});
+
+test("thinking code is darker and italic after every reset, with the same text", () => {
+  const reset = "\x1b[22;23;24;29;39m";
+  const line = `\x1b[1;38;2;250;100;50mconst${reset} \x1b[38;2;10;20;30mx${reset}`;
+  const styled = thinkingLine(line);
+  expect(plain(styled)).toBe("const x");
+  expect(styled).toBe(`\x1b[3m\x1b[1;38;2;150;60;30mconst${reset}\x1b[3m \x1b[38;2;6;12;18mx${reset}\x1b[3m\x1b[23m`);
+  expect(thinkingLine("plain")).toBe("\x1b[3mplain\x1b[23m");
 });

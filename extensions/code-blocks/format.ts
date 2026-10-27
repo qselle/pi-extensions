@@ -69,6 +69,21 @@ export function formatCodeBlocks(markdown: string, languageFromPath: (path: stri
   } catch { return markdown; }
 }
 
+const TRUECOLOR = /38;2;(\d+);(\d+);(\d+)/g;
+
+/**
+ * Thinking text is dimmed and italic; highlighted code inside it follows, with
+ * darker truecolor tokens and italics restored after each attribute reset.
+ */
+export function thinkingLine(line: string, brightness = 0.6): string {
+  const styled = line.replace(/\x1b\[([\d;]*)m/g, (_sgr, params: string) => {
+    const dimmed = params.replace(TRUECOLOR, (_match, ...rgb: string[]) => `38;2;${rgb.slice(0, 3).map((value) => Math.round(Number(value) * brightness)).join(";")}`);
+    const resetsItalic = params === "" || params.replace(TRUECOLOR, "").split(";").some((param) => param === "0" || param === "23");
+    return `\x1b[${dimmed}m${resetsItalic ? "\x1b[3m" : ""}`;
+  });
+  return `\x1b[3m${styled}\x1b[23m`;
+}
+
 /** Small LRU keyed by source, not session identity; no transcript copies grow without bound. */
 export function createCodeBlockFormatter(languageFromPath: (path: string) => string | undefined, highlight?: CodeHighlighter) {
   const cache = new Map<string, { rendered: string; size: number }>();
