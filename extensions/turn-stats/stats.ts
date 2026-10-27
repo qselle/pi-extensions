@@ -13,7 +13,11 @@ export interface Summary {
   timing?: ResponseTiming;
   /** Usage records from tool results and compactions; they add usage but are not model responses. */
   extraUsage?: number;
+  /** Responses whose zero recorded cost was replaced by the model's configured pricing. */
+  estimated?: number;
 }
+/** Prices a response's usage from model rates; undefined keeps the recorded value. */
+export type CostEstimate = (usage: any) => number | undefined;
 
 /** Records that contributed usage fields; a field is unknown when it is missing from all of them. */
 export function usageRecords(summary: Summary): number {
@@ -23,18 +27,22 @@ export function emptySummary(): Summary {
   return { version: 1, durationMs: 0, responses: 0, tools: 0, failedTools: 0, outcome: "settled", timing: emptyTiming(),
     usage: Object.fromEntries(FIELDS.map((key) => [key, { known: 0, missing: 0 }])) as Summary["usage"] };
 }
-function addUsage(summary: Summary, usage: any): void {
+function addUsage(summary: Summary, usage: any, estimate?: CostEstimate): void {
   for (const field of FIELDS) {
-    const value = field === "cost" ? usage?.cost?.total : usage?.[field];
+    let value = field === "cost" ? usage?.cost?.total : usage?.[field];
+    if (field === "cost" && value === 0 && estimate) {
+      const price = estimate(usage);
+      if (price !== undefined) { value = price; summary.estimated = (summary.estimated ?? 0) + 1; }
+    }
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) summary.usage[field].known += value;
     else summary.usage[field].missing++;
   }
 }
-export function recordResponse(summary: Summary, message: { usage?: any; stopReason?: string }): void {
+export function recordResponse(summary: Summary, message: { usage?: any; stopReason?: string }, estimate?: CostEstimate): void {
   summary.responses++;
   if (message.stopReason === "error") summary.outcome = "error";
   else if (message.stopReason === "aborted" && summary.outcome !== "error") summary.outcome = "interrupted";
-  addUsage(summary, message.usage);
+  addUsage(summary, message.usage, estimate);
 }
 /** Tool-reported usage (nested model calls) and compaction summaries, matching the footer's totals. */
 export function recordExtraUsage(summary: Summary, usage: unknown): void {
@@ -51,6 +59,7 @@ export function decodeSummary(value: unknown): Summary | undefined {
   if (row.endedAt !== undefined && (!Number.isFinite(row.endedAt) || row.endedAt < 0 || row.endedAt > 8.64e15)) return;
   if (row.timing !== undefined && !validTiming(row.timing, row.responses)) return;
   if (row.extraUsage !== undefined && !(Number.isSafeInteger(row.extraUsage) && row.extraUsage >= 0)) return;
+  if (row.estimated !== undefined && !(Number.isSafeInteger(row.estimated) && row.estimated >= 0 && row.estimated <= row.responses)) return;
   const records = usageRecords(row);
   if (!FIELDS.every((key) => {
     const total = row.usage?.[key];
@@ -109,7 +118,8 @@ export function summaryText(summary: Summary, expanded = false, inProgress = fal
     const amount = total.missing === records && records > 0 ? "unknown" : key === "cost" ? formatCost(total.known) : formatTokens(total.known);
     const label = { input: "in", output: "out", cacheRead: "cache read", cacheWrite: "cache write", cost: "Recorded cost" }[key];
     const unit = summary.extraUsage ? "usage record" : "response";
-    return `${label}: ${amount}${total.missing ? ` · missing for ${total.missing} ${unit}${total.missing === 1 ? "" : "s"}` : ""}`;
+    const estimated = key === "cost" && summary.estimated ? ` · ${summary.estimated} response${summary.estimated === 1 ? "" : "s"} priced from model rates` : "";
+    return `${label}: ${amount}${total.missing ? ` · missing for ${total.missing} ${unit}${total.missing === 1 ? "" : "s"}` : ""}${estimated}`;
   });
   return expanded ? `${headline}\n${rows.join("\n")}\n${timingText(summary.timing, summary.responses).join("\n")}\nElapsed time includes tool work and provider waits; streaming rate excludes tool work. Recorded cost is an estimate.` : headline;
 }

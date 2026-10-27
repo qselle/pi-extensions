@@ -5,18 +5,22 @@ Adds the current phase and elapsed run time to Pi's native working indicator.
 ```text
 Thinking · 8s · esc to interrupt
 Running bash: bun, read src/index.ts ×2 · 1m 12s · esc to interrupt
+Preparing edit · 1m 15s · esc to interrupt
 Writing · 1m 18s · esc to interrupt
 ```
 
 ## Usage
 
 Enable the extension through `pi config`, then reload. Waiting, thinking, writing, compaction, and tool execution update from
-host events. Concurrent tools remain visible until each completes; up to two
+host events. `Waiting for model` lasts until the response starts; it then shows
+`Thinking` until text or a tool call streams. While the model streams a tool call,
+`Preparing <tool>` names the tool before it runs. Concurrent tools remain visible until each completes; up to two
 distinct activity labels appear with an overflow count. Repeated activities show
 their active call count (`×2`), and the overflow counts remaining calls. Time measures the whole run
 using a monotonic clock, not the current model request: it starts at the first
 `agent_start` and keeps counting through automatic retries, compaction recovery,
-and continuations until `agent_settled`.
+and continuations until `agent_settled`. Minutes and seconds are zero-padded after
+the first minute (`2m 07s`, `1h 02m 03s`), so the label keeps a steady width.
 
 `Retrying` appears when the provider answers with HTTP 429 or 5xx, or when
 overflow compaction finishes and Pi retries the turn. It lasts until the next

@@ -11,9 +11,9 @@ export function completionClock(summary: Summary, entryTimestamp?: string): stri
   return new Intl.DateTimeFormat(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit" }).format(timestamp);
 }
 
-function amount(total: Totals, records: number, formatter: (value: number) => string = formatTokens): string {
+function amount(total: Totals, records: number, formatter: (value: number) => string = formatTokens, estimated = 0): string {
   if (records > 0 && total.missing === records) return "?";
-  return `${total.missing ? "≥" : ""}${formatter(total.known)}`;
+  return `${total.missing ? "≥" : estimated ? "≈" : ""}${formatter(total.known)}`;
 }
 
 /** Work/timing and token/cost rows, backed by full-run and partial-data accounting. */
@@ -50,7 +50,7 @@ function completionGroups(summary: Summary, theme: Theme, entryTimestamp?: strin
     field("in", amount(usage.input, records)), field("out", amount(usage.output, records)),
     field("cache read", amount(usage.cacheRead, records)), field("cache write", amount(usage.cacheWrite, records)),
     field("cache hit", hit),
-    field("cost", amount(usage.cost, records, formatCost)),
+    field("cost", amount(usage.cost, records, formatCost, summary.estimated)),
   ];
   if (FIELDS.some((key) => usage[key].missing > 0)) tokenGroups.push(theme.fg("warning", "partial usage"));
   return [groups, tokenGroups];
@@ -79,7 +79,7 @@ export function renderCompletion(summary: Summary, width: number, theme: Theme, 
   const clock = completionClock(summary, entryTimestamp);
   const leading = clock ? `${value(clock)}${dim(" · ")}${turn}` : turn;
   const tokens = `${field("in", amount(usage.input, records))}${dim(" · ")}${field("out", amount(usage.output, records))}`;
-  const cost = value(amount(usage.cost, records, formatCost).replace(/^\?$/, "$?"));
+  const cost = value(amount(usage.cost, records, formatCost, summary.estimated).replace(/^\?$/, "$?"));
   // Show the clock first when the clock, turn duration, tokens and cost all fit.
   // On a narrower screen, retain the useful core instead of a clipped clock.
   const coreWidth = visibleWidth(leading) + 6 + visibleWidth(tokens) + visibleWidth(cost);

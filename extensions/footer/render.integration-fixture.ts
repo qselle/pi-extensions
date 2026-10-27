@@ -9,14 +9,15 @@ const sample: FooterView = { session: "Footer refresh", model: "GPT-5.6 Sol high
   directory: "~/pi-extensions", branch: "main", git: "git changed 2 new 1" };
 const line = (input: FooterView, width: number) => renderFooter(input, width, theme).map(stripTerminalSequences).join("\n");
 const wide = line(sample, 280);
-assert(wide.startsWith(" GPT-5.6 Sol high · Footer refresh · fast"), wide);
+assert(wide.startsWith(" GPT-5.6 Sol high fast · Footer refresh │"), wide);
 assert(wide.endsWith("~/pi-extensions · main · git changed 2 new 1"), wide);
 const telemetry = ["context 6% 15.5K/258K", "in 1.2K out 521", "cache R 8.4K W 400 hit 84%", "$0.21"];
 for (const field of telemetry) assert(wide.includes(field), wide);
 assert(wide.includes("15.5K/258K · in 1.2K out 521"));
 assert(!wide.includes("prompt "), "the cumulative prompt sum must not compete with actual context");
-assert(colors.every(({ color }) => ["accent", "muted", "text", "dim"].includes(color)), "normal telemetry must use the quiet palette");
-assert(colors.filter(({ color }) => color === "accent").every(({ value }) => value === sample.model), "only the model gets accent color");
+assert(colors.every(({ color }) => ["accent", "muted", "text", "dim", "thinkingHigh"].includes(color)), "normal telemetry must use the quiet palette");
+assert(colors.filter(({ color }) => color === "accent").every(({ value }) => value === "GPT-5.6 Sol"), "only the model name gets accent color");
+assert.deepEqual(colors.filter(({ color }) => color.startsWith("thinking")), [{ color: "thinkingHigh", value: "high" }], "effort uses Pi's thinking-level color");
 for (const label of ["context", "in", "out", "cache", "R", "W", "hit", "changed", "new"]) {
   assert(colors.some(({ color, value }) => color === "muted" && value === label), `${label} must remain legible`);
 }
@@ -43,18 +44,33 @@ for (const session of ["Footer refresh", "界🌍é".repeat(25)]) {
     assert((plain.match(/\bcache\b/g) ?? []).length <= 1, `repeated cache label at ${width}: ${plain}`);
   }
 }
-for (const width of [60, 80, 100, 120, 180]) {
+for (const width of [60, 80, 100, 120, 160, 180]) {
   const rendered = line(sample, width);
-  for (const field of ["GPT-5.6 Sol high", "context 6%", "$0.21"]) assert(rendered.includes(field), `lost ${field} at ${width}: ${rendered}`);
+  // Badges belong to the model and survive ordinary widths.
+  for (const field of ["GPT-5.6 Sol high fast", "context 6%", "$0.21"]) assert(rendered.includes(field), `lost ${field} at ${width}: ${rendered}`);
   if (width >= 80) assert(rendered.includes("in 1.2K out 521"), rendered);
-  if (width >= 100) assert(rendered.includes("15.5K/258K"), rendered);
-  assert(rendered.endsWith(width >= 100 && width < 180 ? "pi-extensions · main" : width < 180 ? "pi-extensions" : "git changed 2 new 1"), rendered);
+  if (width >= 100) assert(rendered.includes("· Footer refr"), `lost session at ${width}: ${rendered}`);
+  if (width >= 120) assert(rendered.includes("15.5K/258K") && rendered.includes("· Footer refresh │"), rendered);
+  assert(rendered.endsWith(width >= 160 ? "git changed 2 new 1" : width >= 100 ? "pi-extensions · main" : "pi-extensions"), rendered);
 }
+for (let width = 50; width <= 280; width++) assert(line(sample, width).includes("high fast"), `lost badge at ${width}`);
+// Pruning is greedy; afterwards, dropped details return when they fit the slack.
+const roomy = line(sample, 160);
+assert(roomy.includes("cache R 8.4K") && roomy.includes("git changed 2 new 1") && !/ {6}/.test(roomy), roomy);
+// Statuses shorten, then keep the first key with an overflow count, before hiding.
+const statusSample = { ...sample, statuses: [["verify", "verifying tests…"], ["agents", "agents 2"]] as const };
+assert(line(statusSample, 200).endsWith("git changed 2 new 1 · agents 2 · verifying tests…"), line(statusSample, 200));
+assert(line(statusSample, 140).endsWith("main · agents 2 · verifying t…"), line(statusSample, 140));
+assert(line(statusSample, 160).includes("cache R 8.4K") && line(statusSample, 160).endsWith("agents 2 · +1"), line(statusSample, 160));
+assert(!line(statusSample, 100).includes("agents"), "statuses yield before core usage");
 for (const field of telemetry) assert(line(sample, 180).includes(field), `missing roomy metric ${field}`);
 for (const effort of ["minimal", "low", "medium", "high", "xhigh", "max"]) {
   for (const width of [40, 60, 100]) {
+    colors.length = 0;
     const rendered = line({ ...sample, model: `very-long-model-name ${effort}` }, width);
     assert(rendered.includes(` ${effort}`), `lost effort at ${width}: ${rendered}`);
+    const level = `thinking${effort[0]!.toUpperCase()}${effort.slice(1)}`;
+    assert(colors.some(({ color, value }) => color === level && value === effort), `${effort} lost its level color`);
   }
 }
 const unknown = line({ ...sample, usage: undefined, contextWindow: 258000 }, 280);
@@ -111,7 +127,7 @@ line(conflicts, 300);
 assert(colors.some(({ color, value }) => color === "error" && value === "2"));
 assert(colors.some(({ color, value }) => color === "text" && value === "5"), "ordinary staged changes are not warnings");
 const withStatuses = line({ ...sample, statuses: [["verify", "verifying\ntests"], ["agents", "agents 2"]] }, 300);
-assert(withStatuses.includes("agents 2 verifying tests"), withStatuses);
+assert(withStatuses.includes("agents 2 · verifying tests"), withStatuses);
 const sanitized = line({ ...sample, session: "name\x1b[31m\nnew\x1b[0m", statuses: [["verify", "safe\x1b]2;bad-title\x07 text"]] }, 300);
 assert(sanitized.includes("name new") && sanitized.includes("safe text") && !sanitized.includes("bad-title"));
 console.log("footer rendering verified");

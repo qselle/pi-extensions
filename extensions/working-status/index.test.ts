@@ -187,3 +187,25 @@ test("the working row keeps a dimmed interrupt-key hint", () => {
     setKeybindings(previous);
   }
 });
+
+test("a started response and streamed tool calls replace the waiting phase", () => {
+  const h = harness();
+  try {
+    h.fire("agent_start");
+    h.fire("message_start", { message: { role: "user" } });
+    expect(h.messages.at(-1)).toBe("Waiting for model · 0s");
+    h.fire("message_start", { message: { role: "assistant" } });
+    expect(h.messages.at(-1)).toBe("Thinking · 0s");
+    const partial = { content: [{ type: "text", text: "" }, { type: "toolCall", id: "a", name: "", arguments: {} }] };
+    h.fire("message_update", { assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial } });
+    expect(h.messages.at(-1)).toBe("Preparing tool · 0s");
+    partial.content[1] = { type: "toolCall", id: "a", name: "bash", arguments: {} };
+    h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", contentIndex: 1, delta: "{", partial } });
+    expect(h.messages.at(-1)).toBe("Preparing bash · 0s");
+    const count = h.messages.length;
+    h.fire("message_update", { assistantMessageEvent: { type: "toolcall_delta", contentIndex: 1, delta: "}", partial } });
+    expect(h.messages).toHaveLength(count);
+    h.fire("tool_execution_start", { toolCallId: "a", toolName: "bash", args: { command: "bun test" } });
+    expect(h.messages.at(-1)).toBe("Running bash: bun · 0s");
+  } finally { h.fire("session_shutdown"); }
+});

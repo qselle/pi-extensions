@@ -1,5 +1,5 @@
 import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { WorkingState, isRetryStatus, toolActivity } from "./state.ts";
+import { WorkingState, isRetryStatus, toolActivity, toolLabel } from "./state.ts";
 import { indicatorStyle, isWorkingStyle, STYLE_ENTRY, WORKING_STYLES, type WorkingStyle } from "./style.ts";
 
 export default function workingStatusExtension(pi: ExtensionAPI): void {
@@ -82,11 +82,20 @@ export default function workingStatusExtension(pi: ExtensionAPI): void {
     state.phase = "Retrying";
     refresh();
   });
+  // The response has started: the provider is no longer just being waited on.
+  pi.on("message_start", (event) => {
+    if (event.message.role !== "assistant") return;
+    state.phase = "Thinking";
+    refresh();
+  });
   pi.on("message_update", (event) => {
-    const type = event.assistantMessageEvent.type;
-    if (type === "thinking_delta") state.phase = "Thinking";
-    else if (type === "text_delta") state.phase = "Writing";
-    else return;
+    const update = event.assistantMessageEvent;
+    if (update.type === "thinking_delta") state.phase = "Thinking";
+    else if (update.type === "text_delta") state.phase = "Writing";
+    else if (update.type === "toolcall_start" || update.type === "toolcall_delta") {
+      const block = update.partial.content[update.contentIndex];
+      state.phase = `Preparing ${toolLabel(block?.type === "toolCall" ? block.name : "")}`;
+    } else return;
     refresh();
   });
   pi.on("tool_execution_start", (event) => {

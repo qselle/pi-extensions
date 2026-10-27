@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { stream } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import { normalizeContext } from "@earendil-works/pi-ai";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import register from "./index.ts";
 const model = OPENAI_CODEX_MODELS["gpt-5.5"];
 const handlers = new Map<string, any>(); let command: any;
 const notices: string[] = [];
-register({ on: (name: string, fn: any) => handlers.set(name, fn), registerCommand: (_: string, value: any) => { command = value; } } as any);
-const ctx = { model, ui: { notify: (text: string) => notices.push(text), setStatus() {} } };
+register({ on: (name: string, fn: any) => handlers.set(name, fn), registerCommand: (_: string, value: any) => { command = value; }, events: { emit() {} } } as any,
+  { configPath: join(mkdtempSync(join(tmpdir(), "fast-mode-")), "fast-mode.json") });
+const ctx = { model, ui: { notify: (text: string) => notices.push(text) } };
 const token = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture" } })).toString("base64url")}.test`;
 for (const enabled of [true, false]) {
   await command.handler(enabled ? "on" : "off", ctx);

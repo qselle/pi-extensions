@@ -341,10 +341,22 @@ test("requiredBodyHeight keeps a card's rows when they fit and falls back to the
     expect(count(lines, "edit")).toBe(6);
     expect(count(lines, "job")).toBe(1);
 
-    required = 30; // Cannot fit: the card stays in the overlay with its minimum share.
+    required = 30; // Cannot fit: the card takes the remaining rows; the other keeps its minimum.
     lines = view.render(40);
-    expect(count(lines, "edit")).toBeGreaterThanOrEqual(1);
-    expect(count(lines, "job")).toBeGreaterThanOrEqual(1);
+    expect(count(lines, "edit")).toBe(6);
+    expect(count(lines, "job")).toBe(1);
+
+    // Required rows never push a lower-priority card out of the overlay.
+    required = 6;
+    const third = registerOverlayCard({
+      id: "required-third", order: 3, visible: () => true, minBodyHeight: 2,
+      title: () => " Notes ", renderBody: (_width, rows) => Array.from({ length: rows }, (_, i) => `note${i}`),
+    });
+    try {
+      view.setViewport(100, 20); // 16 rows: 8 frame rows, 8 body rows.
+      lines = view.render(40);
+      expect([count(lines, "edit"), count(lines, "job"), count(lines, "note")]).toEqual([5, 1, 2]);
+    } finally { third.unregister(); }
   } finally {
     first.unregister();
     second.unregister();

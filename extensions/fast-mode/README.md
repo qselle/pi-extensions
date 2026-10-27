@@ -1,16 +1,20 @@
 # fast-mode
 
-Explicitly request premium fast processing for the current model through Pi's public request hook. Disabled by default; never silently carries across models or sessions.
+Explicitly request premium fast processing for OpenAI models through Pi's public request hook. Off by default; the choice is saved.
 
 ## Usage
 
 ```text
-/fast on      Request fast processing for the current model
-/fast off     Remove this override; provider/project defaults apply
-/fast status  Show whether the override is enabled
+/fast on      Request fast processing for eligible models
+/fast off     Stop requesting it; provider/project defaults apply
+/fast status  Explain the saved state and the current model's behavior
 ```
 
-Enabling displays `fast: requested` in the status area. The next matching main-agent request uses `service_tier: "priority"`. This overrides an existing tier field while enabled. Model selection, session start, branch navigation and shutdown clear the setting. It is not persisted to disk.
+While enabled, main-agent requests for an eligible model use `service_tier: "priority"`, overriding an existing tier field. The `footer` extension shows a `fast` badge beside the model. Models from other providers show no badge and their requests are unchanged.
+
+The choice persists in `$PI_CODING_AGENT_DIR/fast-mode.json` (defaults to `~/.pi/agent/fast-mode.json`) and applies to every session and model until `/fast off`. If the file cannot be written, the choice lasts for the current runtime and a warning says so.
+
+Eligibility depends on the protocol, not an endpoint or model allowlist, so new model IDs and custom base URLs work without an update. The API decides whether it accepts priority. When it explicitly rejects the tier (for example `Unknown parameter: 'service_tier'`), the badge shows `fast unavailable` and a warning appears. The original error is unchanged and no fallback request is sent. Ordinary errors such as rate limits and timeouts do not change the badge. The next request still asks for priority and restores `fast`; switching models or sessions clears the rejection.
 
 OpenAI documents `priority` as an alias for fast processing on supported models. Fast processing has premium pricing, eligibility restrictions and possible fallback to standard service; requesting it does not prove it was delivered. See the [official Fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode).
 
@@ -21,10 +25,9 @@ or account setting is changed by this extension.
 
 ## Dependencies and limitations
 
-- Uses Pi's public extension request, model and status APIs; no third-party packages.
-- Supports the `openai` provider with `openai-responses` at `https://api.openai.com/v1`, plus `openai-codex` with `openai-codex-responses` at `https://chatgpt.com/backend-api` (also accepting its `/codex` and `/codex/responses` forms). Fine-tuned models, custom proxies, Chat Completions and other providers are not supported by this implementation.
-- The gate verifies protocol and endpoint, not account eligibility or each model's tier availability. Provider errors are surfaced normally; no paid retry or automatic fallback is added.
+- Uses Pi's public extension request, model, message and event-bus APIs; no third-party packages. The badge needs the `footer` extension; without it, use `/fast status`.
+- Eligible protocols: `openai` with `openai-responses` and `openai-codex` with `openai-codex-responses`. Chat Completions and other providers are left unchanged.
 - Changes apply to future requests, not a request already in flight. Independent side-chat/title calls and child processes do not inherit this override.
-- Status means requested, not confirmed. The public response hook does not expose the response body tier for independent verification. Pi's recorded cost estimates remain adapter-dependent; use provider billing for authoritative costs.
+- The badge means requested, not confirmed. The public response hook does not expose the response body tier for independent verification. Pi's recorded cost estimates remain adapter-dependent; use provider billing for authoritative costs.
 - Turning this override off does not force standard pricing if the API project itself defaults to fast processing.
 - Cross-platform. Tests use an injected transport; live paid-provider behavior is unverified.

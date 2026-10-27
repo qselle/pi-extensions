@@ -5,7 +5,7 @@ import { sumUsage } from "../footer/usage.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
 
-function harness() {
+function harness(modelRegistry?: { find(provider: string, model: string): unknown }) {
   const handlers = new Map<string, any>();
   const renderers = new Map<string, any>();
   const entries: any[] = [];
@@ -18,7 +18,7 @@ function harness() {
     registerEntryRenderer: (customType: string, renderer: any) => renderers.set(customType, renderer),
     registerCommand: (_: string, value: any) => { command = value; },
   } as any, () => 0, () => 0);
-  const ctx = { sessionManager: { getSessionId: () => "a", getBranch: () => entries }, ui: { notify: (text: string) => notifications.push(text) } };
+  const ctx = { modelRegistry, sessionManager: { getSessionId: () => "a", getBranch: () => entries }, ui: { notify: (text: string) => notifications.push(text) } };
   return {
     entries, renderers, notifications,
     fire: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
@@ -121,4 +121,28 @@ test("/turn-stats falls back to the latest older entry on the branch", async () 
   h.entries.push({ type: "custom", customType: "turn-stats", data: legacy });
   await h.command("");
   expect(h.notifications.at(-1)).toContain("6 model responses");
+});
+
+test("responses recorded at zero cost are priced from model rates and marked estimated", () => {
+  const rates = { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 };
+  const h = harness({ find: (provider, model) => provider === "custom" && model === "priced" ? { cost: rates } : provider === "custom" ? { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } : undefined });
+  const priced = { role: "assistant", provider: "custom", model: "priced", usage: usage(1_000_000, 100_000, 0) };
+  const free = { role: "assistant", provider: "custom", model: "free", usage: usage(500, 50, 0) };
+  const unknown = { role: "assistant", provider: "other", model: "x", usage: usage(500, 50, 0) };
+  const recorded = { role: "assistant", provider: "custom", model: "priced", usage: usage(10, 1, 0.5) };
+  h.fire("agent_start");
+  for (const message of [priced, free, unknown, recorded]) h.fire("message_end", { message });
+  h.fire("agent_settled");
+  const summary = decodeSummary(h.entries[0].data)!;
+  expect(summary.estimated).toBe(1);
+  expect(summary.usage.cost).toEqual({ known: 3.5, missing: 0 });
+  expect(priced.usage.cost.total).toBe(0);
+  const render = (data: unknown, expanded = false) => h.renderers.get("turn-usage-summary")({ type: "custom", customType: "turn-usage-summary", data }, { expanded }, theme).render(200).join("\n");
+  expect(render(summary)).toContain("≈$3.50");
+  expect(render(summary, true)).toContain("1 response priced from model rates");
+  expect(render({ ...summary, usage: { ...summary.usage, cost: { known: 3.5, missing: 1 } } })).toContain("≥$3.50");
+  const { estimated: _, ...older } = summary;
+  expect(render(older)).not.toContain("≈");
+  expect(decodeSummary({ ...summary, estimated: 5 })).toBeUndefined();
+  expect(decodeSummary({ ...summary, estimated: 0.5 })).toBeUndefined();
 });

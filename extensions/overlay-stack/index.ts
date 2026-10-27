@@ -221,20 +221,25 @@ export class OverlayStackView implements Component {
     return Math.max(1, Math.floor(this.terminalHeight * MAX_HEIGHT_RATIO));
   }
 
-  /** Highest-priority cards that fit; a card's required rows apply only when they fit. */
+  /**
+   * Highest-priority cards that fit at their minimum; required rows then grow
+   * cards in priority order from what is left, never displacing another card.
+   */
   private selectCards(maxRows: number): SelectedCard[] {
     const selected: SelectedCard[] = [];
     let usedRows = 0;
     for (const card of visibleCards(this.terminalWidth, this.terminalHeight)) {
       const shell = selected.length === 0 ? 2 : 3;
-      const required = requiredBodyHeight(card);
       const minimum = minimumBodyHeight(card);
-      const rows = usedRows + shell + required <= maxRows ? required
-        : usedRows + shell + minimum <= maxRows ? minimum
-          : undefined;
-      if (rows === undefined) continue;
-      selected.push({ card, minimum: rows });
-      usedRows += shell + rows;
+      if (usedRows + shell + minimum > maxRows) continue;
+      selected.push({ card, minimum });
+      usedRows += shell + minimum;
+    }
+    for (const item of selected) {
+      const extra = Math.min(requiredBodyHeight(item.card) - item.minimum, maxRows - usedRows);
+      if (extra <= 0) continue;
+      item.minimum += extra;
+      usedRows += extra;
     }
     return selected;
   }

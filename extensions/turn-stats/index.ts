@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { decodeLegacySummary, decodeSummary, emptySummary, recordExtraUsage, recordResponse, summaryText, type Summary } from "./stats.ts";
 import { addTiming, isFirstOutputEvent } from "./timing.ts";
 import { renderCompletion } from "./render.ts";
+import { pricingEstimator } from "../footer/usage.ts";
 import { isTelemetryStyle, telemetryStyle, TELEMETRY_ENTRY, TELEMETRY_CHANGED, RESPONSE_TIMING_EVENT } from "../../lib/telemetry.ts";
 const ENTRY = "turn-usage-summary";
 /** Per-turn totals written by older sessions; rendered read-only. */
@@ -47,7 +48,9 @@ export default function turnStats(pi: ExtensionAPI, now: () => number = () => pe
     }
     if (message.role !== "assistant") return;
     seen.add(message);
-    recordResponse(current, message);
+    // Some providers record tokens with a zero cost; price those from the model's rates, as the footer does.
+    const estimate = ctx?.modelRegistry ? pricingEstimator((provider, model) => ctx.modelRegistry.find(provider, model)) : undefined;
+    recordResponse(current, message, estimate && ((usage) => estimate({ type: "message", message }, usage)));
     const timing = addTiming(current.timing!, sent, first, now(), message.usage?.output);
     // Every finalized response publishes once, including missing timing, so
     // optional step rules cannot inherit measurements from an earlier reply.

@@ -6,7 +6,7 @@ type Color = Parameters<Theme["fg"]>[0];
 type FooterTheme = Pick<Theme, "fg">;
 interface Segment { text: string; color: Color; label?: string }
 interface Reduction { priority: number; segments: Segment[] }
-interface Group { zone: "identity" | "usage" | "workspace"; segments: Segment[]; reductions: Reduction[] }
+interface Group { zone: "identity" | "usage" | "workspace"; segments: Segment[]; reductions: Reduction[]; applied: Array<Reduction & { previous: Segment[] }> }
 export interface FooterView {
   session: string;
   model: string;
@@ -26,10 +26,13 @@ const plain = (segments: Segment[]) => segments.map(({ text, label }) => `${labe
 const styled = (segments: Segment[], theme: FooterTheme) => segments.map(({ text, color, label }) =>
   `${label ? `${theme.fg("muted", label)} ` : ""}${theme.fg(color, text)}`).join(" ");
 const shorten = (value: string, width: number) => truncateToWidth(value, width, "…");
-function shortenModel(model: string, width: number): string {
-  if (visibleWidth(model) <= width) return model;
-  const effort = / (minimal|low|medium|high|xhigh|max)$/.exec(model)?.[0] ?? "";
-  return shorten(effort ? model.slice(0, -effort.length) : model, Math.max(1, width - effort.length)) + effort;
+/** The name shortens around the reasoning effort, which keeps Pi's per-level thinking color. */
+function modelSegments(model: string, width: number): Segment[] {
+  const effort = / (minimal|low|medium|high|xhigh|max)$/.exec(model)?.[1];
+  if (!effort) return [segment(shorten(model, width), "accent")];
+  const name = model.slice(0, -effort.length - 1);
+  return [segment(visibleWidth(model) <= width ? name : shorten(name, Math.max(1, width - effort.length - 1)), "accent"),
+    segment(effort, `thinking${effort[0]!.toUpperCase()}${effort.slice(1)}` as Color)];
 }
 
 type UsageField = "input" | "output" | "cacheRead" | "cacheWrite" | "cost";
@@ -46,18 +49,25 @@ function usageSegment(totals: UsageTotals, key: UsageField, label?: string): Seg
 function groupsFor(input: FooterView): Group[] {
   const groups: Group[] = [];
   const add = (zone: Group["zone"], segments: Segment[], reductions: Reduction[] = []) => {
-    if (plain(segments)) groups.push({ zone, segments, reductions });
+    if (plain(segments)) groups.push({ zone, segments, reductions, applied: [] });
   };
   const hide = (priority: number): Reduction => ({ priority, segments: [] });
   const session = compactInlineText(input.session, 80) || "pi";
-  const model = shortenModel(compactInlineText(input.model, Number.MAX_SAFE_INTEGER) || "no-model", 160);
-  add("identity", [segment(model, "accent")], [
-    { priority: 60, segments: [segment(shortenModel(model, 24), "accent")] },
-    { priority: 20, segments: [segment(shortenModel(model, 16), "accent")] },
-    { priority: 8, segments: [segment(shortenModel(model, 10), "accent")] }, hide(5),
+  const model = compactInlineText(input.model, Number.MAX_SAFE_INTEGER) || "no-model";
+  const badges = input.badges.map((badge) => compactInlineText(badge, 18)).filter(Boolean);
+  // Badges describe the model (e.g. fast); they shorten with it instead of vanishing first.
+  const modelGroup = (width: number, badgeWidth?: number) => [...modelSegments(model, width),
+    ...badgeWidth ? badges.map((badge) => segment(shorten(badge, badgeWidth), "muted")) : []];
+  add("identity", modelGroup(160, 18), [
+    { priority: 60, segments: modelGroup(24, 18) },
+    { priority: 20, segments: modelGroup(16, 8) },
+    { priority: 10, segments: modelGroup(16) },
+    { priority: 8, segments: modelGroup(10) }, hide(5),
   ]);
-  add("identity", [segment(session, "muted")], [hide(98)]);
-  if (input.badges.length) add("identity", input.badges.map((badge) => segment(compactInlineText(badge, 18), "muted")), [hide(92)]);
+  add("identity", [segment(session, "muted")], [
+    { priority: 97, segments: [segment(shorten(session, 24), "muted")] },
+    { priority: 68, segments: [segment(shorten(session, 12), "muted")] }, hide(42),
+  ]);
 
   const window = input.usage?.contextWindow ?? input.contextWindow;
   const percent = formatPercent(input.usage?.percent);
@@ -108,11 +118,18 @@ function groupsFor(input: FooterView): Group[] {
       { priority: 75, segments: [segment(conflict[2]!, "error", "conflicts")] }, hide(2),
     ] : [hide(75)]);
   }
-  const statuses = [...input.statuses ?? []].sort(([a], [b]) => a.localeCompare(b)).flatMap(([, text]) => {
-    const clean = compactInlineText(text, 160);
-    return clean ? [segment(clean, "muted")] : [];
-  });
-  if (statuses.length) add("workspace", statuses, [hide(90)]);
+  const statuses = [...input.statuses ?? []].sort(([a], [b]) => a.localeCompare(b))
+    .map(([, text]) => compactInlineText(text, 160)).filter(Boolean);
+  // Statuses shorten, then collapse to the first key and an overflow count; they outlive cache details.
+  const statusGroup = (width: number, count = statuses.length) => [segment([
+    ...statuses.slice(0, count).map((text) => shorten(text, width)),
+    ...count < statuses.length ? [`+${statuses.length - count}`] : [],
+  ].join(" · "), "muted")];
+  if (statuses.length) add("workspace", statusGroup(160), [
+    { priority: 90, segments: statusGroup(24) },
+    { priority: 82, segments: statusGroup(12) },
+    { priority: 72, segments: statusGroup(12, 1) }, hide(58),
+  ]);
   return groups;
 }
 
@@ -138,11 +155,30 @@ export function renderFooter(input: FooterView, width: number, theme: FooterThem
   const margin = width >= 12 ? 1 : 0;
   const available = Math.max(1, width - margin * 2);
   const groups = groupsFor(input);
-  while (visibleWidth(joinGroups(groups)) > available) {
+  const fits = () => visibleWidth(joinGroups(groups)) <= available;
+  while (!fits()) {
     const next = groups.filter((group) => group.reductions.length)
       .sort((a, b) => b.reductions[0]!.priority - a.reductions[0]!.priority)[0];
     if (!next) break;
-    next.segments = next.reductions.shift()!.segments;
+    const reduction = next.reductions.shift()!;
+    next.applied.push({ ...reduction, previous: next.segments });
+    next.segments = reduction.segments;
+  }
+  // Greedy pruning can overshoot: undo the most valuable reductions that still fit.
+  const blocked = new Set<Group>();
+  for (;;) {
+    const next = groups.filter((group) => group.applied.length && !blocked.has(group))
+      .sort((a, b) => a.applied.at(-1)!.priority - b.applied.at(-1)!.priority)[0];
+    if (!next) break;
+    const { previous, ...reduction } = next.applied.pop()!;
+    const current = next.segments;
+    next.segments = previous;
+    if (fits()) next.reductions.unshift(reduction);
+    else {
+      next.segments = current;
+      next.applied.push({ ...reduction, previous });
+      blocked.add(next);
+    }
   }
   return [" ".repeat(margin) + truncateToWidth(joinGroups(groups, theme, available), available, "")];
 }

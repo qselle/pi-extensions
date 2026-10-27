@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { WorkingState, elapsed, toolActivity, toolLabel } from "./state.ts";
 
 test("elapsed handles boundaries and ignores backward clock movement", () => {
-  expect([-1, 999, 60000, 3599000, 3600000].map(elapsed)).toEqual(["0s", "0s", "1m 0s", "59m 59s", "1h 0m"]);
+  expect([-1, 999, 60000, 127000, 3599000, 3600000, 3723000].map(elapsed))
+    .toEqual(["0s", "0s", "1m 00s", "2m 07s", "59m 59s", "1h 00m 00s", "1h 02m 03s"]);
 });
 
 test("parallel tool completion retains the remaining work and total run duration", () => {
@@ -13,10 +14,10 @@ test("parallel tool completion retains the remaining work and total run duration
   state.tools.set("b", "bash");
   expect(state.label(2100)).toBe("Running read, bash · 2s");
   state.tools.delete("a");
-  expect(state.label(61000)).toBe("Running bash · 1m 0s");
+  expect(state.label(61000)).toBe("Running bash · 1m 00s");
   state.tools.clear();
   state.phase = "Writing";
-  expect(state.label(62100)).toBe("Writing · 1m 2s");
+  expect(state.label(62100)).toBe("Writing · 1m 02s");
   state.reset();
   expect(state.label(63100)).toBeUndefined();
 });
