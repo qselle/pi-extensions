@@ -134,6 +134,12 @@ Managed `bash` and job results set `details` for renderers:
 | `durationMs` | Elapsed time, so far for active jobs; absent for `interrupted` |
 | `cursor`, `more`, `lost`, `omitted` | Read position, another page available, evicted and skipped characters |
 
+Managed `bash` also declares an output schema and returns `structuredContent`,
+which programmatic callers such as codemode scripts receive instead of the text.
+Field names follow Pi's built-in bash: `output` (the whole retained log, not the
+newest-first budget), `truncated`, `exit_code` (absent while running or after a
+signal), and `wall_time_seconds`, plus `status` and, while running, `job_id`.
+
 `job_list` details hold `jobs` with `id`, `name`, `status`, `icon`, `exitCode`,
 `signal`, `startedAt`, and `endedAt`.
 

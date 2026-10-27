@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { registerOverlayCard, type OverlayCardHandle } from "../overlay-stack/index.ts";
 import { TranscriptView } from "../../lib/transcript/view.ts";
 import { elapsed } from "../working-status/state.ts";
-import { JobService, isActive, MAX_RETAINED_JOBS, MAX_WAIT_MS, type JobSnapshot } from "./service.ts";
+import { JobService, isActive, LOG_CAPACITY, MAX_RETAINED_JOBS, MAX_WAIT_MS, type JobSnapshot } from "./service.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { outputWindow, PlainOutput } from "../../lib/output.ts";
 import { redactText } from "../../lib/redact.ts";
@@ -20,6 +20,31 @@ export const FOREGROUND_GUIDELINE = "Keep commands in the foreground: bash yield
 export const YIELD_GUIDELINE = "A yielded bash job is still running. Use job_wait to check its exit status before treating the command as successful.";
 
 type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
+
+/**
+ * Structured bash result for programmatic callers such as codemode scripts. Field
+ * names follow Pi's built-in bash; a command that outlives its yield window has
+ * no `exit_code` yet and names its `job_id`.
+ */
+export const BASH_OUTPUT_SCHEMA = Type.Object({
+  output: Type.String({ description: `Combined stdout and stderr; keeps the newest ${LOG_CAPACITY} characters` }),
+  truncated: Type.Boolean(),
+  exit_code: Type.Optional(Type.Number({ description: "Absent while running or after a signal" })),
+  wall_time_seconds: Type.Number(),
+  status: Type.Union(["starting", "running", "stopping", "completed", "failed", "stopped", "timed-out"].map((status) => Type.Literal(status))),
+  job_id: Type.Optional(Type.String({ description: "Job ID while the command is still running" })),
+});
+function structuredResult(id: string, jobs: JobService) {
+  const job = jobs.get(id);
+  const output = jobs.window(id, 0, LOG_CAPACITY, false);
+  const active = isActive(job.status);
+  return {
+    output: output.text, truncated: output.lost > 0,
+    ...(!active && typeof job.code === "number" ? { exit_code: job.code } : {}),
+    wall_time_seconds: Math.round(((job.endedAt ?? Date.now()) - job.startedAt) / 100) / 10,
+    status: job.status, ...(active ? { job_id: id } : {}),
+  };
+}
 
 const icons: Record<JobSnapshot["status"], string> = { starting: "◌", running: "●", stopping: "◌", completed: "✓", failed: "×", stopped: "■", "timed-out": "◷", interrupted: "?" };
 const exitSummary = (job: JobSnapshot) => job.signal ? ` · ${job.signal}` : job.code != null ? ` · exit ${job.code}` : "";
@@ -197,12 +222,15 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     promptSnippet: "Execute shell commands; long commands yield managed job IDs for follow-up.",
     promptGuidelines: [PI_ENV_GUIDELINE, FOREGROUND_GUIDELINE, YIELD_GUIDELINE, COMMAND_PURPOSE_GUIDELINE],
     parameters: bashParameters,
+    outputSchema: BASH_OUTPUT_SCHEMA,
     prepareArguments: argumentAliases(bashParameters),
     async execute(_id, params: any, signal, update, ctx) {
       const { purpose, ...execution } = params;
+      const jobs = service;
       const value = await startManaged({ ...execution, name: execution.name ?? jobName(purpose, execution.command), timeout_seconds: execution.timeout, yield_ms: yieldDuration(execution.yield_ms) }, signal, ctx, update);
+      const structured = { ...value, structuredContent: structuredResult(value.details.id, jobs) };
       // Keep details for renderers; the model still receives an error result.
-      return ["failed", "timed-out", "stopped"].includes(value.details.status) ? { ...value, isError: true } : value;
+      return ["failed", "timed-out", "stopped"].includes(value.details.status) ? { ...structured, isError: true } : structured;
     },
     renderShell: bashStyle?.renderShell,
     renderCall: (args: any, theme, context) => {

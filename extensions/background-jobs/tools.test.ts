@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import extension, { FOREGROUND_GUIDELINE, PI_ENV_GUIDELINE } from "./index.ts";
+import { Value } from "typebox/value";
+import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, PI_ENV_GUIDELINE } from "./index.ts";
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
 import { COLLAPSED_TAIL_ROWS } from "./render.ts";
@@ -179,6 +180,25 @@ test("job cards render compactly without the default boxed shell", async () => {
   const rows = card.render(100).map((row) => stripVTControlCharacters(row));
   expect(rows[2]).toBe("  └ 9 jobs · 1 active");
   expect(rows.length).toBeLessThanOrEqual(3 + COLLAPSED_TAIL_ROWS + 1);
+});
+
+test("bash returns a structured result shaped like Pi's built-in bash", async () => {
+  const { run, tools } = await session();
+  expect(tools.get("bash").outputSchema).toBe(BASH_OUTPUT_SCHEMA);
+  const failed = await run("bash", { command: "printf ok; exit 3", yield_ms: 5000 });
+  expect(failed.isError).toBe(true);
+  expect(failed.structuredContent).toMatchObject({ output: "ok", truncated: false, exit_code: 3, status: "failed" });
+  expect(failed.structuredContent.job_id).toBeUndefined();
+  expect(Value.Check(BASH_OUTPUT_SCHEMA, failed.structuredContent)).toBe(true);
+  const running = await run("bash", { command: "printf start; sleep 5", yield_ms: 300 });
+  expect(running.structuredContent).toMatchObject({ output: "start", status: "running", job_id: running.details.id });
+  expect("exit_code" in running.structuredContent).toBe(false);
+  expect(Value.Check(BASH_OUTPUT_SCHEMA, running.structuredContent)).toBe(true);
+  await run("job_stop", { id: running.details.id });
+  // The whole retained log, not the model's newest-first budget.
+  const long = await run("bash", { command: "seq 1 20000", yield_ms: 5000, max_chars: 300 });
+  expect(long.structuredContent.output.startsWith("1\n2\n")).toBe(true);
+  expect(long.structuredContent.exit_code).toBe(0);
 });
 
 test("managed results carry exit, signal, status and timing details", async () => {
