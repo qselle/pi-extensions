@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
+import { redactValue } from "../../lib/redact.ts";
 import { getTelegramService, type TelegramService } from "../telegram/service.ts";
 import {
   MAX_ID_CHARS,
@@ -15,7 +16,7 @@ import {
   type QuestionnaireDetails,
 } from "./model.ts";
 import { firstReplyWins } from "./race.ts";
-import { findSecretHandles, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
+import { findSecretHandles, knownSecretValues, registerSecretVault, SECRET_HANDLE_HINT, SecretVault } from "./secrets.ts";
 import { createTelegramQuestionReply, safeTelegramQuestionError } from "./telegram.ts";
 import { createTerminalReplySource } from "./ui.ts";
 import { hasAnswer, QuestionRecap } from "./recap.ts";
@@ -100,6 +101,16 @@ export default function questionsExtension(
       block: true,
       reason: `${unknown.length === 1 ? "A secret handle is" : "Secret handles are"} no longer valid in this session. Ask for the secret again with a questionnaire secret question instead of guessing the value.`,
     };
+  });
+  pi.on("tool_result", (event) => {
+    const values = knownSecretValues();
+    if (values.length === 0) return;
+    const content = redactValue(event.content, values);
+    const details = redactValue(event.details, values);
+    const structuredContent = redactValue(event.structuredContent, values);
+    if (content === event.content && details === event.details && structuredContent === event.structuredContent) return;
+    // Replacing content drops structuredContent unless it is returned too.
+    return { content, details, structuredContent };
   });
   pi.on("session_tree", reset);
   pi.on("session_shutdown", () => { reset(); unregisterVault(); });

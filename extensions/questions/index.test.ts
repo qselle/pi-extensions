@@ -399,3 +399,23 @@ test("balances the Herdr wait when the questionnaire is aborted or the session c
     pi.fire("session_shutdown", {});
   }
 });
+
+test("redacts collected secret values from every tool result, including structured content", async () => {
+  const pi = new MockPi();
+  questionsExtension(pi as any, { isSubagentChild: false, telegramService: null });
+  const clean = { toolName: "bash", content: [{ type: "text", text: "redaction-only-secret" }], details: {}, isError: false };
+  expect(pi.fire("tool_result", clean)).toBeUndefined();
+  await pi.tool.execute("call", { questions: [{ id: "token", question: "Token?", secret: true }] }, new AbortController().signal, undefined, secretTerminalContext("redaction-only-secret"));
+
+  expect(pi.fire("tool_result", { ...clean, content: [{ type: "text", text: "nothing here" }] })).toBeUndefined();
+  expect(pi.fire("tool_result", {
+    ...clean,
+    details: { stdout: "token=redaction-only-secret" },
+    structuredContent: { rows: ["redaction-only-secret", 1] },
+  })).toEqual({
+    content: [{ type: "text", text: "[redacted]" }],
+    details: { stdout: "token=[redacted]" },
+    structuredContent: { rows: ["[redacted]", 1] },
+  });
+  pi.fire("session_shutdown", {});
+});

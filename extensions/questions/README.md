@@ -44,7 +44,7 @@ Replies must come from the configured chat, optional topic, and exact question m
 
 Set `secret: true` for masked terminal input. The tool result receives an opaque handle instead of the value. A later tool call can use that handle; the extension substitutes the value in memory before execution.
 
-Secret values are never persisted and handles expire on shutdown, branch change, or a new session start. Stale handles block the tool call. Tool output can still reveal a substituted value, so use commands that do not echo secrets. Secret questions are terminal-only; Telegram receives only a redacted notice.
+Secret values are never persisted and handles expire on shutdown, branch change, or a new session start. Stale handles block the tool call. Collected values are redacted as `[redacted]` from every tool result's content, details and structured content, so echoed secrets do not reach the transcript. Secret questions are terminal-only; Telegram receives only a redacted notice.
 
 ## Dependencies and limitations
 
@@ -53,3 +53,4 @@ Secret values are never persisted and handles expire on shutdown, branch change,
 - Terminal interaction is cross-platform. Telegram requires outbound HTTPS.
 - Freeform answers are limited to 4,000 characters.
 - Without a TUI or configured Telegram service, non-secret questions return an interruption instead of waiting. Secret questions always require the TUI.
+- Redaction matches exact values only; encoded or transformed secrets are not detected.
