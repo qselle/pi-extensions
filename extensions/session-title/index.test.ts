@@ -429,6 +429,9 @@ describe("statusText", () => {
     expect(statusText(config(), "Some Title", 2, undefined)).toContain("automatic: done (named)");
     expect(statusText(config({ enabled: false }), undefined, 0, undefined)).toContain("automatic: off");
   });
+  test("shows the default model when none is configured", () => {
+    expect(statusText(config(), undefined, 0, undefined)).toContain("model: mistral/mistral-medium-3.5 (if authenticated) → active session model");
+  });
   test("surfaces the last error", () => {
     expect(statusText(config(), undefined, 1, { error: "no credentials" })).toContain("last error: no credentials");
   });

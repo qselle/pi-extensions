@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildTitlePrompt, normalizeManualTitle, provisionalTitle } from "./engine.ts";
-import { requestTitle, type TitleResult } from "./request.ts";
+import { DEFAULT_TITLE_MODEL, requestTitle, type TitleResult } from "./request.ts";
 import { registerTabLink, type TabLinkOptions } from "./tab-link.ts";
 
 const CONFIG_FILE = "session-title.json";
@@ -289,11 +289,16 @@ export function statusText(
   const lines = [
     `title: ${title ?? "(none)"}`,
     `automatic: ${automatic}`,
-    `model: ${[...(config.models ?? (config.model ? [config.model] : [])), "active session model"].join(" → ")}`,
+    `model: ${[...modelOrder(config), "active session model"].join(" → ")}`,
     `prompts tracked: ${promptCount}`,
   ];
   if (last?.usage) lines.push(`last request: ${last.model ?? "?"} · $${last.usage.cost.toFixed(4)}`);
   if (last?.fallback) lines.push(`last fallback: ${last.fallback}`);
   if (last?.error) lines.push(`last error: ${last.error}`);
   return lines.join("\n");
+}
+
+function modelOrder(config: SessionTitleConfig): string[] {
+  const configured = config.models ?? (config.model ? [config.model] : []);
+  return configured.length > 0 ? configured : [`${DEFAULT_TITLE_MODEL} (if authenticated)`];
 }

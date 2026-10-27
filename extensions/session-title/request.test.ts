@@ -266,4 +266,22 @@ describe("requestTitle", () => {
     expect(seen.options.maxTokens).toBe(400 + 512);
     expect(result).toMatchObject({ title: "Pi Footer", turn: "t", focus: "f" });
   });
+
+  test("prefers the default title model over the active one only when it has credentials", async () => {
+    const used: string[] = [];
+    const completion = (async (model: any) => {
+      used.push(`${model.provider}/${model.id}`);
+      return { content: [{ type: "text", text: "Default Title" }] };
+    }) as never;
+    const ctx = context(["mistral/mistral-medium-3.5"]);
+    const authorized = new Set<string>();
+    ctx.modelRegistry.hasConfiguredAuth = ((model: any) => authorized.has(`${model.provider}/${model.id}`)) as never;
+    await requestTitle({ ctx, prompt: "p", completion });
+    authorized.add("mistral/mistral-medium-3.5");
+    const result = await requestTitle({ ctx, prompt: "p", completion });
+    await requestTitle({ ctx, overrides: ["openai/missing"], prompt: "p", completion });
+    expect(used).toEqual(["amazon-bedrock/opus-5", "mistral/mistral-medium-3.5", "amazon-bedrock/opus-5"]);
+    expect(result).toMatchObject({ model: "mistral/mistral-medium-3.5" });
+    expect(result.fallback).toBeUndefined();
+  });
 });

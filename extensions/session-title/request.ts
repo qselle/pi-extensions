@@ -13,6 +13,8 @@ const REASONING_TOKENS = 512;
 const THINKING_TOKENS = 2_048;
 /** A stalled model must not hold the title; the next model gets a turn. */
 export const REQUEST_TIMEOUT_MS = 20_000;
+/** Used before the active model when no title model is configured and it has credentials. */
+export const DEFAULT_TITLE_MODEL = "mistral/mistral-medium-3.5";
 
 export interface TitleUsage {
   input: number;
@@ -43,6 +45,7 @@ export interface TitleRequestContext {
   model?: { provider: string; id: string; reasoning?: boolean };
   modelRegistry: {
     find(provider: string, id: string): unknown;
+    hasConfiguredAuth?(model: never): boolean;
     streamSimple: ModelRegistry["streamSimple"];
   };
   sessionManager?: { getSessionId?: () => string | undefined };
@@ -79,6 +82,11 @@ export async function requestTitle(options: RequestTitleOptions): Promise<TitleR
     const model = separator > 0 ? ctx.modelRegistry.find(name.slice(0, separator), name.slice(separator + 1)) : undefined;
     if (!model) failures.push(`${name} unavailable`);
     else if (!models.some((known) => sameModel(known, model as any))) models.push(model);
+  }
+  if (preferred.length === 0) {
+    const [provider, id] = DEFAULT_TITLE_MODEL.split("/") as [string, string];
+    const fallback = ctx.modelRegistry.find(provider, id) as never;
+    if (fallback && ctx.modelRegistry.hasConfiguredAuth?.(fallback)) models.push(fallback);
   }
   const activeModel = ctx.model;
   if (activeModel && !models.some((model) => sameModel(model, activeModel))) models.push(activeModel);
