@@ -40,12 +40,14 @@ export function isRetryStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+/** Padded minor units keep the label width stable while it ticks: `2m 07s`, `1h 02m 03s`. */
 export function elapsed(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   if (seconds < 60) return `${seconds}s`;
+  const pad = (value: number) => String(value).padStart(2, "0");
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (minutes < 60) return `${minutes}m ${pad(seconds % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${pad(minutes % 60)}m ${pad(seconds % 60)}s`;
 }
 
 export function toolLabel(name: string): string {
