@@ -7,10 +7,14 @@ export const MAX_AGENT_NAME_CHARS = 64;
 export const MAX_TASK_CHARS = 16_000;
 export const MAX_MESSAGE_CHARS = 16_000;
 export const MAX_RESULT_BYTES = 24 * 1024;
+/** Closed children kept for list and transcript inspection; older ones are dropped, names stay reserved. */
+export const MAX_RETAINED_CLOSED = 20;
 /** Activity alone persists state at most this often; lifecycle transitions persist immediately. */
 export const PROGRESS_CHECKPOINT_MS = 60_000;
+/** Suspending waits this long for a running child to record its aborted turn before terminating it. */
+export const SUSPEND_ABORT_MS = 500;
 
-export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "stopped" | "closed";
+export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "interrupted" | "stopped" | "closed";
 /** Settled statuses that carry a final result for the parent. */
 export const FINAL_STATUSES: readonly AgentStatus[] = ["completed", "paused", "failed"];
 export type WaitMode = "any" | "all";
@@ -81,7 +85,8 @@ export interface CoordinatorHooks {
   onChange?(): void;
   /** Durable state should be saved: lifecycle transitions and throttled progress. */
   onPersist?(): void;
-  onCompletion?(agent: AgentSnapshot): void | Promise<void>;
+  /** `restored` results were saved before a reload or tree navigation and must not start a parent turn. */
+  onCompletion?(agent: AgentSnapshot, restored: boolean): void | Promise<void>;
   onUsage?(message: unknown, agent: AgentSnapshot): void;
   onReport?(report: ParentReport, agent: AgentSnapshot): void | Promise<void>;
 }
@@ -128,6 +133,8 @@ interface ManagedAgent extends AgentSnapshot {
   waiters: number;
   delivery: "none" | "automatic" | "wait";
   suppressCompletion: boolean;
+  /** The run the parent asked to interrupt; its settlement is not a final result. */
+  interruptRun?: string;
   generation: number;
   reportRecords: SavedReport[];
   seenReportIds: string[];
@@ -306,6 +313,14 @@ export class SubagentCoordinator {
     this.changed();
   }
 
+  /** Hands restored unread reports and finals to the parent passively; branch evidence prevents repeats. */
+  deliverRestored(): void {
+    for (const agent of this.ordered()) {
+      for (const record of agent.reportRecords) void this.deliverReport(agent, record);
+      if (agent.settled && FINAL_STATUSES.includes(agent.status)) void this.deliverCompletion(agent, true);
+    }
+  }
+
   async suspend(): Promise<SavedAgent[]> {
     this.active = false; this.generation++;
     const agents = [...this.agents.values()];
@@ -313,7 +328,10 @@ export class SubagentCoordinator {
     const outcomes = await Promise.allSettled(agents.map(async (agent) => {
       await agent.resuming?.catch(() => undefined);
       await agent.hibernating;
-      if (agent.client) { await agent.client.stop(); agent.client = undefined; }
+      if (agent.client) {
+        if (isActive(agent)) await abortWithin(agent.client, SUSPEND_ABORT_MS);
+        await agent.client.stop(); agent.client = undefined;
+      }
       this.captureTranscript(agent);
       if (!agent.checkpoint && !agent.cleanupDone) { await agent.cleanup(); agent.cleanupDone = true; }
       if (isActive(agent)) agent.status = "stopped";
@@ -421,12 +439,22 @@ export class SubagentCoordinator {
     if (cleared) this.persist();
     if (agent.status === "closed") throw new Error(`Subagent ${agent.name} is closed`);
     await agent.client?.clearQueue?.();
-    if (!agent.client || !isActive(agent)) return this.snapshot(agent);
-    await agent.client.abort();
-    await agent.client.clearQueue?.();
-    pushActivity(agent, "interrupt requested");
-    this.changed();
-    this.persist();
+    const client = agent.client, runId = agent.runId;
+    if (!client || !isActive(agent)) return this.snapshot(agent);
+    if (agent.status === "starting") throw new Error(`Subagent ${agent.name} is still starting; retry interrupt after spawn returns`);
+    agent.interruptRun = runId;
+    try {
+      await client.abort();
+    } catch (error) {
+      if (agent.interruptRun === runId) agent.interruptRun = undefined;
+      throw error;
+    }
+    await client.clearQueue?.();
+    // Pi settles before acknowledging the abort; a child that did not report it is idle now.
+    if (isActive(agent) && agent.runId === runId && agent.client === client) {
+      this.finishInterrupted(agent);
+      this.hibernate(agent);
+    }
     return this.snapshot(agent);
   }
 
@@ -437,7 +465,7 @@ export class SubagentCoordinator {
     const generation = this.generation;
     const targets = names && names.length > 0
       ? unique(names.map((name) => this.requireAgent(name)))
-      : this.ordered().filter((agent) => isActive(agent) || agent.delivery === "none" && agent.status !== "closed" || agent.reportRecords.some((record) => record.delivery === "none"));
+      : this.ordered().filter((agent) => isActive(agent) || agent.delivery === "none" && FINAL_STATUSES.includes(agent.status) || agent.reportRecords.some((record) => record.delivery === "none"));
     const occupied = targets.find((agent) => agent.waiters > 0);
     if (occupied) throw new Error(`Subagent ${occupied.name} already has an active wait`);
     const running = targets.filter(isActive);
@@ -687,7 +715,9 @@ export class SubagentCoordinator {
       return;
     }
     if (event.type === "agent_settled") {
-      this.finish(agent, !agent.error ? "completed" : isProviderLimitError(agent.error) ? "paused" : "failed", agent.error);
+      // A run that finished before the abort arrived (aborted: false) keeps its final.
+      if (agent.interruptRun === agent.runId && event.aborted !== false) this.finishInterrupted(agent);
+      else this.finish(agent, !agent.error ? "completed" : isProviderLimitError(agent.error) ? "paused" : "failed", agent.error);
       this.hibernate(agent);
     }
   }
@@ -711,7 +741,15 @@ export class SubagentCoordinator {
     agent.hibernating = operation;
   }
 
-  private finish(agent: ManagedAgent, status: "completed" | "paused" | "failed", error?: string, suppress = false): void {
+  /** An interrupted run keeps its conversation for send and delivers no completion. */
+  private finishInterrupted(agent: ManagedAgent): void {
+    if (agent.settled) return;
+    agent.error = undefined;
+    pushActivity(agent, "interrupted");
+    this.finish(agent, "interrupted", undefined, true);
+  }
+
+  private finish(agent: ManagedAgent, status: "completed" | "paused" | "failed" | "interrupted", error?: string, suppress = false): void {
     if (agent.settled || agent.status === "closed") return;
     agent.settled = true;
     agent.status = status;
@@ -724,11 +762,11 @@ export class SubagentCoordinator {
     queueMicrotask(() => void this.deliverCompletion(agent));
   }
 
-  private async deliverCompletion(agent: ManagedAgent): Promise<void> {
+  private async deliverCompletion(agent: ManagedAgent, restored = false): Promise<void> {
     if (!this.active || agent.generation !== this.generation || agent.suppressCompletion || agent.waiters > 0 || agent.delivery !== "none" || agent.status === "closed") return;
     agent.delivery = "automatic";
     try {
-      await this.options.hooks?.onCompletion?.(this.snapshot(agent));
+      await this.options.hooks?.onCompletion?.(this.snapshot(agent), restored);
     } catch {
       agent.delivery = "none";
     } finally { this.changed(); }
@@ -787,7 +825,15 @@ export class SubagentCoordinator {
     agent.closing = operation;
     return operation.finally(() => {
       if (agent.closing === operation) agent.closing = undefined;
+      this.trimClosed();
     });
+  }
+
+  private trimClosed(): void {
+    const closed = [...this.agents.values()]
+      .filter((agent) => agent.status === "closed" && agent.cleanupDone && !agent.client && !agent.closing)
+      .sort((left, right) => (left.endedAt ?? 0) - (right.endedAt ?? 0));
+    for (const agent of closed.slice(0, Math.max(0, closed.length - MAX_RETAINED_CLOSED))) this.agents.delete(agent.id);
   }
 
   private reserve(name: string): { generation: number; commit(): void; release(): void } {
@@ -924,10 +970,11 @@ export function isProviderLimitError(message: string): boolean {
     /\brate[ _-]?limit/,
     /\btoo many requests\b/,
     /\binsufficient[_ -]?quota\b/,
-    /\bquota\b.{0,80}\b(?:exceeded|exhausted|reached|limit)/,
+    /\b(?:quota|credits?|credit balance)\b.{0,80}\b(?:exceeded|exhausted|depleted|reached|too low|limit)/,
     /\b(?:exceeded|exhausted|reached)\b.{0,80}\bquota\b/,
     /\busage limit\b/,
-    /\b(?:daily|weekly|monthly|billing|spending) limit\b/,
+    /\b(?:daily|weekly|monthly) limit\b/,
+    /\b(?:billing|spending)(?: hard)? limit\b/,
     /\boverloaded/,
     /(?:^|\b(?:http|status|code|error)\s*:?\s*)429\b/,
   ].some((pattern) => pattern.test(text));
@@ -1034,6 +1081,16 @@ function positive(value: unknown): number {
 
 function unique(agents: ManagedAgent[]): ManagedAgent[] {
   return [...new Map(agents.map((agent) => [agent.id, agent])).values()];
+}
+
+/** A stuck or failing abort must not delay termination beyond `ms`. */
+async function abortWithin(client: AgentClient, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    client.abort().catch(() => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+  ]);
+  clearTimeout(timer);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

@@ -71,8 +71,8 @@ export function getPiCommand(args: string[]): { command: string; args: string[] 
     : { command: process.execPath, args };
 }
 
-export function subagentEnvironment(id: string): Record<string, string> {
-  return { [CHILD_MARKER]: "1", PI_SUBAGENT_PARENT_ID: id };
+export function subagentEnvironment(id: string, parentSessionId?: string): Record<string, string> {
+  return { [CHILD_MARKER]: "1", PI_SUBAGENT_PARENT_ID: id, ...parentSessionId ? { PI_SUBAGENT_PARENT_SESSION_ID: parentSessionId } : {} };
 }
 
 export function isSubagentProcess(): boolean {

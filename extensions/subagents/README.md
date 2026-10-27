@@ -12,7 +12,7 @@ The `subagents` tool supports:
 | `send` | Steer a running child or resume a settled, paused or stopped one, consuming queued messages |
 | `queue` | Store a message without starting or steering a child; consumed by the next send |
 | `read` | Retrieve the latest output and acknowledge an unread final |
-| `interrupt` | Stop the current child turn but keep its conversation |
+| `interrupt` | Stop the current child run without a completion; `send` resumes it |
 | `wait` | Wait for selected children without killing them on cancellation |
 | `list` | Show child state |
 | `close` | Stop a child, remove temporary context, and release capacity |
@@ -27,13 +27,13 @@ onto its schema:
 | Alias | Becomes |
 |---|---|
 | `action: "followup"` | `send` (steer if running, otherwise resume) |
-| `action: "message"` | `queue` |
+| `action: "message"` | `send` (steer) when the child is running, otherwise `queue` |
 | `context: "compacted"` / `"forked"` | `summary` / `fork` |
 | `agent_id` / `agent_ids` | `agent_name` / `agent_names` |
 | `name`, or a one-entry `agent_names`, on send/queue/read/interrupt/close | `agent_name` |
 | `agent_name` or `name` on wait | `agent_names: [name]` |
 | `return_when: "any" \| "all"` | `wait_mode` |
-| `timeout_ms` outside 0–3,600,000 | clamped into range |
+| `timeout_ms` outside the configured wait bounds | clamped into range |
 
 ### Statuses
 
@@ -41,8 +41,9 @@ onto its schema:
 |---|---|
 | `starting`, `running` | Child process is working |
 | `completed` | Run finished; result delivered once |
-| `paused` | Run ended on a provider quota, rate-limit (429) or overload error; the conversation is kept. `send` resumes it after the limit resets |
+| `paused` | Run ended on a provider quota, credit, billing, rate-limit (429) or overload error; the conversation is kept. `send` resumes it after the limit resets |
 | `failed` | Run or process failed |
+| `interrupted` | Stopped by `interrupt`; no completion is delivered and late child events are ignored. `send` resumes it |
 | `stopped` | Restored after reload, quit or tree navigation; `send` resumes it |
 | `closed` | Closed; no longer resumable |
 
@@ -58,13 +59,13 @@ replacements.
 - `summary`: a bounded model-generated parent handoff.
 - `fork`: a compaction-aware copy of the active parent conversation.
 
-Children inherit the working directory, active tools except `subagents`, project instructions, model, and thinking level. They also receive the child-only `report_to_parent` tool. `model` and `thinking` may be overridden per spawn. Recursive child spawning is disabled.
+Children inherit the working directory, active tools except `subagents`, project instructions, model, and thinking level. They also receive the child-only `report_to_parent` tool. `model` and `thinking` may be overridden per spawn. Recursive child spawning is disabled. Child sessions are named `Subagent · <name>`, and the child process receives the parent session id in `PI_SUBAGENT_PARENT_SESSION_ID`.
 
 Children share the working tree. Parallel writers must use disjoint files; the parent is responsible for reviewing their changes.
 
 ### Results and persistence
 
-Completed children deliver one bounded result to the parent unless a `wait` call already owns it. Running children appear in [`overlay-stack`](../overlay-stack/), and `/subagents` opens a live transcript. Each child response stores its usage as a non-context parent session entry. The [`footer`](../footer/) adds these deltas to its main token/cache/cost counters, including after reload; context percentage remains specific to the parent. Omitted or invalid metrics remain unknown rather than being saved as zero. Child state snapshots and completion cards do not add usage a second time.
+Completed children deliver one bounded result to the parent unless a `wait` call already owns it. Running children and children with unread results appear in [`overlay-stack`](../overlay-stack/), whose title counts them (`✉ N unread`), and `/subagents` opens a live transcript. Each child response stores its usage as a non-context parent session entry. The [`footer`](../footer/) adds these deltas to its main token/cache/cost counters, including after reload; context percentage remains specific to the parent. Omitted or invalid metrics remain unknown rather than being saved as zero. Child state snapshots and completion cards do not add usage a second time.
 
 Children can call `report_to_parent({ message })` for a material interim finding
 that unblocks or redirects the parent. Ordinary commentary remains local. Reports
@@ -81,7 +82,7 @@ Already finished targets return immediately in an `any` wait. Default targets
 include running children and retained unread results. Only one wait may own a
 child at once; cancellation and timeouts leave child processes running.
 `timeout_ms` defaults to 300,000 (5 minutes) and is clamped to at most 3,600,000
-(1 hour). A timed-out result states that the children keep working and that the
+(1 hour); both are configurable. A timed-out result states that the children keep working and that the
 model must not interrupt, close, or ask healthy children to finalize because of
 the timeout.
 
@@ -96,7 +97,7 @@ a provider and model.
 
 The child viewer uses the same Markdown, code rendering, search and navigation as `/transcript`. `/` searches, `n`/`N` steps through matches, `t` toggles thinking, Home goes to the task, and End resumes following. Scrolling pauses following. The full-width panel fits narrow terminals, and saved fallback results remain readable when a detailed transcript is unavailable.
 
-Use `/subagents <name>` to open a child directly; command completion offers current names. With no name, `/subagents` opens the picker.
+Use `/subagents <name>` (alias `/agents`) to open a child directly; command completion offers current names. With no name, `/subagents` opens the picker.
 
 From a completely empty editor, Right opens the first active child, or the first
 retained open child when none are active. Inside the viewer, Left/Right move
@@ -117,11 +118,13 @@ queue, interrupt, report, close and suspend. Child tool activity alone saves sta
 at most once a minute, and child session files are reread only when the child
 has produced events since the last read.
 
-Closed-child transcripts retain the latest 500 entries in memory until the parent
-runtime ends. Persisted parents keep child conversation files under
+The 20 most recently closed children stay listed and inspectable, each keeping its
+latest 500 transcript entries in memory; older closed children are dropped, and
+their names stay reserved. Persisted parents keep child conversation files under
 `<parent-session-file>.subagents/`, with state and pinned conversation leaves in
-non-context parent entries. Reload/quit stop child processes. Reopening restores
-stopped children and unread final results; it never starts a model call. `send`
+non-context parent entries. Reload/quit stop child processes. Reopening or tree
+navigation restores stopped children and adds unread reports and final results to
+the parent as passive messages; it never starts a model call. `send`
 explicitly resumes from a copy of the saved conversation. Older branch checkpoints
 do not include later child turns. `/subagents` can inspect saved transcripts.
 
@@ -131,8 +134,8 @@ Queue-only messages survive a normal reload. `interrupt` discards this inbox and
 clears the RPC input queue before and after aborting. Submitted queued messages
 are removed before RPC dispatch, so an ambiguous failure cannot replay them.
 Automatic completions count as delivered after the message actually appears in
-the parent branch; a queued but unpersisted notification remains readable after
-reload. `read`/`wait` retrieve retained results without an automatic wakeup.
+the parent branch; a queued but unpersisted notification is added again, passively,
+after reload. `read`/`wait` retrieve retained results without an automatic wakeup.
 
 Reports follow the same restoration rule: actual parent message or `read`/`wait`
 entries acknowledge delivery, not an optimistic queued flag. The latest eight
@@ -149,19 +152,35 @@ the parent session for recovery and can be removed when that session is discarde
 
 ## Configuration
 
-Set the open-child limit before starting Pi:
+Optional `subagents.json` in Pi's agent directory (`~/.pi/agent/` or
+`$PI_CODING_AGENT_DIR`) is read when the extension loads, including after `/reload`.
+The defaults are:
+
+```json
+{
+  "wait": { "minimumMs": 0, "defaultMs": 300000, "maximumMs": 3600000 },
+  "maxOpen": 6
+}
+```
+
+Wait bounds must satisfy 0 ≤ minimum ≤ default ≤ maximum ≤ 3,600,000; otherwise the
+whole `wait` section falls back to the defaults. `timeout_ms` is clamped into these
+bounds, and the tool description states the configured default and maximum.
+A missing or malformed file uses the defaults.
+
+`maxOpen` accepts 1–16. A valid `PI_SUBAGENT_MAX_OPEN` overrides it:
 
 ```bash
 export PI_SUBAGENT_MAX_OPEN=4
 ```
 
-Accepted values are 1–16; the default is 6. The limit counts live child processes: starting and running children, plus settled children of in-memory parents. Hibernated, paused and restored children consume no process capacity until resumed. At most 16 child conversations remain retained in a session; close one before adding more.
+The open-child limit counts live child processes: starting and running children, plus settled children of in-memory parents. Hibernated, paused and restored children consume no process capacity until resumed. At most 16 child conversations remain retained in a session; close one before adding more.
 
-Tasks and follow-ups are limited to 16,000 characters; wait timeouts to 1 hour (default 5 minutes); queued messages to 8 per child; final results to 24 KiB; combined tool output to 48 KiB.
+Tasks and follow-ups are limited to 16,000 characters; wait timeouts to the configured bounds (default 5 minutes, at most 1 hour); queued messages to 8 per child; final results to 24 KiB; combined tool output to 48 KiB.
 
 RPC records above 2 MiB are discarded while streaming instead of failing the child. Pi's `agent_end` repeats every message of a run, so long runs exceed this routinely. The child's activity notes each skipped record type and size; an oversized assistant `message_end` replaces the retained result with a note pointing to the child session file, and an oversized command response rejects only that command.
 
-`close`, reload, session replacement, and Pi shutdown terminate child process trees. One process-wide exit handler, shared across `/reload`, kills remaining child process groups and is removed when none are live. Reload/quit retain durable session checkpoints; close removes the current child copy. RPC dialogs are declined because children have no interactive UI.
+`close`, reload, session replacement, and Pi shutdown terminate child process trees. Reload, quit and tree navigation first ask running children to abort, waiting at most 500 ms, so they record the interrupted turn. One process-wide exit handler, shared across `/reload`, kills remaining child process groups and is removed when none are live. Reload/quit retain durable session checkpoints; close removes the current child copy. RPC dialogs are declined because children have no interactive UI.
 
 ## Dependencies and limitations
 

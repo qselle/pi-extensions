@@ -5,6 +5,7 @@ import type { AgentClient, AgentClientOptions, RpcEvent } from "./rpc.ts";
 import { SUBAGENT_STATE } from "./persistence.ts";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from "./arguments.ts";
+import { DEFAULT_SUBAGENTS_CONFIG, type SubagentsConfig } from "./config.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -40,7 +41,8 @@ class MockPi {
   events = { emit() {}, on() { return () => {}; } };
   on(event: string, handler: Handler) { this.handlers.set(event, [...this.handlers.get(event) ?? [], handler]); }
   registerTool(tool: any) { this.tools.set(tool.name, tool); }
-  registerCommand() {}
+  commands = new Map<string, any>();
+  registerCommand(name: string, command: unknown) { this.commands.set(name, command); }
   registerMessageRenderer() {}
   appendEntry(customType: string, data: unknown) { this.entries.push({ type: "custom", customType, data }); }
   sendMessage(message: unknown, options: unknown) { this.sent.push({ message, options }); }
@@ -61,13 +63,16 @@ afterEach(() => {
   }
 });
 
-async function setup() {
+async function setup(config: SubagentsConfig = DEFAULT_SUBAGENTS_CONFIG) {
   // The parent side must load even when this test runs inside a child agent.
   for (const key of childEnvironment) delete process.env[key];
   const pi = new MockPi();
   const clients: FakeClient[] = [];
   let checkpointReads = 0;
-  const createContext = async (_ctx: unknown, _mode: unknown, _summary?: string, resume?: unknown): Promise<ChildContext> => {
+  let card: any;
+  const contextNames: (string | undefined)[] = [];
+  const createContext = async (_ctx: unknown, _mode: unknown, _summary?: string, resume?: unknown, name?: string): Promise<ChildContext> => {
+    contextNames.push(name);
     const directory = `pi-subagent-context-${clients.length}`;
     return {
       directory,
@@ -81,7 +86,8 @@ async function setup() {
   const coordinator = registerSubagents(pi as any, {
     createClient: (options) => { const client = new FakeClient(options); clients.push(client); return client; },
     createContext: createContext as any,
-    registerCard: (() => ({ invalidate() {}, unregister() {} })) as any,
+    registerCard: ((definition: any) => { card = definition; return { invalidate() {}, unregister() {} }; }) as any,
+    config,
   })!;
   const ctx = {
     cwd: "/tmp/project",
@@ -95,8 +101,30 @@ async function setup() {
   const tool = pi.tools.get("subagents");
   const call = (args: Record<string, unknown>, signal?: AbortSignal) =>
     tool.execute("call", tool.prepareArguments ? tool.prepareArguments(args) : args, signal, undefined, ctx);
-  return { pi, ctx, tool, call, clients, coordinator, reads: () => checkpointReads };
+  return { pi, ctx, tool, call, clients, coordinator, contextNames, card: () => card, reads: () => checkpointReads };
 }
+
+test("the overlay counts unread results and hides once they are consumed", async () => {
+  const { call, clients, card } = await setup();
+  const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+  await call({ action: "spawn", name: "Scout", task: "Look" });
+  const waiting = call({ action: "wait", agent_name: "Scout", wake_on: "final" });
+  clients[0]!.emit({ type: "tool_execution_end", toolName: "report_to_parent", toolCallId: "r1", isError: false,
+    result: { content: [], details: { version: 1, report: { id: "r1", message: "Found it", createdAt: 1 } } } });
+  await Bun.sleep(0);
+  expect(card().title(theme)).toBe(" Subagents ● 1 running · ✉ 1 unread ");
+  clients[0]!.finish("Done");
+  await waiting;
+  expect(card().visible()).toBe(false);
+  expect(card().title(theme)).toBe(" Subagents ● 0 running ");
+});
+
+test("child sessions carry the subagent name and link to the parent session", async () => {
+  const { call, clients, contextNames } = await setup();
+  await call({ action: "spawn", name: "Scout", task: "Look" });
+  expect(contextNames).toEqual(["Scout"]);
+  expect(clients[0]!.options.env).toMatchObject({ PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_SESSION_ID: "parent" });
+});
 
 test("aliases from other agent tool sets map onto the published schema", async () => {
   const { tool } = await setup();
@@ -121,11 +149,14 @@ test("aliases from other agent tool sets map onto the published schema", async (
   expect(tool.parameters.properties.timeout_ms.maximum).toBe(3_600_000);
 });
 
-test("followup steers or resumes and message only queues", async () => {
-  const { call, clients } = await setup();
+test("followup steers or resumes; message steers a running child and otherwise queues", async () => {
+  const { pi, call, clients } = await setup();
   await call({ action: "spawn", name: "Worker", task: "Work" });
   await call({ action: "followup", agent_name: "Worker", message: "Also check tests" });
-  expect(clients[0]!.steers).toEqual(["Also check tests"]);
+  const steered = await call({ action: "message", agent_id: "worker", message: "Prefer the new API" });
+  expect(steered.details.action).toBe("send");
+  expect(clients[0]!.steers).toEqual(["Also check tests", "Prefer the new API"]);
+  expect(pi.commands.get("agents").handler).toBe(pi.commands.get("subagents").handler);
   clients[0]!.finish("done");
   await Bun.sleep(0);
   const queued = await call({ action: "message", agent_id: "Worker", message: "Context for later" });
@@ -159,6 +190,20 @@ test("wait defaults to five minutes, clamps long timeouts and honours return_whe
   expect(seen.at(-1)).toBe(MAX_WAIT_MS);
 });
 
+test("configured wait bounds shape the schema, description, clamping and default", async () => {
+  const { tool, call, coordinator } = await setup({ wait: { minimumMs: 1_000, defaultMs: 60_000, maximumMs: 120_000 }, maxOpen: 1 });
+  expect(tool.parameters.properties.timeout_ms).toMatchObject({ minimum: 1_000, maximum: 120_000 });
+  expect(tool.description).toContain("Wait times out after 1 minute by default, at most 2 minutes.");
+  expect(tool.prepareArguments({ action: "wait", timeout_ms: 5 }).timeout_ms).toBe(1_000);
+  expect(tool.prepareArguments({ action: "wait", timeout_ms: 600_000 }).timeout_ms).toBe(120_000);
+  const seen: number[] = [];
+  (coordinator as any).wait = async (_names: unknown, timeout: number) => { seen.push(timeout); return { agents: [], timedOut: false, interrupted: false, alreadyReportedIds: [] }; };
+  await call({ action: "wait" });
+  expect(seen).toEqual([60_000]);
+  await call({ action: "spawn", name: "One", task: "Work" });
+  await expect(call({ action: "spawn", name: "Two", task: "Work" })).rejects.toThrow("At most 1");
+});
+
 test("a timed-out wait tells the model not to stop healthy children", async () => {
   const { call, clients } = await setup();
   await call({ action: "spawn", name: "Slow", task: "Take a while" });
@@ -188,6 +233,41 @@ test("a rate-limited child pauses, stops its process and resumes the same sessio
   const session = (client: FakeClient) => client.options.args[client.options.args.indexOf("--session") + 1];
   expect(session(clients[1]!)).toBe(session(clients[0]!));
   expect(clients[1]!.prompts).toEqual(["Limits reset"]);
+  await pi.emit("session_shutdown", { reason: "quit" }, {});
+});
+
+test("reopening delivers an unacknowledged final passively and only once", async () => {
+  const { pi, ctx, call, clients } = await setup();
+  await call({ action: "spawn", name: "Done", task: "Finish" });
+  clients[0]!.finish("Final answer");
+  await Bun.sleep(0);
+  expect(pi.sent.map((sent) => sent.options)).toEqual([{ deliverAs: "steer", triggerTurn: true }]);
+  // The live notification never reached the branch, so the result is still unread.
+  await pi.emit("session_shutdown", { reason: "reload" }, ctx);
+  await pi.emit("session_start", { reason: "reload" }, ctx);
+  await Bun.sleep(0);
+  expect(pi.sent).toHaveLength(2);
+  expect(pi.sent[1]!.options).toEqual({ triggerTurn: false });
+  expect(pi.sent[1]!.message.details).toMatchObject({ name: "Done", status: "completed", output: "Final answer" });
+
+  (pi.entries as any[]).push({ type: "custom_message", customType: pi.sent[1]!.message.customType, details: pi.sent[1]!.message.details });
+  await pi.emit("session_shutdown", { reason: "reload" }, ctx);
+  await pi.emit("session_start", { reason: "reload" }, ctx);
+  await Bun.sleep(0);
+  expect(pi.sent, "branch evidence prevents a repeat").toHaveLength(2);
+  await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+});
+
+test("interrupt keeps the child resumable without a completion message", async () => {
+  const { pi, call, clients } = await setup();
+  await call({ action: "spawn", name: "Long", task: "Work" });
+  const result = await call({ action: "interrupt", agent_name: "Long" });
+  clients[0]!.emit({ type: "agent_settled", aborted: true });
+  await Bun.sleep(0);
+  expect(result.content[0].text).toBe("Interrupted Long; send resumes its conversation.");
+  expect(result.details.agents[0].status).toBe("interrupted");
+  expect(pi.sent).toEqual([]);
+  expect(pi.stateEntries().at(-1)!.data.agents[0].agent.status).toBe("interrupted");
   await pi.emit("session_shutdown", { reason: "quit" }, {});
 });
 

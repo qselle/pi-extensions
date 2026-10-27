@@ -35,9 +35,11 @@ async function verify() {
     });
     const ctx = { cwd: root, sessionManager: parent };
 
-    const fresh = await createChildContext(ctx, "fresh");
+    const fresh = await createChildContext(ctx, "fresh", undefined, undefined, "Scout");
     const freshSession = SessionManager.open(fresh.sessionFile, fresh.directory, root);
     if (freshSession.buildSessionContext().messages.length !== 0) throw new Error("fresh context inherited parent messages");
+    if (freshSession.getSessionName() !== "Subagent · Scout") throw new Error("child session is not named after the subagent");
+    if (fresh.initialEntryCount !== freshSession.getEntries().length) throw new Error("session name is not part of the inherited prefix");
     const freshDir = fresh.directory;
     await fresh.cleanup();
     if (existsSync(freshDir)) throw new Error("fresh context cleanup failed");

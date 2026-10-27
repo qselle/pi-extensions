@@ -11,7 +11,7 @@ export function restoreAgents(entries: readonly any[]): SavedAgent[] {
     const a = row?.agent, r = row?.resume;
     if (!a || typeof a.id !== "string" || a.id.length > 100 || typeof a.name !== "string" || !a.name.trim() || a.name.length > 64 || names.has(a.name.toLowerCase())
       || typeof a.task !== "string" || a.task.length > 16000 || typeof a.cwd !== "string" || a.cwd.length > 4096
-      || !["fresh", "summary", "fork"].includes(a.contextMode) || !["starting", "running", "completed", "paused", "failed", "stopped"].includes(a.status)
+      || !["fresh", "summary", "fork"].includes(a.contextMode) || !["starting", "running", "completed", "paused", "failed", "interrupted", "stopped"].includes(a.status)
       || !Number.isFinite(a.startedAt) || (a.createdAt !== undefined && !Number.isFinite(a.createdAt))
       || typeof a.output !== "string" || a.output.length > 32768
       || (a.error !== undefined && (typeof a.error !== "string" || a.error.length > 8192))

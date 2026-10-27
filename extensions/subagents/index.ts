@@ -19,7 +19,6 @@ import {
   type ParentSummarizer,
 } from "./context.ts";
 import {
-  DEFAULT_MAX_OPEN_AGENTS,
   MAX_MESSAGE_CHARS,
   MAX_TASK_CHARS,
   SubagentCoordinator,
@@ -38,7 +37,8 @@ import {
   type AgentClientFactory,
 } from "./rpc.ts";
 import { resolveRuntimeSelection } from "./runtime-selection.ts";
-import { DEFAULT_WAIT_MS, MAX_WAIT_MS, prepareSubagentArguments, waitTimeout } from "./arguments.ts";
+import { prepareSubagentArguments, waitTimeout, type WaitBounds } from "./arguments.ts";
+import { loadSubagentsConfig, type SubagentsConfig } from "./config.ts";
 import { REPORT_MESSAGE_TYPE, REPORT_TOOL_NAME, decodeParentReport, registerChildReporter, renderParentReport } from "./report.ts";
 import { SharedWork } from "./shared-work.ts";
 import { ChildTranscriptBrowser, navigableAgents } from "./transcript.ts";
@@ -69,6 +69,7 @@ export interface SubagentsExtensionOptions {
   summarizeContext?: ParentSummarizer;
   registerCard?: typeof registerOverlayCard;
   maxOpenAgents?: number;
+  config?: SubagentsConfig;
 }
 
 const ActionSchema = StringEnum(["spawn", "send", "queue", "read", "interrupt", "wait", "list", "close"] as const);
@@ -76,7 +77,7 @@ const ContextSchema = StringEnum(["fresh", "summary", "fork"] as const);
 const ThinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 const WaitModeSchema = StringEnum(["any", "all"] as const);
 
-const Parameters = Type.Object({
+const parametersFor = (wait: WaitBounds) => Type.Object({
   action: ActionSchema,
   name: Type.Optional(Type.String({ maxLength: 64, description: "Unique human-readable name for spawn" })),
   task: Type.Optional(Type.String({ maxLength: MAX_TASK_CHARS, description: "Concrete delegated task for spawn" })),
@@ -88,7 +89,7 @@ const Parameters = Type.Object({
   agent_names: Type.Optional(Type.Array(Type.String(), { description: "Names to wait for; defaults to running children and unread results" })),
   wait_mode: Type.Optional(WaitModeSchema),
   wake_on: Type.Optional(StringEnum(["any", "final"] as const, { description: "For wait_mode any: final (default) waits for a final; any also wakes for an explicit interim report. Ordinary commentary never wakes wait." })),
-  timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout; default ${DEFAULT_WAIT_MS} (5 minutes), maximum ${MAX_WAIT_MS} (1 hour)` })),
+  timeout_ms: Type.Optional(Type.Integer({ minimum: wait.minimumMs, maximum: wait.maximumMs, description: `Wait timeout; default ${wait.defaultMs} (${durationWords(wait.defaultMs)}), maximum ${wait.maximumMs} (${durationWords(wait.maximumMs)})` })),
 });
 
 export default function registerSubagents(
@@ -101,7 +102,8 @@ export default function registerSubagents(
   const createContext = options.createContext ?? createChildContext;
   const summarizeContext = options.summarizeContext ?? summarizeParent;
   const registerCard = options.registerCard ?? registerOverlayCard;
-  const maxOpenAgents = options.maxOpenAgents ?? configuredMaxOpenAgents();
+  const config = options.config ?? loadSubagentsConfig();
+  const maxOpenAgents = options.maxOpenAgents ?? config.maxOpen;
   const summaryWork = new SharedWork<string>();
   let card: ReturnType<typeof registerOverlayCard>;
   let activeContext: ExtensionContext | undefined;
@@ -136,14 +138,14 @@ export default function registerSubagents(
       );
     }
 
-    const childContext = await createContext(ctx, request.contextMode, summary, request.resume);
+    const childContext = await createContext(ctx, request.contextMode, summary, request.resume, request.name);
     try {
       const invocation = getPiCommand(buildChildArgs(pi, ctx, childContext, request));
       const clientOptions = {
         command: invocation.command,
         args: invocation.args,
         cwd: request.cwd,
-        env: subagentEnvironment(request.name),
+        env: subagentEnvironment(request.name, ctx.sessionManager.getSessionId?.()),
       };
       const client = createClient(clientOptions);
       return {
@@ -174,13 +176,13 @@ export default function registerSubagents(
         const signature = JSON.stringify(agents);
         if (signature !== lastCheckpoint) { lastCheckpoint = signature; pi.appendEntry(SUBAGENT_STATE, { version: 1, agents }); }
       },
-      onCompletion: (agent) => {
+      onCompletion: (agent, restored) => {
         pi.sendMessage({
           customType: COMPLETION_MESSAGE_TYPE,
           content: completionContext(agent),
           display: true,
           details: agent,
-        }, { deliverAs: "steer", triggerTurn: true });
+        }, restored ? { triggerTurn: false } : { deliverAs: "steer", triggerTurn: true });
       },
       onUsage: (message, agent) => {
         const record = usageRecord(message, agent);
@@ -204,13 +206,14 @@ export default function registerSubagents(
     minBodyHeight: 3,
     minTerminalWidth: 90,
     minTerminalHeight: 12,
-    visible: () => coordinator.list().some(isActive),
+    visible: () => coordinator.list().some((agent) => isActive(agent) || agent.unread),
     title: (theme) => {
-      const count = coordinator.list().filter(isActive).length;
-      return `${theme.bold(" Subagents ")}${theme.fg("accent", `● ${count} running `)}`;
+      const agents = coordinator.list();
+      const running = agents.filter(isActive).length, unread = agents.filter((agent) => agent.unread).length;
+      return `${theme.bold(" Subagents ")}${theme.fg("accent", `● ${running} running${unread ? ` · ✉ ${unread} unread` : ""} `)}`;
     },
     renderBody: (width, maxHeight, theme) =>
-      renderSubagentsOverlay(coordinator.list().filter(isActive), width, maxHeight, theme),
+      renderSubagentsOverlay(coordinator.list().filter((agent) => isActive(agent) || agent.unread), width, maxHeight, theme),
   });
 
   pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, (message, renderOptions, theme) => {
@@ -234,7 +237,7 @@ export default function registerSubagents(
       "Coordinate bounded, persistent child agents in isolated Pi sessions.",
       "Actions: spawn, send, queue, read, interrupt, wait, list, close. Queue stores a message without starting or steering; send consumes it. Send steers a running child or resumes a settled, paused, or stopped one. Read retrieves the latest result. Settled children stop their process and keep their conversation; reload/quit also stop processes and retain conversations.",
       "Spawn returns immediately; completions are delivered automatically.",
-      "Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after 5 minutes by default, at most 1 hour.",
+      `Children can report material interim findings without starting a parent turn. Wait defaults to finals; wake_on any also accepts explicit reports, and wait_mode all waits for every selected final. Wait times out after ${durationWords(config.wait.defaultMs)} by default, at most ${durationWords(config.wait.maximumMs)}.`,
       "Children inherit the current model, thinking level, active tools, working directory, and project instructions.",
       "Spawn may override model and thinking for a clear task-specific reason.",
       "Context defaults to fresh; summary provides a compact handoff and fork copies the active parent conversation.",
@@ -252,8 +255,14 @@ export default function registerSubagents(
       "Close completed subagents after collecting final results when no follow-up is needed; settled children stop their process but keep a retained conversation slot.",
       "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
-    parameters: Parameters,
-    prepareArguments: prepareSubagentArguments,
+    parameters: parametersFor(config.wait),
+    prepareArguments: (raw) => prepareSubagentArguments(raw, {
+      wait: config.wait,
+      isRunning: (name) => {
+        const key = name.trim().toLocaleLowerCase();
+        return coordinator.list().some((agent) => isActive(agent) && (agent.name.toLocaleLowerCase() === key || agent.id === name));
+      },
+    }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.action === "spawn") {
         const contextMode = (params.context ?? "fresh") as ContextMode;
@@ -289,10 +298,12 @@ export default function registerSubagents(
       }
       if (params.action === "interrupt") {
         const agent = await coordinator.interrupt(params.agent_name ?? "");
-        return toolResult("interrupt", [agent], `Interrupt requested for ${agent.name}.`);
+        return toolResult("interrupt", [agent], agent.status === "interrupted"
+          ? `Interrupted ${agent.name}; send resumes its conversation.`
+          : `${agent.name} is ${agent.status}; no run was active. Queued messages were cleared.`);
       }
       if (params.action === "wait") {
-        const timeout = waitTimeout(params.timeout_ms);
+        const timeout = waitTimeout(params.timeout_ms, config.wait);
         const waited = await coordinator.wait(
           params.agent_names,
           timeout,
@@ -408,14 +419,16 @@ export default function registerSubagents(
     }
   };
 
+  const completeNames = (prefix: string) => {
+    const names = coordinator.list().map((agent) => agent.name).filter((name) => name.toLowerCase().startsWith(prefix.toLowerCase()));
+    return names.length ? names.map((name) => ({ value: name, label: name })) : null;
+  };
   pi.registerCommand("subagents", {
     description: "Inspect child agents: /subagents [name], or Right from an empty editor",
-    getArgumentCompletions: (prefix) => {
-      const names = coordinator.list().map((agent) => agent.name).filter((name) => name.toLowerCase().startsWith(prefix.toLowerCase()));
-      return names.length ? names.map((name) => ({ value: name, label: name })) : null;
-    },
+    getArgumentCompletions: completeNames,
     handler: showTranscript,
   });
+  pi.registerCommand("agents", { description: "Alias for /subagents", getArgumentCompletions: completeNames, handler: showTranscript });
 
   const installNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -454,6 +467,7 @@ export default function registerSubagents(
     coordinator.restore(restoreAgents(ctx.sessionManager.getBranch()));
     lastCheckpoint = JSON.stringify(coordinator.checkpoint());
     restoring = false;
+    coordinator.deliverRestored();
     installNavigation(ctx);
   });
 
@@ -463,6 +477,7 @@ export default function registerSubagents(
     try { await coordinator.suspend(); } finally {
       activeContext = ctx; coordinator.restore(saved);
       lastCheckpoint = JSON.stringify(coordinator.checkpoint()); restoring = false;
+      coordinator.deliverRestored();
     }
   });
 
@@ -504,11 +519,12 @@ function buildChildArgs(pi: ExtensionAPI, ctx: any, context: ChildContext, reque
   return args;
 }
 
-function configuredMaxOpenAgents(): number {
-  const raw = process.env.PI_SUBAGENT_MAX_OPEN;
-  if (!raw) return DEFAULT_MAX_OPEN_AGENTS;
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 1 && value <= 16 ? value : DEFAULT_MAX_OPEN_AGENTS;
+/** Model-facing duration text, fixed for the process so the tool definition stays cacheable. */
+function durationWords(ms: number): string {
+  const [amount, unit] = ms >= 3_600_000 && ms % 3_600_000 === 0 ? [ms / 3_600_000, "hour"]
+    : ms >= 60_000 && ms % 60_000 === 0 ? [ms / 60_000, "minute"]
+      : ms % 1_000 === 0 ? [ms / 1_000, "second"] : [ms, "millisecond"];
+  return `${amount} ${unit}${amount === 1 ? "" : "s"}`;
 }
 
 function completionContext(agent: AgentSnapshot): string {
@@ -551,6 +567,7 @@ function formatAgent(agent: AgentSnapshot, includeOutput: boolean, includeReport
   if (agent.queued) lines.push(`queued: ${agent.queued} message(s); delivered only by send`);
   if (agent.unread) lines.push("unread result available: use read or wait");
   if (agent.status === "stopped") lines.push("stopped after session transition; send explicitly resumes the saved conversation");
+  if (agent.status === "interrupted") lines.push("interrupted by the parent; send resumes the conversation");
   if (agent.status === "paused") lines.push(PAUSED_GUIDANCE);
   if (agent.error) lines.push(`error: ${agent.error}`);
   if (includeOutput && agent.output) lines.push("", "result:", agent.output);
@@ -579,6 +596,7 @@ function statusSymbol(agent: AgentSnapshot): string {
   if (agent.status === "completed") return "✓";
   if (agent.status === "paused") return "‖";
   if (agent.status === "failed") return "×";
+  if (agent.status === "interrupted") return "↯";
   return "■";
 }
 

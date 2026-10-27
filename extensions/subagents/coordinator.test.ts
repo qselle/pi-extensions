@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
+  MAX_RETAINED_CLOSED,
   PROGRESS_CHECKPOINT_MS,
+  SUSPEND_ABORT_MS,
   SubagentCoordinator,
   isProviderLimitError,
   type AgentSnapshot,
@@ -198,6 +200,33 @@ test("report restoration trusts actual branch delivery evidence and keeps bounde
   await coordinator.shutdown();
 });
 
+test("restored unread reports and finals are delivered passively once", async () => {
+  const delivered: string[] = [];
+  const clients = new Map<string, FakeClient>();
+  const coordinator = new SubagentCoordinator({
+    createRuntime: async (request) => { const client = new FakeClient(); clients.set(request.name, client); return { client, cleanup: async () => {} }; },
+    hooks: { onCompletion: (agent, restored) => { delivered.push(`final ${agent.name} restored=${restored}`); }, onReport: (report) => { delivered.push(`report ${report.id}`); } },
+  });
+  coordinator.startSession();
+  await coordinator.spawn(request("Done"));
+  await coordinator.spawn(request("Busy"));
+  const waiting = coordinator.wait(["Done", "Busy"], 10_000, "all");
+  clients.get("Done")!.emit(reportEvent("finding"));
+  clients.get("Done")!.emit({ type: "agent_settled" });
+  await flushMicrotasks();
+  const saved = (await coordinator.suspend()).map((row) => ({ ...row, delivery: "none" as const, reports: row.reports!.map((record) => ({ ...record, delivery: "none" as const })) }));
+  await waiting;
+  expect(delivered).toEqual([]);
+
+  coordinator.restore(saved);
+  coordinator.deliverRestored();
+  coordinator.deliverRestored();
+  await flushMicrotasks();
+  expect(delivered).toEqual(["report finding", "final Done restored=true"]);
+  expect(coordinator.list().map((agent) => [agent.name, agent.status, agent.unread]).sort()).toEqual([["Busy", "stopped", false], ["Done", "completed", false]]);
+  await coordinator.shutdown();
+});
+
 test("reserves names and capacity before concurrent asynchronous startup", async () => {
   const gates = new Map<string, ReturnType<typeof deferred>>();
   const clients = new Map<string, FakeClient>();
@@ -265,6 +294,49 @@ test("supports persistent follow-ups, interrupt, usage, and close", async () => 
   expect(closed.status).toBe("closed");
   expect(client.stopCalls).toBe(1);
   expect(cleanups.get("Reviewer")).toBe(1);
+});
+
+test("interrupt ends the run as resumable without a completion, ignoring late events", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Worker"));
+  const client = clients.get("Worker")!;
+  client.abort = async () => {
+    client.abortCalls++;
+    client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "aborted", errorMessage: "Request was aborted" } });
+    client.emit({ type: "agent_settled", aborted: true });
+  };
+  const interrupted = await coordinator.interrupt("Worker");
+  client.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "late" }], stopReason: "stop" } });
+  client.emit({ type: "agent_settled", aborted: false });
+  await flushMicrotasks();
+  expect(interrupted).toMatchObject({ status: "interrupted", output: "partial", unread: false });
+  expect(interrupted.error).toBeUndefined();
+  expect(coordinator.list()[0]).toMatchObject({ status: "interrupted", output: "partial" });
+  expect(completions, "no completion card or parent turn").toEqual([]);
+  expect((await coordinator.wait(undefined, 0, "any")).agents, "default waits skip interrupted children").toEqual([]);
+
+  await coordinator.send("Worker", "Continue");
+  expect(client.promptCalls.at(-1)).toBe("Continue");
+  client.emit({ type: "agent_settled", aborted: false });
+  await flushMicrotasks();
+  expect(coordinator.list()[0]!.status).toBe("completed");
+  expect(completions).toEqual(["Worker"]);
+  await coordinator.shutdown();
+});
+
+test("a run that settles before the abort arrives keeps its final", async () => {
+  const { coordinator, clients, completions } = harness();
+  await coordinator.spawn(request("Fast"));
+  const client = clients.get("Fast")!;
+  client.abort = async () => {
+    client.abortCalls++;
+    client.emit({ type: "agent_settled", aborted: false });
+  };
+  const result = await coordinator.interrupt("Fast");
+  await flushMicrotasks();
+  expect(result.status).toBe("completed");
+  expect(completions).toEqual(["Fast"]);
+  await coordinator.shutdown();
 });
 
 test("conversation creation time survives follow-ups and saved-session recovery", async () => {
@@ -481,10 +553,12 @@ function durableHarness(maxOpenAgents = 6) {
 
 test("recognizes provider quota, rate-limit and overload errors", () => {
   for (const message of ["429 Too Many Requests", "HTTP 429", "Rate limit reached for requests", "rate_limit_error",
-    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached"]) {
+    "You exceeded your current quota", "insufficient_quota", "Overloaded", "overloaded_error: please retry", "Weekly usage limit reached",
+    "Your credit balance is too low to access the API", "Credits exhausted for this workspace", "Billing hard limit has been reached",
+    "You have reached your spending limit"]) {
     expect(isProviderLimitError(message), message).toBe(true);
   }
-  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted"]) {
+  for (const message of ["Invalid API key", "context length exceeded", "Tool failed at line 429", "Subagent aborted", "Credits: see LICENSE"]) {
     expect(isProviderLimitError(message), message).toBe(false);
   }
 });
@@ -599,6 +673,40 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+
+test("suspend aborts running children within a bounded grace before stopping them", async () => {
+  const { coordinator, clients } = harness();
+  await coordinator.spawn(request("Stuck"));
+  await coordinator.spawn(request("Idle"));
+  clients.get("Idle")!.emit({ type: "agent_settled" });
+  const calls: string[] = [];
+  const stuck = clients.get("Stuck")!;
+  stuck.abort = () => { calls.push("abort"); return new Promise<void>(() => {}); };
+  stuck.stop = async () => { calls.push("stop"); };
+  const started = performance.now();
+  const saved = await coordinator.suspend();
+  expect(performance.now() - started).toBeGreaterThanOrEqual(SUSPEND_ABORT_MS - 50);
+  expect(calls).toEqual(["abort", "stop"]);
+  expect(clients.get("Idle")!.abortCalls, "settled children are not aborted").toBe(0);
+  expect(saved.find((row) => row.agent.name === "Stuck")!.agent.status).toBe("stopped");
+});
+
+test("only the most recently closed children stay retained, and their names stay reserved", async () => {
+  let now = 0;
+  const coordinator = new SubagentCoordinator({ now: () => ++now, createRuntime: async () => ({ client: new FakeClient(), cleanup: async () => {} }) });
+  coordinator.startSession();
+  for (let index = 0; index < MAX_RETAINED_CLOSED + 2; index++) {
+    await coordinator.spawn(request(`child-${index}`));
+    await coordinator.close(`child-${index}`);
+  }
+  const names = coordinator.list().map((agent) => agent.name);
+  expect(names).toHaveLength(MAX_RETAINED_CLOSED);
+  expect(names).not.toContain("child-0");
+  expect(names).not.toContain("child-1");
+  expect(names).toContain("child-2");
+  await expect(coordinator.spawn(request("child-0"))).rejects.toThrow("already exists");
+  await coordinator.shutdown();
+});
 
 test("retained stopped conversations are bounded separately from running process capacity", async () => {
   const { coordinator } = harness(16);
