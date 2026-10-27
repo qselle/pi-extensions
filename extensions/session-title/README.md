@@ -1,12 +1,12 @@
 # session-title
 
-Names a session from its user prompts without changing a title you set manually.
+Names a session and keeps the name on its main goal, without changing a title you set manually.
 
 ## Usage
 
 ```text
-/title             Show title state, model, usage, and the last error
-/title now         Generate a new title now
+/title             Show title state, focus, model, usage, and the last error
+/title now         Retitle now and resume automatic updates
 /title set <text>  Set a title directly
 /rename <text>     Set a title directly, or omit text for a TUI prompt
 /title tab         Show Tab link's last status
@@ -15,19 +15,23 @@ Names a session from its user prompts without changing a title you set manually.
 /title tab off     Stop syncing this session; keep the current tab label
 ```
 
-1. The first meaningful request starts one bounded title request alongside the main agent request.
-2. The configured models (or the default model), then the active session model, generate a specific two-to-four-word noun phrase with thinking disabled.
-3. Once generation has been attempted, the extension does not retry or rename automatically. Existing and manually assigned titles always win; `/title now` remains an explicit override.
-4. Child agent processes (`PI_SUBAGENT_CHILD=1`) never title automatically, so they make no title request; `/title now` still works there.
+1. The first meaningful request of an unnamed session starts a draft title from that request alone, alongside the main agent request.
+2. After each finished turn, the title is refreshed from the requests since the last refresh, the final answer, and a running session focus. The focus and a one-sentence turn summary are saved as hidden session entries, so later titles track the session's main goal rather than its latest detail. They follow the branch across reloads, resumes, forks, and tree navigation, and stay out of model context.
+3. The configured models (or the default model), then the active session model, generate a specific two-to-four-word noun phrase, with thinking disabled unless configured.
+4. A manual name pauses automatic updates: `/rename`, `/title set`, or any name that differs from the last title this extension set, including one from another extension or after a restart. `/title now` retitles and resumes them.
+5. A refresh is skipped when no message arrived since the last title. `/reload` retitles once if turns finished since then.
+6. Child agent processes (`PI_SUBAGENT_CHILD=1`) never title automatically, so they make no title request; `/title now` still works there.
 
-Automatic titling never blocks the main turn. While it is pending, the shared footer shows `[naming…]`; an explicit `/title now` on a named session shows `[renaming…]`. The badge disappears on success, failure, cancellation, or shutdown.
+Automatic titling never blocks the main turn. While the first title is pending, the shared footer shows `[naming…]`; an explicit `/title now` on a named session shows `[renaming…]`; later automatic refreshes show nothing. The badge disappears on success, failure, cancellation, or shutdown.
 
 Manual names preserve your wording and punctuation (up to 120 characters),
 flatten whitespace, and strip terminal controls. Setting a name through `/rename`
 or `/title set` cancels any pending title request so a late model response cannot
 replace it. Cancelling the name prompt leaves the current name unchanged.
 
-The request sends only the triggering user request, uses a separate routing ID, and does not add anything to the main conversation or prompt cache. Failed, generic, or malformed results leave the session unnamed rather than showing a heuristic placeholder. Path-like results are rejected too: absolute, home-relative, `file://`, drive, and pasted-clipboard paths (`/tmp/x.png`, `~/Downloads/…`), or a single path token with a file extension (`src/index.ts`). A prompt that is only such a pasted path does not count as the first meaningful request.
+Title requests use a separate routing ID and add nothing to the main conversation or prompt cache. They receive bounded text only: user requests, the last assistant answer, the saved focus, and recent turn summaries, or a few earlier turns before any focus exists; never reasoning, tool calls, or tool output. Failed, generic, or malformed results leave the current name unchanged rather than showing a heuristic placeholder. Path-like results are rejected too: absolute, home-relative, `file://`, drive, and pasted-clipboard paths (`/tmp/x.png`, `~/Downloads/…`), or a single path token with a file extension (`src/index.ts`). Greetings and prompts that are only such a pasted path do not count as a meaningful request.
+
+Sessions named before this behavior have no saved title, so their names count as manual until `/title now`.
 
 ### Tab link for Herdr
 
@@ -63,8 +67,11 @@ independently.
 Optional `$PI_CODING_AGENT_DIR/session-title.json`:
 
 ```json
-{ "enabled": true, "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
+{ "enabled": true, "refresh": "turn", "models": ["mistral/mistral-medium-3.5", "openai/gpt-4.1-mini"], "tabLink": true }
 ```
+
+`refresh` is `turn` (default) to retitle after each finished turn, or `once` to
+keep only the first-request title: one attempt, no retry after a failure.
 
 `models` is an ordered preference list of `provider/model-id` entries. Each is
 tried in turn when unavailable, unauthenticated, failing, slower than 20 seconds,
@@ -94,7 +101,7 @@ Side-chat titles do not rename Herdr tabs.
 
 ## Dependencies and limitations
 
-- Uses Pi 1.0's extension, session-name, model, and lifecycle APIs including authenticated `ctx.modelRegistry.streamSimple()`.
+- Uses Pi 1.0's extension, session-name, custom-entry, model, and lifecycle APIs including authenticated `ctx.modelRegistry.streamSimple()`.
 - No third-party packages.
 - Requires access to the active model provider; a configured override may use another provider.
 - Cross-platform; title generation works outside the TUI.
