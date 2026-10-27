@@ -26,7 +26,9 @@ configured cancel key closes the viewer without touching the editor draft.
 Assistant Markdown and code use Pi's native renderer. Tool calls, results, shell
 output, and compaction summaries have distinct labels; failed calls use the error
 color. A tool call shows its purpose, then one line per argument cut at 600
-characters; edit replacements and written file content appear as counts. Images appear as placeholders, never base64 payloads. Hidden extension
+characters; edit replacements and written file content appear as counts.
+Model and thinking-level changes appear where they happened. Web-search source
+markers are hidden. Images appear as placeholders, never base64 payloads. Hidden extension
 context and internal state entries are excluded. The viewer does not modify
 history, submit prompts, or write transcript exports to disk.
 

@@ -54,3 +54,18 @@ test("tool calls show the purpose and one bounded line per argument", () => {
   ]);
   expect(JSON.stringify(blocks)).not.toContain("secret-old");
 });
+
+test("shows model and thinking-level changes and hides web-search source markers", () => {
+  const blocks = transcriptBlocks([
+    { id: "m", type: "model_change", provider: "mistral", modelId: "mistral-medium-3.5" },
+    { id: "t", type: "thinking_level_change", thinkingLevel: "high" },
+    { id: "u", type: "message", message: { role: "user", content: "hello<!-- pi:web-search-source:x --> world" } },
+    { id: "a", type: "message", message: { role: "assistant", content: [{ type: "text", text: "see [1]<!-- pi:web-search-query-count:2 -->" }] } },
+  ]);
+  expect(blocks.map((block) => [block.label, block.body])).toEqual([
+    ["Model", "mistral/mistral-medium-3.5"],
+    ["Thinking level", "high"],
+    ["You", "hello world"],
+    ["Assistant", "see [1]"],
+  ]);
+});
