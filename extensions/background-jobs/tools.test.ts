@@ -254,3 +254,24 @@ test("cancelling the initial bash wait stops the command", async () => {
   const jobs = (await run("job_list", {})).details.jobs;
   expect(["stopping", "stopped"]).toContain(jobs.at(-1).status);
 });
+
+test("waits stream output and labelled timers into the card, then freeze", async () => {
+  const { run, tools } = await session();
+  const id = (await run("bash", { command: "printf first; sleep 0.4; printf second; sleep 0.9", yield_ms: 0 })).details.id;
+  const updates: any[] = [];
+  const done = await run("job_wait", { id }, undefined, (value) => updates.push(value));
+  expect(updates.length).toBeGreaterThanOrEqual(2);
+  const last = updates.at(-1);
+  expect(last.details.wait).toMatchObject({ limitMs: MAX_WAIT_MS });
+  expect(last.details.wait.end).toBeUndefined();
+  expect(last.content[0].text).toMatch(/^● .+ · [1-9]s \/ 5m · job running [1-9]s\n/);
+  expect(last.content[0].text).not.toContain("Still running");
+  expect(updates.some((value) => outputOf(value).includes("first") && !outputOf(value).includes("second"))).toBe(true);
+  const live = tools.get("job_wait").renderResult(last, { expanded: false, isPartial: true }, plain, { isError: false }).render(120);
+  expect(live[0]).toMatch(/[1-9]s \/ 5m · job running [1-9]s$/);
+  // Progress never advances the agent's read position.
+  expect(done.details.wait.end).toBe("exit");
+  expect(outputOf(done)).toBe("firstsecond");
+  const card = tools.get("job_wait").renderResult(done, { expanded: false, isPartial: false }, plain, { isError: false });
+  expect(card.render(120)[0]).toMatch(/^  └ ✓ .+ · completed · \d+s · exit 0$/);
+});

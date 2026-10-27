@@ -157,6 +157,11 @@ action and purpose, then a gutter with the status line and the last four output
 rows. Expanding shows the full result. `job_list` shows a job count and one row
 per job.
 
+While a `job_wait` or `job_output` wait runs, its card streams new output and a
+once-per-second counter such as “27s / 5m · job running 13m”: the wait against
+its limit, then the job's runtime. The finished card shows the final snapshot
+and never changes afterwards. Live updates never advance the agent's cursor.
+
 ### Redaction
 
 Known questionnaire secret values are redacted from metadata and output before
@@ -167,7 +172,7 @@ remain known to that job during session teardown.
 
 ## Dependencies and limitations
 
-Foreground waits stream output at most ten times per second, with elapsed-time updates for quiet commands.
+Foreground and job waits stream output at most ten times per second, with elapsed-time updates for quiet commands.
 
 - Pi 1.0 public shell, tool, session, and overlay APIs; Node.js built-ins;
   [`node-pty`](https://github.com/microsoft/node-pty) 1.1.x for PTY jobs.

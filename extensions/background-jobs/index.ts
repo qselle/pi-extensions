@@ -73,6 +73,8 @@ interface ReadRequest {
   /** Advance the per-job agent cursor. UI-only reads leave it untouched. */
   track?: boolean;
   hint?: boolean;
+  /** A live card update: never tracked, hinted, or shown to the model. */
+  partial?: boolean;
   wait?: WaitInfo;
 }
 /** One bounded job_wait/job_output wait, observed at `observedAt`; `end` is unset while waiting. */
@@ -82,6 +84,40 @@ interface WaitInfo { startedAt: number; limitMs: number; observedAt: number; end
  * Explain a wait that ended for a reason other than the job itself. Otherwise an
  * interrupted wait reads like an empty poll, and a quiet job looks hung.
  */
+/** Compact duration for live wait counters: 27s, 5m, 13m10s, 1h2m. */
+const compact = (milliseconds: number) => {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60 ? `${seconds % 60}s` : ""}`;
+  return `${Math.floor(minutes / 60)}h${minutes % 60 ? `${minutes % 60}m` : ""}`;
+};
+/** Live updates show at most this many recent characters. */
+const PROGRESS_CHARS = 8192;
+
+/**
+ * Stream a foreground wait into its card: output bursts at most ten times per
+ * second and a once-per-second heartbeat for the elapsed counters. Returns a stop function.
+ */
+function streamProgress(jobs: JobService, id: string, onUpdate: ((value: any) => void) | undefined, build: () => any, signal?: AbortSignal): () => void {
+  if (!onUpdate) return () => {};
+  let stopped = false;
+  let refresh: ReturnType<typeof setTimeout> | undefined;
+  const publish = () => {
+    if (stopped || signal?.aborted) return;
+    try { onUpdate(build()); } catch { /* Rendering failure must not orphan a command. */ }
+  };
+  const unsubscribe = jobs.subscribe((snapshot) => {
+    if (snapshot.id !== id || refresh || stopped) return;
+    refresh = setTimeout(() => { refresh = undefined; publish(); }, 100);
+    refresh.unref?.();
+  });
+  const ticker = setInterval(publish, 1000);
+  ticker.unref?.();
+  publish();
+  return () => { stopped = true; unsubscribe(); clearTimeout(refresh); clearInterval(ticker); };
+}
+
 function waitNote(wait: WaitInfo): string | undefined {
   const waited = elapsed(wait.observedAt - wait.startedAt);
   if (wait.end === "interrupted") return `The user interrupted this wait after ${waited}; the job is still running, so this does not mean it hung.`;
@@ -146,14 +182,19 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     const from = request.cursor ?? agentCursors.get(id) ?? 0;
     const budget = request.budget ?? DEFAULT_OUTPUT_CHARS;
     const output = live ? source.window(id, from, budget, newest) : outputWindow(job.tail, job.outputEnd - job.tail.length, from, budget, newest);
-    if (request.track !== false) agentCursors.set(id, Math.max(agentCursors.get(id) ?? 0, output.cursor));
-    const header = [brief(job), `Job: ${id} · cursor: ${output.cursor}${output.more ? " · more output available" : ""}`];
+    if (request.track !== false && !request.partial) agentCursors.set(id, Math.max(agentCursors.get(id) ?? 0, output.cursor));
+    // A live wait labels both timers: the wait against its limit, and the job's runtime.
+    const waiting = request.wait && !request.wait.end ? request.wait : undefined;
+    const status = waiting
+      ? `${icons[job.status]} ${job.name} · ${compact(waiting.observedAt - waiting.startedAt)} / ${compact(waiting.limitMs)} · job ${job.status} ${compact(waiting.observedAt - job.startedAt)}`
+      : brief(job);
+    const header = [status, `Job: ${id} · cursor: ${output.cursor}${output.more ? " · more output available" : ""}`];
     if (output.lost) header.push(`${output.lost} older characters were evicted from the bounded log.`);
     if (job.error) header.push(job.error);
     if (!live) header.push("Historical record: only the saved output tail is available; no process was resumed.");
     const note = request.wait && isActive(job.status) ? waitNote(request.wait) : undefined;
     if (note) header.push(note);
-    if (live && isActive(job.status) && request.hint !== false) header.push(`Still running — job_wait id=${id} waits for the exit status; job_stop id=${id} stops it.`);
+    if (live && isActive(job.status) && request.hint !== false && !request.partial) header.push(`Still running — job_wait id=${id} waits for the exit status; job_stop id=${id} stops it.`);
     const marker = output.omitted ? `[earlier output omitted (${output.omitted} chars); use cursor ${output.from} to read from the start]\n` : "";
     const text = `${header.join("\n")}\n\n${marker}${output.text || (marker ? "" : "No new output.")}`;
     const durationMs = job.status === "interrupted" ? undefined : (job.endedAt ?? Date.now()) - job.startedAt;
@@ -169,12 +210,17 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
    * normal result when the user interrupts or queues a message: the job keeps running.
    */
   const waitAndRead = async (jobs: JobService, id: string, request: ReadRequest, limitMs: number,
-    options: { signal?: AbortSignal; ctx?: ExtensionContext; until?: "exit" | "output" }) => {
+    options: { signal?: AbortSignal; ctx?: ExtensionContext; until?: "exit" | "output"; onUpdate?: (value: any) => void }) => {
     if (!limitMs || !isActive(jobs.get(id).status)) return result(id, request, jobs);
-    const { signal, ctx, until } = options;
+    const { signal, ctx, until, onUpdate } = options;
+    const cursor = request.cursor ?? agentCursors.get(id) ?? 0;
     const startedAt = Date.now();
-    const end = await jobs.waitFor(id, limitMs, { signal, until, cursor: request.cursor ?? agentCursors.get(id) ?? 0,
-      pending: ctx ? () => ctx.hasPendingMessages() : undefined });
+    const stopProgress = streamProgress(jobs, id, onUpdate, () => result(id, {
+      cursor: Math.max(cursor, jobs.get(id).outputEnd - PROGRESS_CHARS), partial: true, wait: { startedAt, limitMs, observedAt: Date.now() },
+    }, jobs));
+    let end: WaitEnd;
+    try { end = await jobs.waitFor(id, limitMs, { signal, until, cursor, pending: ctx ? () => ctx.hasPendingMessages() : undefined }); }
+    finally { stopProgress(); }
     return result(id, { ...request, wait: { startedAt, limitMs, observedAt: Date.now(), end } }, jobs);
   };
   const renderResult = (value: any, options: { expanded: boolean; isPartial: boolean }, theme: Theme, context?: ToolRenderContext) => renderJobResult(value, options, theme, context);
@@ -213,27 +259,15 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       env.PI_REASONING_LEVEL = pi.getThinkingLevel();
       const jobs = service;
       const job = jobs.start({ pty: params.pty, columns: params.columns, rows: params.rows, stdin: params.stdin, command: params.command, name: params.name, cwd: ctx.cwd, executable: shell.shell, args: [...shell.args, params.command], env, timeoutMs: params.timeout_seconds === undefined ? undefined : params.timeout_seconds * 1000 }, signal);
-      let refresh: ReturnType<typeof setTimeout> | undefined;
-      let stopped = false;
-      const publish = () => {
-        if (stopped || signal?.aborted || !onUpdate) return;
+      const stopProgress = streamProgress(jobs, job.id, onUpdate, () => {
         const snapshot = jobs.get(job.id);
-        const value = result(job.id, { cursor: Math.max(0, snapshot.outputEnd - 8192), track: false, hint: false }, jobs);
-        const seconds = Math.floor((Date.now() - snapshot.startedAt) / 1000);
-        value.content[0]!.text = `${seconds}s elapsed · ${value.content[0]!.text}`;
-        try { onUpdate(value); } catch { /* Rendering failure must not orphan a command. */ }
-      };
-      const unsubscribe = onUpdate ? jobs.subscribe((snapshot) => {
-        if (snapshot.id !== job.id || refresh || stopped) return;
-        refresh = setTimeout(() => { refresh = undefined; publish(); }, 100);
-        refresh.unref?.();
-      }) : undefined;
-      const ticker = onUpdate ? setInterval(publish, 1000) : undefined;
-      ticker?.unref?.();
-      publish();
+        const value = result(job.id, { cursor: Math.max(0, snapshot.outputEnd - PROGRESS_CHARS), partial: true }, jobs);
+        value.content[0]!.text = `${Math.floor((Date.now() - snapshot.startedAt) / 1000)}s elapsed · ${value.content[0]!.text}`;
+        return value;
+      }, signal);
       let end: WaitEnd;
       try { end = await jobs.waitFor(job.id, params.yield_ms, { signal }); }
-      finally { stopped = true; unsubscribe?.(); if (refresh) clearTimeout(refresh); if (ticker) clearInterval(ticker); }
+      finally { stopProgress(); }
       // Like Pi's built-in bash, cancelling the initial wait stops the command.
       if (end === "interrupted") { jobs.stop(job.id); throw new Error("Command cancelled; the job was stopped."); }
       if (isActive(jobs.get(job.id).status)) controls.activate(JOB_CONTROLS);
@@ -313,11 +347,11 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     parameters: readParameters,
     prepareArguments: argumentAliases(readParameters),
     renderShell: "self",
-    async execute(_id, params, signal, _update, ctx) {
+    async execute(_id, params, signal, onUpdate, ctx) {
       const jobs = service;
       const request = { cursor: params.cursor, budget: outputBudget(params.max_chars) };
       if (!jobs.list().some((job) => job.id === params.id)) { signal?.throwIfAborted(); return result(params.id, request, jobs); }
-      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), { signal, ctx });
+      return waitAndRead(jobs, params.id, request, waitDuration(params.wait_ms, name === "job_wait" ? MAX_WAIT_MS : 0), { signal, ctx, onUpdate });
     },
     renderCall: (args, theme, context) => jobHeading(`${name === "job_wait" ? "Wait for" : "Read"} job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });
