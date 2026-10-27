@@ -1,7 +1,8 @@
 import { mistralReferenceRows, mistralSearchRequest } from "./mistral.ts";
 import { searchExaKeyless } from "./exa-mcp.ts";
-import { exaAccess } from "./access.ts";
+import { exaAccessPlan, exaKeyAvailable, PAID_FALLBACK_STATUSES, type ExaAccess } from "./access.ts";
 import { requestWithRetry } from "./retry.ts";
+import { McpError } from "./mcp.ts";
 import { publicationInWindow } from "./dates.ts";
 import { domainMatcher, freshnessLabel, freshnessOptions, normalizeDomains, SEARCH_CATEGORIES, sourceIdentity, type SearchCategory } from "./filters.ts";
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -23,7 +24,7 @@ export interface SearchInput {
 export interface SearchHit { title: string; url: string; snippet: string; published?: string; dateUncertain?: boolean }
 export interface SearchDiagnostics { received: number; invalid: number; duplicate: number; outsideDomains: number; omitted: number; excludedDomains?: number; outsideDates?: number; uncertainDates?: number }
 export interface SearchAttempt { provider: Provider; outcome: "failed" | "succeeded"; reason?: string }
-export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: "keyless" | "api-key"; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number; elapsedMs?: number; attempts?: SearchAttempt[] }
+export interface SearchResult { provider: Provider; query: string; results: SearchHit[]; diagnostics?: SearchDiagnostics; dateRange?: { start?: string; end?: string }; quality?: SearchQuality; searchType?: string; warning?: string; access?: ExaAccess; accessFallback?: string; domains?: string[]; excludedDomains?: string[]; category?: SearchCategory; maxAgeHours?: number; elapsedMs?: number; attempts?: SearchAttempt[] }
 
 /** Strip terminal controls from remote text before it reaches any renderer. */
 export function cleanText(value: unknown, limit = 1200): string {
@@ -172,8 +173,8 @@ export async function searchWeb(
   // Validate the full original contract before sending anything. Alternate
   // providers are eligible only if they accept all the same constraints.
   searchRequest(input, provider);
-  if (provider === "exa" && exaAccess(env) === "keyless" && input.quality === "deep") {
-    throw new Error("Deep Exa search requires EXA_API_KEY. Public access supports balanced and fast modes. No request was sent.");
+  if (provider === "exa" && input.quality === "deep" && !exaKeyAvailable(env)) {
+    throw new Error("Deep Exa search requires EXA_API_KEY (and PI_EXA_ACCESS other than keyless). Public access supports balanced and fast modes. No request was sent.");
   }
   const candidates: Provider[] = [provider];
   if (input.provider === undefined) {
@@ -192,10 +193,11 @@ export async function searchWeb(
     if (deadline.aborted) break;
     // Reserve time for configured fallbacks instead of allowing the first
     // provider to consume the entire route deadline.
-    const attemptSignal = candidates.length === 1 ? routeSignal
-      : AbortSignal.any([routeSignal, AbortSignal.timeout(Math.max(1, Math.floor(duration / candidates.length)))]);
+    const share = candidates.length === 1 ? duration : Math.max(1, Math.floor(duration / candidates.length));
+    const attemptSignal = candidates.length === 1 ? routeSignal : AbortSignal.any([routeSignal, AbortSignal.timeout(share)]);
+    const attemptDeadline = Math.min(started + duration, performance.now() + share);
     try {
-      const result = await searchProvider(input, candidate, attemptSignal, env, request);
+      const result = await searchProvider(input, candidate, attemptSignal, attemptDeadline, env, request);
       routeSignal.throwIfAborted();
       attempts.push({ provider: candidate, outcome: "succeeded" });
       return { ...result, elapsedMs: Math.round(performance.now() - started), ...(attempts.length > 1 ? { attempts } : {}) };
@@ -223,6 +225,7 @@ async function searchProvider(
   input: SearchInput,
   provider: Provider,
   requestSignal: AbortSignal,
+  deadline: number,
   env: Record<string, string | undefined>,
   request: Fetch,
 ): Promise<SearchResult> {
@@ -233,17 +236,29 @@ async function searchProvider(
     ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours),
     ...(input.date_range ? { dateRange: { ...input.date_range } } : {}) };
   const key = env[providerKey(provider)]?.trim();
-  if (provider === "exa" && exaAccess(env) === "keyless") {
-    const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? DEFAULT_SEARCH_LIMIT, type: input.quality === "fast" ? "fast" : "auto",
-      ...(domains.length ? { includeDomains: domains } : {}), ...(excludedDomains.length ? { excludeDomains: excludedDomains } : {}), ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours), ...dateRangeFilter(input.date_range, "exa") }, requestSignal, request);
-    requestSignal.throwIfAborted();
-    return { provider, access: "keyless", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: input.quality === "fast" ? "fast" : "auto",
-      ...provenance, ...inspectResults(raw, "exa", input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+  let accessFallback: string | undefined;
+  if (provider === "exa") {
+    const plan = exaAccessPlan(env, input.quality === "deep");
+    if (plan.first === "keyless") {
+      try {
+        const raw = await searchExaKeyless({ query: input.query.trim(), numResults: input.limit ?? DEFAULT_SEARCH_LIMIT, type: input.quality === "fast" ? "fast" : "auto",
+          ...(domains.length ? { includeDomains: domains } : {}), ...(excludedDomains.length ? { excludeDomains: excludedDomains } : {}), ...(input.category ? { category: input.category } : {}), ...freshnessOptions(input.max_age_hours), ...dateRangeFilter(input.date_range, "exa") },
+          requestSignal, request, { deadline, paidFallback: plan.paidFallback });
+        requestSignal.throwIfAborted();
+        return { provider, access: "keyless", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: input.quality === "fast" ? "fast" : "auto",
+          ...provenance, ...inspectResults(raw, "exa", input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+      } catch (error) {
+        requestSignal.throwIfAborted();
+        // Only free-tier quota or access rejections justify spending the configured key.
+        if (!plan.paidFallback || !(error instanceof McpError) || !PAID_FALLBACK_STATUSES.includes(error.status ?? 0)) throw error;
+        accessFallback = `HTTP ${error.status}`;
+      }
+    }
   }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (provider === "exa") headers["x-api-key"] = key!;
   else headers.Authorization = `Bearer ${key}`;
-  const send: Fetch = provider === "exa" ? (url, init) => requestWithRetry(request, url, init!, false) : request;
+  const send: Fetch = provider === "exa" ? (url, init) => requestWithRetry(request, url, init!, { deadline, rateLimit: true }) : request;
   const response = await send(url, {
     method: "POST", headers, body: JSON.stringify(body), redirect: "error",
     signal: requestSignal,
@@ -256,7 +271,7 @@ async function searchProvider(
   }
   const raw = await boundedJson(response);
   requestSignal.throwIfAborted();
-  return { provider, access: "api-key", query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : provider === "mistral" ? "web_search citations" : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
+  return { provider, access: "api-key", ...(accessFallback ? { accessFallback } : {}), query: input.query.trim(), quality: input.quality ?? "balanced", searchType: provider === "exa" ? (input.quality === "balanced" || !input.quality ? "auto" : input.quality) : provider === "mistral" ? "web_search citations" : "web", ...provenance, ...inspectResults(raw, provider, input.limit ?? DEFAULT_SEARCH_LIMIT, domains, input.date_range, excludedDomains) };
 }
 
 export function searchConstraints(result: SearchResult): string[] {
@@ -270,7 +285,7 @@ export function searchConstraints(result: SearchResult): string[] {
 
 export function formatSearch(result: SearchResult): string {
   const header = `Search via ${result.provider}: ${cleanText(result.query, 500)}\nUntrusted web snippets; open sources to verify claims.`
-    + (result.access ? `\nAccess: ${result.access === "keyless" ? "keyless hosted search; provider rate limits apply" : "API key"}.` : "")
+    + (result.access ? `\nAccess: ${result.access === "keyless" ? "keyless hosted search; provider rate limits apply" : result.accessFallback ? `API key after keyless access failed (${result.accessFallback})` : "API key"}.` : "")
     + (result.attempts?.length ? `\nSearch route: ${result.attempts.map((attempt) => `${attempt.provider}: ${attempt.outcome}${attempt.reason ? ` (${attempt.reason})` : ""}`).join(" → ")}.` : "")
     + (result.provider === "mistral" ? "\nSources are model-selected web_search citations, not a raw search listing. Descriptions are provider metadata; generated answer text is omitted. No citations does not prove the web has no matches." : "")
     + (result.quality ? `\nRequested search mode: ${result.quality} (${result.searchType}). This is not a verified quality rating.` : "")

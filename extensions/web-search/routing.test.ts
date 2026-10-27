@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import { formatSearch, searchWeb, type SearchInput } from "./client.ts";
 import { searchPreview } from "./render.ts";
 
-const env = { EXA_API_KEY: "exa-fixture", FIRECRAWL_API_KEY: "firecrawl-fixture", MISTRAL_API_KEY: "mistral-fixture" };
+const env = { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "exa-fixture", FIRECRAWL_API_KEY: "firecrawl-fixture", MISTRAL_API_KEY: "mistral-fixture" };
 const results = [{ title: "Docs", url: "https://example.com/docs/current", description: "Reference" }];
 
 test("default failures try only configured compatible providers and retain route provenance", async () => {
   const calls: string[] = [];
   const result = await searchWeb({ query: "documentation", domains: ["example.com/docs"], exclude_domains: ["example.com/docs/old"], date_range: { start: "2025-01-01" } }, undefined, env, async (url, init) => {
     calls.push(url);
-    if (url.includes("exa.ai")) return new Response(null, { status: 429, headers: { "retry-after": "10" } });
+    if (url.includes("exa.ai")) return new Response(null, { status: 429, headers: { "retry-after": "60" } });
     expect(JSON.parse(String(init?.body))).toMatchObject({ includeDomains: ["example.com"], tbs: "cdr:1,cd_min:1/1/2025,cd_max:" });
     return Response.json({ data: { web: [...results, { url: "https://example.com/docs/old/removed" }, { url: "https://outside.example/" }] } });
   });

@@ -5,8 +5,8 @@ expanded reading view. Includes local and remote page reading, with optional
 Firecrawl and Mistral search.
 
 Works immediately without configuration. Set `EXA_API_KEY` in Pi's environment
-to use the direct API and unlock deep search. `/web` shows the effective access
-mode and available providers without making a request or displaying keys.
+for a paid fallback and deep search. `/web` shows the effective access mode and
+available providers without making a request or displaying keys.
 
 ```text
 • Searched Python TaskGroup cancellation
@@ -28,8 +28,13 @@ Expand to see every source, full URLs, publication dates, and excerpts.
 
 ### Search
 
-Exa is the default. Access is selected automatically: a nonempty `EXA_API_KEY`
-uses the direct API; no key uses Exa's public hosted service. With `provider`
+Exa is the default. Requests use Exa's public hosted service first, as one
+stateless MCP call (servers that need a session get the full handshake once).
+A nonempty `EXA_API_KEY` is used only after the free tier answers HTTP 401, 402,
+403, or 429, or straight away for deep search and freshness reads. Results report
+`API key after keyless access failed (HTTP 429)` when that happens.
+`PI_EXA_ACCESS=keyless` never sends the key; `PI_EXA_ACCESS=api-key` always uses
+the direct API. With `provider`
 omitted, a failed request can try configured Firecrawl then Mistral, within one
 30-second deadline. Each route keeps the original domain, exclusion, date,
 quality and freshness constraints; incompatible providers are skipped.
@@ -56,7 +61,7 @@ account/key request remains visible in that history.
 | `category` | Exa only: `news`, `pdf`, `github`, `publication`, `company`, `people`, `personal site`, or `financial report` |
 
 Exa maps quality to `auto`, `fast`, and `deep`. Keyless access supports balanced
-and fast; deep requires API-key access and may cost more. Firecrawl and Mistral
+and fast; deep requires a key and may cost more. Firecrawl and Mistral
 support balanced only. Mistral rejects date filters. Unsupported combinations
 fail before a request is sent.
 
@@ -125,19 +130,20 @@ withheld to avoid skipping unread text. Pages can change between reads.
 Selection completion does not establish whole-page completeness.
 
 `web_read.max_age_hours` uses the search range but requires `reader: "exa"` and
-API-key access. Keyless reads have no freshness parameter. Remote excerpts may be
+a key. Keyless reads have no freshness parameter. Remote excerpts may be
 cached or incomplete, especially for PDF tables and images.
 
 ## Configuration
 
 | Environment | Purpose |
 |---|---|
-| `EXA_API_KEY` | Automatically enables direct Exa API access, including deep search |
+| `EXA_API_KEY` | Paid fallback after free-tier rejections; required for deep search and freshness reads |
+| `PI_EXA_ACCESS` | `keyless` or `api-key` forces one Exa access mode; default is keyless first |
 | `FIRECRAWL_API_KEY` | Credentials for explicit Firecrawl searches |
 | `MISTRAL_API_KEY` | Credentials for explicit Mistral searches |
 
-A key alone enables account-backed Exa searches and remote reads. Public access has
-provider-controlled rate limits; keyed requests may incur charges. The extension
+Public access has provider-controlled rate limits; keyed requests may incur
+charges, and a key is spent only when the free tier rejects a request. The extension
 cannot inspect balances or enforce spending caps. Mistral uses
 `mistral-medium-latest` with `store: false` and can incur model and search charges;
 provider retention policies still apply. Keys are read from Pi's environment,
@@ -160,11 +166,13 @@ Provider references: [Exa MCP](https://exa.ai/docs/get-started/exa-mcp),
 - Search timeouts: 30 seconds, or 60 seconds for deep Exa/Mistral. Responses are
   capped at 2 MB; redirects are rejected. Keyless MCP sends only the query/options,
   with short-lived connections and cancellation cleanup capped at 1.5 seconds.
-- Exa retries once after HTTP 429; keyless access also retries 502/503/504.
-  Retries share the original deadline and refuse `Retry-After` delays over two
-  seconds. Network failures, timeouts, authentication/protocol errors, and account
-  5xx errors are not replayed. Other providers are not retried. Server-side
-  cancellation and billing remain provider-controlled.
+- Exa retries HTTP 429 after 1, 2, 4, 8, 16, and 32 seconds plus up to 0.5 s of
+  jitter, or after `Retry-After` when given, only while the wait fits the
+  remaining deadline; keyless access also retries 502/503/504. A free-tier 429
+  switches to the key instead of waiting when one is set. Network failures,
+  timeouts, authentication/protocol errors, and account 5xx errors are not
+  replayed. Other providers are not retried. Server-side cancellation and billing
+  remain provider-controlled.
 - Local reads use 25-second network and 30-second process limits, a 2 MB download
   cap, no ax disk cache, and a separate 40,000-character output cap.
 - ax accepts no credentials or custom headers, does not render JavaScript or

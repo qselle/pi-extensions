@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { exaAccess } from "./access.ts";
+import { exaAccessSummary } from "./access.ts";
 import { cleanText, DEFAULT_SEARCH_LIMIT, formatSearch, searchWeb } from "./client.ts";
 import { formatPage, pagePreview, readPage } from "./reader.ts";
 import { failurePreview, searchPreview, textBlock } from "./render.ts";
@@ -22,7 +22,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       "Use snippets to choose which pages to read. Check exclusion diagnostics before treating an empty result as no matches; refine overly narrow constraints when appropriate.",
       "Omit provider for Exa-first resilient search. A failed request may use configured Firecrawl or Mistral if all constraints remain supported; inspect the returned route. Set provider to pin an account or provider.",
     ],
-    description: "Search the web with Exa. Uses EXA_API_KEY when present, otherwise public hosted search. Returns ranked source URLs and query-relevant excerpts. Open sources with web_read for more context. With no explicit provider, failures can fall back to configured Firecrawl then Mistral under one deadline, only when all filters remain supported. Explicit provider choices never fall back. Empty results never trigger extra requests. Supports domain/date filters and balanced/fast search; deep requires an API key. Mistral supports balanced mode without date_range.",
+    description: "Search the web with Exa: public hosted search first, EXA_API_KEY only after free-tier rejections. Returns ranked source URLs and query-relevant excerpts. Open sources with web_read for more context. With no explicit provider, failures can fall back to configured Firecrawl then Mistral under one deadline, only when all filters remain supported. Explicit provider choices never fall back. Empty results never trigger extra requests. Supports domain/date filters and balanced/fast search; deep requires an API key. Mistral supports balanced mode without date_range.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 500, description: "Specific natural-language search intent, including relevant product names, versions, or dates." }),
       provider: Type.Optional(StringEnum(["exa", "firecrawl", "mistral"] as const)),
@@ -83,11 +83,10 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   pi.registerCommand("web", {
     description: "Show web search configuration without revealing keys",
     handler: async (_args, ctx) => {
-      const access = exaAccess(process.env);
       const optional = [process.env.FIRECRAWL_API_KEY?.trim() ? "Firecrawl" : "", process.env.MISTRAL_API_KEY?.trim() ? "Mistral" : ""].filter(Boolean);
       ctx.ui.notify([
-        `Exa · ${access === "api-key" ? "API key" : "public access"} · automatic`,
-        access === "keyless" ? "No key needed. Set EXA_API_KEY to enable API access and deep search." : "API requests use your Exa account.",
+        `Exa · ${exaAccessSummary(process.env)} · automatic`,
+        process.env.EXA_API_KEY?.trim() ? "Deep search and freshness reads use your Exa account. Set PI_EXA_ACCESS=keyless or api-key to force one mode." : "No key needed. Set EXA_API_KEY for paid fallback and deep search.",
         ...(optional.length ? [`Fallbacks: ${optional.join(", ")} when compatible. Set provider to pin a choice.`] : []),
         "Page reading: ax locally · reader=auto for Exa fallback · reader=exa for remote reading.",
       ].join("\n"), "info");

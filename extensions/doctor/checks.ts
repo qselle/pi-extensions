@@ -1,4 +1,4 @@
-import { exaAccess } from "../web-search/access.ts";
+import { exaAccessSummary } from "../web-search/access.ts";
 import { access, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
@@ -100,8 +100,7 @@ export async function diagnose(input: DoctorInput, probe = localProbe(input)): P
   }
   const providers = [input.env.EXA_API_KEY?.trim() ? "Exa" : "", input.env.FIRECRAWL_API_KEY?.trim() ? "Firecrawl (explicit provider selection)" : "", input.env.MISTRAL_API_KEY?.trim() ? "Mistral (explicit provider selection)" : ""].filter(Boolean);
   if (loaded("web_search")) {
-    const access = exaAccess(input.env);
-    add("search-keys", "Search access", "ok", `${access === "api-key" ? "Default: Exa API key." : "Default: Exa keyless; no API key required."} Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
+    add("search-keys", "Search access", "ok", `Default: Exa ${exaAccessSummary(input.env)}${input.env.EXA_API_KEY?.trim() ? "" : "; no API key required"}. Connectivity and rate limits are not tested.${providers.length ? ` ${providers.join(" and ")} credentials present; validity not tested.` : ""}`);
   }
   if (loaded("web_read")) {
     const found = await probe.executable("ax");

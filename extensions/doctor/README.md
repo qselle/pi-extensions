@@ -13,8 +13,9 @@ Checks Pi version and settings, model authentication metadata, keybinding confli
 the shell, loaded tools, search credentials, ax, PTY setup, Telegram, rendering,
 notifications, macOS sleep prevention, and the Mistral connector cache (age, ready
 count, and the last refresh failure as an HTTP status or known cause). Optional integrations are checked only
-when loaded; disabled features are not errors. Exa uses its API key when present
-and public access otherwise.
+when loaded; disabled features are not errors. Search access reports Exa's mode:
+public access first, with the API key after rate limits or access errors when one
+is set, or the mode forced by `PI_EXA_ACCESS`.
 
 Resource checks validate the global `packages`, `extensions`, `skills`, `prompts`,
 and `themes` list shapes, including package resource filters and `autoload`.

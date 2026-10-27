@@ -18,7 +18,7 @@ extension({
 } as never);
 assert.deepEqual([...tools.keys()], ["web_search", "web_read"]);
 assert(commands.has("web"));
-const keyNames = ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY"];
+const keyNames = ["EXA_API_KEY", "FIRECRAWL_API_KEY", "MISTRAL_API_KEY", "PI_EXA_ACCESS"];
 const savedKeys = keyNames.map((key) => process.env[key]);
 try {
   for (const key of keyNames) delete process.env[key];
@@ -29,6 +29,9 @@ try {
   assert(!notices.at(-1)!.includes("not configured"));
   process.env.EXA_API_KEY = "fixture-never-send";
   process.env.FIRECRAWL_API_KEY = "fixture-never-send";
+  await commands.get("web").handler("", ctx);
+  assert(notices.at(-1)!.includes("Exa · public access first · API key after rate limits or access errors · automatic"));
+  process.env.PI_EXA_ACCESS = "api-key";
   await commands.get("web").handler("", ctx);
   assert(notices.at(-1)!.includes("Exa · API key · automatic"));
   assert(notices.at(-1)!.includes("Fallbacks: Firecrawl when compatible"));

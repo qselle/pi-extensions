@@ -57,7 +57,7 @@ test("malformed path escapes cannot bypass host or path exclusions", () => {
 
 test("freshness is explicit and distinct from publication dates in requests, results and display", async () => {
   for (const max_age_hours of [-1, 0, 24, 720]) {
-    const result = await searchWeb({ query: "current API", domains: ["docs.example.com/API"], max_age_hours, date_range: { start: "2026-01-01" } }, undefined, { EXA_API_KEY: "key" }, async (_url, init) => {
+    const result = await searchWeb({ query: "current API", domains: ["docs.example.com/API"], max_age_hours, date_range: { start: "2026-01-01" } }, undefined, { PI_EXA_ACCESS: "api-key", EXA_API_KEY: "key" }, async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ contents: { highlights: { query: "current API", maxCharacters: 1200 }, maxAgeHours: max_age_hours }, startPublishedDate: "2026-01-01T00:00:00.000Z", includeDomains: ["docs.example.com/API"] });
       return Response.json({ results: [{ url: "https://docs.example.com/API/v2" }, { url: "https://docs.example.com/api/v1" }] });
     });

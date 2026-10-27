@@ -70,7 +70,7 @@ test("headless Linux diagnostics do not prescribe desktop notification packages"
 test("keyless search is configured while invalid settings and Windows limitations remain visible", async () => {
   const report = await diagnose({ ...input, platform: "win32", shell: undefined }, { ...good, config: async () => "invalid" });
   expect(report.find((row) => row.id === "search-keys")?.status).toBe("ok");
-  expect(report.find((row) => row.id === "search-keys")?.detail).toContain("Exa keyless; no API key required");
+  expect(report.find((row) => row.id === "search-keys")?.detail).toContain("Exa public access; no API key required");
   expect(report.find((row) => row.id === "search-keys")?.fix).toBeUndefined();
   expect(report.find((row) => row.id === "config-notify")?.status).toBe("warn");
   expect(report.find((row) => row.id === "cleanup")?.status).toBe("warn");
@@ -149,10 +149,10 @@ test("host and access diagnostics use metadata without printing raw config or re
   expect(valid.find((row) => row.id === "host-version")?.status).toBe("ok");
   for (const hostVersion of ["1.4.2", "1.10.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("ok");
   for (const hostVersion of ["0.87.0", "2.0.0", "1.0.0-beta.1"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("warn");
-  expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("Exa API key");
+  expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("API key after rate limits or access errors");
   expect(JSON.stringify(valid)).not.toContain("configured-key");
   const publicAccess = await diagnose({ ...input, env: {} }, good);
-  expect(publicAccess.find((row) => row.id === "search-keys")?.detail).toContain("keyless");
+  expect(publicAccess.find((row) => row.id === "search-keys")?.detail).toContain("public access");
 });
 
 test("Mistral connector cache reports age and refresh failures without remote error text", async () => {

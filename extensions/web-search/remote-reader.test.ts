@@ -4,7 +4,7 @@ import { formatPage } from "./reader.ts";
 import { pageContentFailure } from "./page-content.ts";
 import type { Fetch } from "./client.ts";
 
-const keyed = { EXA_API_KEY: "key" };
+const keyed = { EXA_API_KEY: "key", PI_EXA_ACCESS: "api-key" };
 function keylessPage(text: string): Fetch {
   return async (_url, init) => {
     const message = JSON.parse(String(init?.body));
@@ -14,19 +14,23 @@ function keylessPage(text: string): Fetch {
   };
 }
 
-test("remote page reading shares automatic key detection", async () => {
-  const page = await readExaPage({ url: "https://example.com" }, undefined, { EXA_API_KEY: " key " }, async (url, init) => {
+test("remote page reading shares the search access policy", async () => {
+  const page = await readExaPage({ url: "https://example.com" }, undefined, { EXA_API_KEY: " key ", PI_EXA_ACCESS: "api-key" }, async (url, init) => {
     expect(url).toBe("https://api.exa.ai/contents");
     expect(new Headers(init?.headers).get("x-api-key")).toBe("key");
     return Response.json({ results: [{ text: "Direct page content." }] });
   });
   expect(page.access).toBe("api-key");
   const publicRequest = keylessPage("Public page content.");
-  const publicPage = await readExaPage({ url: "https://example.com" }, undefined, {}, async (url, init) => {
+  const publicPage = await readExaPage({ url: "https://example.com" }, undefined, { EXA_API_KEY: "key" }, async (url, init) => {
     expect(new Headers(init?.headers).has("x-api-key")).toBe(false);
     return publicRequest(url, init);
   });
   expect(publicPage.access).toBe("keyless");
+  const fallback = await readExaPage({ url: "https://example.com" }, undefined, { EXA_API_KEY: "key" }, async (url) =>
+    url.startsWith("https://mcp.exa.ai") ? new Response(null, { status: 429 }) : Response.json({ results: [{ text: "Paid page content." }] }));
+  expect(fallback).toMatchObject({ access: "api-key", accessFallback: "HTTP 429", text: "Paid page content." });
+  expect(formatPage(fallback)).toContain("after keyless access failed with HTTP 429");
 });
 
 test("both remote access modes reject empty and challenge-only success payloads", async () => {
