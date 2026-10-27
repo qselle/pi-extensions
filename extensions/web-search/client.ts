@@ -7,6 +7,8 @@ import { publicationInWindow } from "./dates.ts";
 import { domainMatcher, freshnessLabel, freshnessOptions, normalizeDomains, SEARCH_CATEGORIES, sourceIdentity, type SearchCategory } from "./filters.ts";
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type Provider = "exa" | "firecrawl" | "mistral";
+/** Default route order; unconfigured providers are skipped. */
+const PROVIDERS: Provider[] = ["exa", "firecrawl", "mistral"];
 export type SearchQuality = "fast" | "balanced" | "deep";
 export const DEFAULT_SEARCH_LIMIT = 10;
 export const MAX_SEARCH_LIMIT = 20;
@@ -180,21 +182,23 @@ export async function searchWeb(
 ): Promise<SearchResult> {
   const started = performance.now();
   signal?.throwIfAborted();
-  const provider = selectProvider(input.provider ?? (input.quality === "fast" || input.quality === "deep" ? "exa" : undefined), env);
-  // Validate the full original contract before sending anything. Alternate
-  // providers are eligible only if they accept all the same constraints.
+  // Providers are eligible only if they are configured and accept all the same
+  // constraints; unsupported constraints are never silently weakened.
+  const eligible = (candidate: Provider) => {
+    if (candidate !== "exa" && !env[providerKey(candidate)]?.trim()) return false;
+    try { searchRequest(input, candidate); return true; } catch { return false; }
+  };
+  // PI_WEB_SEARCH_PROVIDER picks the first provider of a default route; fast and deep need Exa.
+  const preferred = PROVIDERS.find((candidate) => candidate === env.PI_WEB_SEARCH_PROVIDER?.trim().toLowerCase());
+  const first = input.quality === "fast" || input.quality === "deep" ? "exa" : preferred && eligible(preferred) ? preferred : "exa";
+  const provider = selectProvider(input.provider ?? first, env);
+  // Validate the full original contract before sending anything.
   searchRequest(input, provider);
   if (provider === "exa" && input.quality === "deep" && !exaKeyAvailable(env)) {
     throw new Error("Deep Exa search requires EXA_API_KEY (and PI_EXA_ACCESS other than keyless). Public access supports balanced and fast modes. No request was sent.");
   }
   const candidates: Provider[] = [provider];
-  if (input.provider === undefined) {
-    for (const alternate of ["firecrawl", "mistral"] as const) {
-      if (!env[providerKey(alternate)]?.trim()) continue;
-      try { searchRequest(input, alternate); candidates.push(alternate); }
-      catch { /* Unsupported constraints never get silently weakened. */ }
-    }
-  }
+  if (input.provider === undefined) candidates.push(...PROVIDERS.filter((candidate) => candidate !== provider && eligible(candidate)));
   const duration = options.timeoutMs ?? (input.quality === "deep" ? 60_000 : 30_000);
   const deadline = AbortSignal.timeout(duration);
   const routeSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;

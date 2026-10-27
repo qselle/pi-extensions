@@ -65,3 +65,18 @@ test("transport failures remain bounded and do not expose raw errors across fall
   await expect(searchWeb({ query: "q" }, undefined, env, async () => { calls++; return new Response(null, { status: 400 }); })).rejects.toThrow("HTTP 400");
   expect(calls).toBe(1);
 });
+
+test("PI_WEB_SEARCH_PROVIDER goes first in default routes only when configured and compatible", async () => {
+  const hosts = async (input: SearchInput, extra: Record<string, string>) => {
+    const calls: string[] = [];
+    await searchWeb(input, undefined, { ...env, ...extra }, async (url) => { calls.push(new URL(url).host); return new Response(null, { status: 503 }); }).catch(() => {});
+    return calls;
+  };
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "Mistral" })).toEqual(["api.mistral.ai", "api.exa.ai", "api.firecrawl.dev"]);
+  // Exa-only constraints, fast mode, explicit pins and missing keys keep Exa first or the pin alone.
+  expect(await hosts({ query: "q", category: "news" }, { PI_WEB_SEARCH_PROVIDER: "mistral" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q", quality: "fast" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q", provider: "exa" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl" })).toEqual(["api.exa.ai"]);
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "firecrawl", FIRECRAWL_API_KEY: "" })).toEqual(["api.exa.ai", "api.mistral.ai"]);
+  expect(await hosts({ query: "q" }, { PI_WEB_SEARCH_PROVIDER: "unknown" })).toEqual(["api.exa.ai", "api.firecrawl.dev", "api.mistral.ai"]);
+});

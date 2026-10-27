@@ -36,7 +36,7 @@ A nonempty `EXA_API_KEY` is used only after the free tier answers HTTP 401, 402,
 `PI_EXA_ACCESS=keyless` never sends the key; `PI_EXA_ACCESS=api-key` always uses
 the direct API. With `provider`
 omitted, a failed request can try configured Firecrawl then Mistral, within one
-30-second deadline. Each route keeps the original domain, exclusion, date,
+30-second deadline; `PI_WEB_SEARCH_PROVIDER` moves a configured provider first. Each route keeps the original domain, exclusion, date,
 quality and freshness constraints; incompatible providers are skipped.
 Empty results do not trigger another request. Cancellation stops the whole route.
 
@@ -152,6 +152,7 @@ cached or incomplete, especially for PDF tables and images.
 | `PI_EXA_ACCESS` | `keyless` or `api-key` forces one Exa access mode; default is keyless first |
 | `FIRECRAWL_API_KEY` | Firecrawl search fallback and page reading |
 | `MISTRAL_API_KEY` | Mistral search and page reading when Pi's `mistral` provider has no key in `models.json` |
+| `PI_WEB_SEARCH_PROVIDER` | `exa`, `firecrawl`, or `mistral` to try first when `provider` is omitted; skipped when unconfigured or incompatible |
 | `PI_WEB_OPEN_PROVIDER` | `exa`, `firecrawl`, or `mistral` to try first in the remote reading chain |
 
 Public access has provider-controlled rate limits; keyed requests may incur
