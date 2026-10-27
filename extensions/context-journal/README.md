@@ -41,7 +41,9 @@ It excludes images, custom extension messages, and other branches.
 
 Rollover removes earlier messages from model context while keeping them in session
 history. System instructions and tools survive; the compaction summary restates
-the notes. Turning the journal off does not undo a committed rollover.
+the notes. Turning the journal off does not undo a committed rollover. A dim
+divider in the transcript marks each rollover, for example `Context reset —
+automatic at 91.2% — no summary`, and flags stale notes.
 
 Save current notes before requesting rollover, then end the response. Other tools
 are blocked while the request is pending. Pi commits it at a safe compaction or

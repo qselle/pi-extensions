@@ -4,7 +4,7 @@ import { JOURNAL_CONTEXT } from "./state.ts";
 const tools = new Map<string, any>(); const commands = new Map<string, any>(); const handlers = new Map<string, Function>();
 const entries: any[] = []; let active = ["bash", "context_notes", "context_history", "context_budget"];
 const anchors: any[] = [];
-extension({ registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand: (name: string, value: any) => commands.set(name, value),
+extension({ registerEntryRenderer() {}, registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand: (name: string, value: any) => commands.set(name, value),
   on: (name: string, handler: Function) => { const previous = handlers.get(name); handlers.set(name, (event: any, ctx: any) => { const prior = previous?.(event, ctx); return handler(prior ? { ...event, ...prior } : event, ctx) ?? prior; }); }, getActiveTools: () => active, setActiveTools: (next: string[]) => { active = next; },
   sendMessage: (message: any) => { anchors.push(message); entries.push({ type: "custom_message", ...message }); },
   appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }) } as never);

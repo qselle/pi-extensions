@@ -4,6 +4,7 @@ import { redactText } from "../../lib/redact.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
 import { journalPrompt, type Journal } from "./state.ts";
 import { CHECKPOINT_ENTRY, currentCheckpoint, ROLLOVER_BOUNDARY } from "./checkpoint.ts";
+import type { BoundaryData, RolloverReason } from "./render.ts";
 
 export { ROLLOVER_BOUNDARY } from "./checkpoint.ts";
 export const BUDGET_REMINDER = "context-journal-budget";
@@ -51,23 +52,31 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
   let activeContext: ExtensionContext | undefined;
   let acceptedCheckpoint: string | undefined;
   let staleAccepted = false;
+  let reason: RolloverReason = "manual";
   const reset = (_event?: unknown, ctx?: ExtensionContext) => {
-    generation++; requested = false; compacting = false; exhaustedNotified = false; activeContext = undefined; acceptedCheckpoint = undefined; staleAccepted = false;
+    generation++; requested = false; compacting = false; exhaustedNotified = false; activeContext = undefined; acceptedCheckpoint = undefined; staleAccepted = false; reason = "manual";
     notices = ctx ? sentNotices(ctx.sessionManager.getBranch()) : new Set();
   };
   pi.on("session_start", reset); pi.on("session_tree", reset); pi.on("session_shutdown", reset);
   const hasNotes = () => Object.keys(journal().notes).length > 0;
   const ready = (ctx: ExtensionContext) => hasNotes() ? currentCheckpoint(ctx.sessionManager.getBranch(), acceptedCheckpoint) : undefined;
+  /** The visible divider records why and at what usage context was reset. */
+  const boundary = (ctx: ExtensionContext, cause: RolloverReason, stale: boolean): BoundaryData => {
+    const usage = ctx.getContextUsage();
+    const percent = usage?.tokens != null && usage.contextWindow > 0 ? Math.round(usage.tokens / usage.contextWindow * 1000) / 10 : undefined;
+    return { version: 1, reason: cause, ...(percent === undefined ? {} : { percent }), ...(stale ? { stale: true } : {}) };
+  };
+  const boundaryDrafts = (ctx: ExtensionContext, cause: RolloverReason, stale: boolean) => [{ type: "custom" as const, customType: ROLLOVER_BOUNDARY, data: boundary(ctx, cause, stale) }, boundaryDraft(stale)];
   const boundaryDraft = (stale: boolean) => ({ type: "compaction" as const, summary: rolloverSummary(journal(), stale), firstKeptEntryId: null, details: { contextJournal: 1, noSummary: true, ...(stale ? { stale: true } : {}) } });
   /** User-driven recovery may accept stale notes; the model's own request never does. */
-  const rollover = async (ctx: ExtensionContext, allowStale = false) => {
+  const rollover = async (ctx: ExtensionContext, allowStale = false, cause: RolloverReason = "manual") => {
     if (!journal().enabled || compacting || !ctx.isIdle()) return;
     const checkpoint = ready(ctx);
     if (!checkpoint && !(allowStale && hasNotes())) {
       requested = false; acceptedCheckpoint = undefined;
       throw new Error("Save current objective, constraints and unfinished work with context_notes before rollover. Existing notes are missing or stale.");
     }
-    acceptedCheckpoint = checkpoint; staleAccepted = !checkpoint;
+    acceptedCheckpoint = checkpoint; staleAccepted = !checkpoint; reason = cause;
     requested = true; compacting = true; activeContext = ctx;
     const version = generation;
     try {
@@ -84,7 +93,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       const checkpoint = ready(ctx);
       if (!checkpoint) throw new Error("Save a fresh context_notes checkpoint covering recent work before requesting rollover.");
       acceptedCheckpoint = checkpoint;
-      requested = true;
+      requested = true; reason = "agent";
       return { content: [{ type: "text", text: "Rollover requested. End this response now; saved notes and full history will be available after the safe compaction boundary. Do not mark the task complete." }], details: {} };
     },
   });
@@ -112,7 +121,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       if (hasNotes()) {
         const stale = !ready(ctx);
         exhaustedNotified = false; notices.clear();
-        return { entries: [...event.entries, boundaryDraft(stale)], continue: true };
+        return { entries: [...event.entries, ...boundaryDrafts(ctx, "automatic", stale)], continue: true };
       }
       // Stop this run once; the next prompt still reaches the model so it can save notes.
       ctx.abort();
@@ -138,7 +147,7 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       const last = event.branchEntries.findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
       if (!hasNotes() || last?.type !== "message" || needsFollowUp(last.message)) return { cancel: true };
     }
-    pi.appendEntry(ROLLOVER_BOUNDARY, { version: 1 });
+    pi.appendEntry(ROLLOVER_BOUNDARY, boundary(ctx, requested ? reason : "automatic", stale));
     const firstKeptEntryId = ctx.sessionManager.getLeafId();
     if (!firstKeptEntryId) return { cancel: true };
     const draft = boundaryDraft(stale);
@@ -157,13 +166,13 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
       return;
     }
     exhaustedNotified = false; notices.clear();
-    return { entries: [...event.entries, boundaryDraft(false)], continue: true };
+    return { entries: [...event.entries, ...boundaryDrafts(ctx, "agent", false)], continue: true };
   });
   pi.on("input", async (_event, ctx) => {
     if (!journal().enabled || !ctx.isIdle() || compacting) return;
     const budget = contextBudget(ctx.getContextUsage());
     if (!requested && !["checkpoint", "exhausted"].includes(budget.phase)) return;
-    try { await rollover(ctx, true); } catch { ctx.ui.notify("Context was not rolled over. Save notes or use native /compact; your input will still be submitted.", "warning"); }
+    try { await rollover(ctx, true, "automatic"); } catch { ctx.ui.notify("Context was not rolled over. Save notes or use native /compact; your input will still be submitted.", "warning"); }
   });
   return { rollover, checkpoint: () => pi.appendEntry(CHECKPOINT_ENTRY, { version: 1 }), disable: () => { requested = false; acceptedCheckpoint = undefined; activeContext?.abort(); }, status: () => requested ? "rollover pending" : "automatic" };
 }

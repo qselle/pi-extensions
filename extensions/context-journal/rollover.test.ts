@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BUDGET_REMINDER, contextBudget, installRollover, ROLLOVER_TEXT, STALE_TEXT } from "./rollover.ts";
+import { BUDGET_REMINDER, contextBudget, installRollover, ROLLOVER_BOUNDARY, ROLLOVER_TEXT, STALE_TEXT } from "./rollover.ts";
 import { emptyJournal } from "./state.ts";
 import { CHECKPOINT_ENTRY } from "./checkpoint.ts";
 
@@ -56,9 +56,10 @@ test("a spent emergency reserve rolls over to stale notes during a tool chain wi
   expect(f.turn()).toBeUndefined();
   const proposal = f.turn("completed", toolTurn);
   expect(proposal.continue).toBe(true);
-  expect(proposal.entries[0]).toMatchObject({ type: "compaction", firstKeptEntryId: null, details: { stale: true } });
-  expect(proposal.entries[0].summary).toContain(STALE_TEXT);
-  expect(proposal.entries[0].summary).toContain("finish all work");
+  expect(proposal.entries[0].data).toEqual({ version: 1, reason: "automatic", percent: 98, stale: true });
+  expect(proposal.entries[1]).toMatchObject({ type: "compaction", firstKeptEntryId: null, details: { stale: true } });
+  expect(proposal.entries[1].summary).toContain(STALE_TEXT);
+  expect(proposal.entries[1].summary).toContain("finish all work");
   expect(f.aborted()).toBe(0);
 });
 test("a spent emergency reserve without notes aborts the run once and prompts for notes", () => {
@@ -79,7 +80,8 @@ test("rollover proposes a retain-none boundary before settlement and continues o
   expect(proposal.entries.at(-1).summary).toStartWith(ROLLOVER_TEXT);
   expect(proposal.entries.at(-1).summary).toContain("## objective\nfinish all work");
   expect(f.compactions()).toBe(1);
-  expect(f.entries).toHaveLength(2);
+  expect(proposal.entries[0]).toEqual({ type: "custom", customType: ROLLOVER_BOUNDARY, data: { version: 1, reason: "agent", percent: 1 } });
+  expect(f.entries).toHaveLength(3);
   expect(f.aborted()).toBe(0);
   expect(f.policy.status()).toBe("automatic");
   expect(await f.settle()).toBeUndefined();
@@ -156,6 +158,7 @@ test("stale notes roll over on idle input, marked stale, but never permit an exp
   await f.handlers.get("input")({}, f.ctx);
   expect(f.compactions()).toBe(1);
   expect(f.summaries[0]).toContain(STALE_TEXT);
+  expect(f.entries.findLast((entry) => entry.customType === ROLLOVER_BOUNDARY).data).toEqual({ version: 1, reason: "automatic", percent: 92, stale: true });
   // A fresh checkpoint after the boundary drops the stale warning.
   f.policy.checkpoint();
   await f.handlers.get("input")({}, f.ctx);

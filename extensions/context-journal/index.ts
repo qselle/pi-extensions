@@ -3,7 +3,8 @@ import { Type } from "typebox";
 import { createContextAnchor, type AnchorContext } from "../../lib/context-anchor.ts";
 import { redactText } from "../../lib/redact.ts";
 import { knownSecretValues } from "../questions/secrets.ts";
-import { contextBudget, installRollover, notesContext } from "./rollover.ts";
+import { contextBudget, installRollover, notesContext, ROLLOVER_BOUNDARY } from "./rollover.ts";
+import { boundaryDivider, type BoundaryData } from "./render.ts";
 import { emptyJournal, historyMatches, JOURNAL_CONTEXT, JOURNAL_ENTRY, JOURNAL_HEADER, restoreJournal, updateNote, type Journal } from "./state.ts";
 
 /**
@@ -25,6 +26,7 @@ const TOOLS = ["context_notes", "context_history", "context_budget", "context_ro
 export default function contextJournalExtension(pi: ExtensionAPI): void {
   let state = emptyJournal();
   const rollover = installRollover(pi, () => state);
+  pi.registerEntryRenderer<BoundaryData>(ROLLOVER_BOUNDARY, (entry, _options, theme) => boundaryDivider(entry.data, theme));
   const syncNotes = (ctx: AnchorContext) => { if (state.enabled) notesAnchor.sync(pi, ctx, state); };
   // Additive: restore never reorders active tools, which would change the cached prefix.
   const activate = () => {
