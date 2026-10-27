@@ -479,9 +479,13 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     if (historyError) ctx.ui.notify(historyError, "warning");
     const [action, id] = args.trim().split(/\s+/);
     if (action === "stop") {
-      if (id === "all") { for (const job of service.list()) if (isActive(job.status)) service.stop(job.id); }
-      else if (id) { const job = findJob(id); if (isActive(job.status)) service.stop(job.id); }
-      else { ctx.ui.notify("Usage: /jobs stop <id|all>", "error"); return; }
+      if (!id) { ctx.ui.notify("Usage: /jobs stop <id|all>", "error"); return; }
+      const targets = (id === "all" ? service.list() : [findJob(id)]).filter((job) => isActive(job.status));
+      if (!targets.length) { ctx.ui.notify("No active job to stop.", "info"); return; }
+      const title = targets.length === 1 ? "Stop background job?" : `Stop ${targets.length} background jobs?`;
+      const body = `${targets.map((job) => `${job.name} · ${job.id}`).join("\n")}\n\nSends TERM, then KILL after three seconds if needed.`;
+      if (ctx.hasUI && !(await ctx.ui.confirm(title, body))) return;
+      for (const job of targets) service.stop(job.id);
       ctx.ui.notify("Stop requested. Jobs remain visible until their processes exit.", "info");
       return;
     }

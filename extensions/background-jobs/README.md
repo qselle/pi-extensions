@@ -26,6 +26,7 @@ system-prompt file change is needed.
 /jobs stop all           Request termination of every active job
 ```
 
+With a UI, `/jobs stop` lists the affected jobs and asks for confirmation first.
 Job tools and `/jobs` accept a full job ID or an unambiguous prefix of a current
 or recent job's ID; an ambiguous prefix fails and lists the matches.
 

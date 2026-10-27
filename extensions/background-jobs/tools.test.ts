@@ -17,12 +17,13 @@ afterEach(async () => { for (const stop of shutdowns.splice(0)) await stop(); })
 async function session(mode = "json", extra: Record<string, unknown> = {}, seed: unknown[] = []) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function>();
+  const commands = new Map<string, any>();
   const entries: unknown[] = [...seed];
   const messages: { message: any; options: any }[] = [];
   const renderers = new Map<string, any>();
   extension({
     sendMessage: (message: any, options: any) => messages.push({ message, options }), registerMessageRenderer: (type: string, renderer: any) => renderers.set(type, renderer),
-    registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand() {}, getThinkingLevel: () => "off",
+    registerTool: (tool: any) => tools.set(tool.name, tool), registerCommand: (name: string, command: any) => commands.set(name, command), getThinkingLevel: () => "off",
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     events: { emit() {}, on() { return () => {}; } }, on: (name: string, handler: Function) => handlers.set(name, handler),
   } as never);
@@ -31,7 +32,7 @@ async function session(mode = "json", extra: Record<string, unknown> = {}, seed:
   await handlers.get("session_start")!({}, ctx);
   shutdowns.push(async () => { await handlers.get("session_shutdown")!({}, ctx); });
   const run = (name: string, args: Record<string, unknown>, signal?: AbortSignal, update?: (value: any) => void): Promise<any> => tools.get(name).execute("call", args, signal, update, ctx);
-  return { tools, run, ctx, handlers, messages, renderers };
+  return { tools, run, ctx, handlers, messages, renderers, commands };
 }
 const outputOf = (value: any): string => value.content[0].text.slice(value.content[0].text.indexOf("\n\n") + 2);
 
@@ -371,4 +372,18 @@ test("job IDs accept an unambiguous prefix", async () => {
   expect(outputOf(await run("job_output", { id: "zz12", cursor: 0 }))).toBe("zz122222\n");
   const live = (await run("bash", { command: "sleep 5", yield_ms: 0 })).details.id;
   expect((await run("job_stop", { id: live.slice(0, 6) })).details.id).toBe(live);
+});
+
+test("/jobs stop asks for confirmation when a UI is available", async () => {
+  const answers: boolean[] = [false, true];
+  const prompts: string[] = [];
+  const ui = { notify() {}, confirm: async (title: string, body: string) => { prompts.push(`${title}\n${body}`); return answers.shift()!; } };
+  const { run, commands, ctx } = await session("json", { hasUI: true, ui });
+  const id = (await run("bash", { command: "sleep 5", purpose: "Serve the fixture", yield_ms: 0 })).details.id;
+  await commands.get("jobs").handler(`stop ${id}`, ctx);
+  expect(prompts[0]).toStartWith(`Stop background job?\nServe the fixture · ${id}\n`);
+  expect(["starting", "running"]).toContain((await run("job_output", { id })).details.status);
+  await commands.get("jobs").handler("stop all", ctx);
+  expect(prompts).toHaveLength(2);
+  expect(["stopping", "stopped"]).toContain((await run("job_output", { id })).details.status);
 });
