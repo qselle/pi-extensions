@@ -199,6 +199,17 @@ describe("saved exploration", () => {
 		expect(isLeader("a")).toBe(true);
 		expect(isLeader("b")).toBe(true);
 	});
+	test("restored searches keep their leading output lines; reads and failures do not", () => {
+		restoreExploration([
+			assistant([call("g", "grep", { pattern: "x" }), call("r"), call("f", "grep", { pattern: "y" })]),
+			result("g", { toolName: "grep", content: "a.ts:1: x\n\tb.ts:2: x\nc.ts:3: x\nd.ts:4: x\n\n[100 matches limit reached]" }),
+			result("r"), result("f", { toolName: "grep", isError: true, content: "bad regex" }),
+		]);
+		const rows = groupState("g")!.rows;
+		expect(rows[0]!.snippet).toEqual(["a.ts:1: x", "    b.ts:2: x", "c.ts:3: x"]);
+		expect(rows[1]!.snippet).toBeUndefined();
+		expect(rows[2]!.snippet).toBeUndefined();
+	});
 	test("changing branches discards stale and dangling group membership", () => {
 		restoreExploration([assistant([call("a"), call("b")]), result("a"), result("b")]);
 		restoreExploration([result("a"), assistant([call("new")]), result("new")]);

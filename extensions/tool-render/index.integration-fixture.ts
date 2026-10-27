@@ -179,3 +179,27 @@ for (const value of [managed("running"), managed("failed"), managed("completed",
   assert(!compact.includes("cursor:"), "cursor values belong in expanded output");
   assert(compact.includes("2 checks passed"));
 }
+
+// Grouped searches show their first matches dimmed and their match count in color.
+{
+  const tagged = { fg: (color: string, value: string) => `<${color}>${value}</${color}>`, bold: identity };
+  const grep = registered.filter((entry) => entry.name === "grep").at(-1)!.definition;
+  const found = { content: [{ type: "text", text: "a.ts:1: foo\na.ts:2: foo bar\nb.ts:3: foo\nc.ts:4: foo" }] };
+  const searching = { toolCallId: "grep-lead", args: { pattern: "foo" }, cwd: otherDir, isError: false, invalidate() {} };
+  fire("tool_execution_start", {}, { toolName: "grep", toolCallId: "grep-lead", args: searching.args });
+  fire("tool_execution_end", {}, { toolName: "grep", toolCallId: "grep-lead", isError: false, result: found });
+  fire("tool_execution_start", {}, { toolName: "grep", toolCallId: "grep-none", args: { pattern: "zzz" } });
+  fire("tool_execution_end", {}, { toolName: "grep", toolCallId: "grep-none", isError: false, result: { content: [{ type: "text", text: "No matches found" }] } });
+  fire("agent_end", {});
+  const rows = grep.renderResult(found, {}, theme, searching).render(100).map(stripVTControlCharacters);
+  assert.deepEqual(rows.slice(1), [
+    '  ├ Searched "foo" · 4 matches · 3 files',
+    "  │   a.ts:1: foo",
+    "  │   a.ts:2: foo bar",
+    "  │   b.ts:3: foo",
+    '  └ Searched "zzz" · 0 matches',
+  ]);
+  const colored = grep.renderResult(found, {}, tagged, searching).render(100).join("\n");
+  assert(colored.includes("<success>4 matches</success>"), colored);
+  assert(!colored.includes("<success>0 matches</success>"), "empty searches stay quiet");
+}

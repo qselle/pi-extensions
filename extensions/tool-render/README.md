@@ -144,7 +144,8 @@ action; completed rows become quiet and failures retain their error color.
 Search rows include their directory and glob, and reserve space for match/file
 counts when a long subject needs clipping. Counts exclude grep context and
 continuation notices, empty results report zero, and bounded results are marked
-`limited`. Read and directory targets stay clickable within groups. Read counts
+`limited`. Successful searches show their first three output lines dimmed below
+the row, and a non-zero match count in the success color. Read and directory targets stay clickable within groups. Read counts
 include blank lines; requested read ranges remain visible for chunked reads.
 Long file targets shorten their middle while preserving the filename and full
 clickable destination, so similar directory prefixes remain distinguishable.

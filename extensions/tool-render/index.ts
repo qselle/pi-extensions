@@ -62,6 +62,7 @@ import {
 	resetExploration,
 	previewRows,
 	restoreExploration,
+	resultSnippet,
 	type DisplayRow,
 } from "./exploration.ts";
 
@@ -193,13 +194,20 @@ function diffHeadline(
 	return parts.join(" ") + caption;
 }
 
+/** Search counts stand out when a search found something; other suffixes stay quiet. */
+function styledSuffix(text: string, row: DisplayRow, theme: Theme): string {
+	if (row.status === "error") return theme.fg("error", text);
+	const found = row.verb === "Searched" ? text.match(/^( · )([1-9]\d* match(?:es)?)(.*)$/s) : null;
+	return found ? theme.fg("dim", found[1]!) + theme.fg("success", found[2]!) + theme.fg("dim", found[3]!) : theme.fg("dim", text);
+}
+
 /** Reserve result counts before clipping the subject, so long paths remain useful. */
 function explorationRow(row: DisplayRow, theme: Theme, width: number, cwd: string): string {
 	const verbText = row.status === "pending" ? runningVerbs[row.verb] ?? row.verb : row.verb;
 	const verb = theme.fg(row.status === "pending" ? "accent" : row.status === "error" ? "error" : "muted", verbText);
 	const available = Math.max(0, width - visibleWidth(verbText) - 1);
 	const suffixWidth = Math.max(0, Math.min(visibleWidth(row.suffix ?? "") + 3, Math.floor(available * 0.65)));
-	const suffix = row.suffix && suffixWidth >= 5 ? theme.fg(row.status === "error" ? "error" : "dim", fit(` · ${row.suffix}`, suffixWidth)) : "";
+	const suffix = row.suffix && suffixWidth >= 5 ? styledSuffix(fit(` · ${row.suffix}`, suffixWidth), row, theme) : "";
 	const detailWidth = Math.max(0, available - visibleWidth(suffix));
 	const caption = purposeSuffix(row.purpose, Math.floor(detailWidth * 0.55), theme);
 	const targetWidth = Math.max(0, detailWidth - visibleWidth(caption));
@@ -216,8 +224,11 @@ function explorationBlock(rows: DisplayRow[], active: boolean, theme: Theme, wid
 	const lines = [fit(`${dot} ${title}${purposeSuffix(sharedPurpose, Math.max(0, width - visibleWidth(title) - 2), theme)}`, width)];
 	const preview = previewRows(rows);
 	preview.rows.forEach((row, i) => {
-		const connector = theme.fg("dim", `  ${!preview.omitted && i === preview.rows.length - 1 ? "└" : "├"} `);
-		lines.push(connector + explorationRow(sharedPurpose ? { ...row, purpose: undefined } : row, theme, inner, cwd));
+		const last = !preview.omitted && i === preview.rows.length - 1;
+		lines.push(theme.fg("dim", `  ${last ? "└" : "├"} `) + explorationRow(sharedPurpose ? { ...row, purpose: undefined } : row, theme, inner, cwd));
+		for (const line of row.status === "done" ? row.snippet ?? [] : []) {
+			lines.push(theme.fg("dim", last ? "      " : "  │   ") + theme.fg("dim", fit(line, Math.max(1, width - 6))));
+		}
 	});
 	if (preview.omitted) {
 		const counts = [preview.failed ? `${preview.failed} failed` : "", preview.pending ? `${preview.pending} running` : ""].filter(Boolean);
@@ -495,7 +506,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 				const count = event.isError
 					? `failed: ${labelText(firstLine(resultText(event.result).text)).slice(0, 240) || "unknown error"}`
 					: summarize(event.toolName as ToolName, event.result, undefined);
-				noteEnd(event.toolCallId, !!event.isError, count);
+				noteEnd(event.toolCallId, !!event.isError, count, event.isError ? undefined : resultSnippet(event.toolName, event.result));
 			}
 		});
 		pi.on("message_start", (event: any) => {

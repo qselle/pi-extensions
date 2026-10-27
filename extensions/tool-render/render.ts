@@ -167,6 +167,14 @@ export function summarize(name: ToolName, result: any, args: any): string {
 	return "";
 }
 
+/** Leading grep output lines, shown dimmed below a grouped search row. */
+export function grepSnippet(result: any, rows = 3): string[] {
+	const body = withoutNotice(resultText(result).text, "grep");
+	if (body.trim() === "No matches found") return [];
+	return body.split("\n").map((line) => new PlainOutput().push(line.slice(0, 512)).replace(/\t/g, "    ").trimEnd())
+		.filter((line) => line.trim()).slice(0, rows);
+}
+
 export function boundTail(text: string, maxLines: number): { lines: string[]; omitted: number } {
 	const all = text.replace(/\s+$/, "").split("\n");
 	if (maxLines <= 0 || all.length <= maxLines) return { lines: all, omitted: 0 };
