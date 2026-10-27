@@ -18,7 +18,7 @@ test("default failures try only configured compatible providers and retain route
   expect(result.results.map((hit) => hit.url)).toEqual([results[0]!.url]);
   expect(result.attempts).toEqual([{ provider: "exa", outcome: "failed", reason: "HTTP 429" }, { provider: "firecrawl", outcome: "succeeded" }]);
   expect(formatSearch(result)).toContain("exa: failed (HTTP 429) → firecrawl: succeeded");
-  expect(searchPreview(result, { fg: (_: string, text: string) => text } as never).render(100).join("\n")).toContain("2 attempts");
+  expect(searchPreview(result, { fg: (_: string, text: string) => text } as never).render(100).join("\n")).toContain("Firecrawl · API · via Exa → Firecrawl");
 });
 
 test("explicit provider pins, unsupported alternate constraints, bad input and empty results never fan out", async () => {

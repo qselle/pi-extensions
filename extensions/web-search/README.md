@@ -10,10 +10,12 @@ available providers without making a request or displaying keys.
 
 ```text
 • Searched Python TaskGroup cancellation
-  └ 8 sources · Exa · public · 1.2s
+  └ 10 sources · Exa · public · 1.2s
     1. Coroutines and Tasks — Python documentation · docs.python.org
     2. What's New in Python 3.13 · docs.python.org
     3. asyncio — Asynchronous I/O · docs.python.org
+    4. PEP 654 – Exception Groups and except* · peps.python.org
+    5. Task groups in asyncio · superfastpython.com
     +5 more · ctrl+o to expand
 ```
 
@@ -44,8 +46,8 @@ Set `provider` explicitly to pin a provider and account, including `provider: "e
 Pinned requests preserve their original diagnostics and never fall back. Deep
 search retains its 60-second deadline. Alternative
 providers require their existing API keys; no keys or services are installed.
-When a fallback succeeds, the compact result reports its provider and attempt
-count; expansion and model output show the route and failure causes. A failed
+When a fallback succeeds, the compact result reports its provider and route;
+expansion and model output add the failure causes. A failed
 account/key request remains visible in that history.
 
 | Parameter | Values |
@@ -96,8 +98,8 @@ Known publication dates outside the requested window are excluded. Unknown or
 partially overlapping dates remain marked unverified. Cache age and publication
 dates are separate policies; check dates on the source.
 
-Compact results show one summary with provider, public/API access, elapsed time,
-and up to three sources. Each source occupies one ranked row with a clickable
+Compact results show one summary with provider, public/API access, the route
+after a fallback (`via Exa → Firecrawl`), elapsed time, and up to five sources. Each source occupies one ranked row with a clickable
 title and a reserved visible origin; narrow terminals prioritize origins.
 URL-only titles show the origin once. Expanded results wrap
 full URLs and excerpts, and show dates, exclusion reasons, and provider warnings.

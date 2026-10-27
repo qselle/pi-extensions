@@ -4,10 +4,11 @@ import { hyperlinkUrl } from "../../lib/links.ts";
 import { cleanText, webUrl, type SearchHit, type SearchResult } from "./client.ts";
 import { freshnessLabel } from "./filters.ts";
 import { expansionHint, fitToolRow } from "../../lib/tool-ui.ts";
+import { Lines } from "../tool-render/lines.ts";
 
 export { toolText as textBlock } from "../../lib/tool-ui.ts";
 
-const PREVIEW_SOURCES = 3;
+const PREVIEW_SOURCES = 5;
 const providerNames = { exa: "Exa", firecrawl: "Firecrawl", mistral: "Mistral" };
 
 function wrapped(text: string, width: number, prefix = "    "): string[] {
@@ -72,7 +73,7 @@ function summary(details: SearchResult): string {
   return [
     `${count} source${count === 1 ? "" : "s"}`, providerNames[details.provider],
     details.access === "keyless" ? "public" : details.access === "api-key" ? "API" : undefined,
-    details.attempts?.length ? `${details.attempts.length} attempts` : undefined,
+    details.attempts?.length ? `via ${details.attempts.map((attempt) => providerNames[attempt.provider] ?? cleanText(attempt.provider, 20)).join(" → ")}` : undefined,
     details.quality && details.quality !== "balanced" ? details.quality : undefined, elapsed,
   ].filter(Boolean).join(" · ");
 }
@@ -86,64 +87,56 @@ function compactFilters(details: SearchResult): string {
   ].filter(Boolean).join(" · ");
 }
 
-/** Human display stays separate from the complete, source-numbered model output. */
+/** Human display stays separate from the complete, source-numbered model output. Rows are cached per width. */
 export function searchPreview(details: SearchResult, theme: Theme, expanded = false) {
-  return {
-    invalidate() {},
-    render(width: number): string[] {
-      if (width <= 0) return [];
-      const count = details.results.length;
-      const lines = wrapped(theme.fg("muted", summary(details)), width);
-      lines[0] = theme.fg("dim", "  └ ") + lines[0]!.slice(4);
-      const filters = compactFilters(details);
-      if (filters) lines.push(...wrapped(theme.fg("dim", cleanText(filters, 1200)), width));
-      if (details.warning) lines.push(...wrapped(theme.fg("warning", expanded ? `Provider warning: ${cleanText(details.warning, 500)}` : "Provider warning · expand for details"), width));
-      const visible = expanded ? details.results : details.results.slice(0, PREVIEW_SOURCES);
-      visible.forEach((hit, index) => {
-        if (expanded) lines.push("");
-        lines.push(...sourceRows(hit, index, width, theme, expanded));
-      });
-      if (!count) {
-        const empty = details.diagnostics?.received ? "No usable sources remain · check filters"
-          : details.warning ? "No sources returned · see warning"
-          : "No matches returned · try a broader query";
-        lines.push(...wrapped(theme.fg("muted", empty), width));
-      }
-      const stats = details.diagnostics;
-      const excluded = stats ? stats.received - count : 0;
-      if (expanded) {
-        if (details.attempts?.length) lines.push(...wrapped(theme.fg("dim", `Route: ${details.attempts.map((attempt) => `${attempt.provider} ${attempt.outcome}${attempt.reason ? ` (${cleanText(attempt.reason, 80)})` : ""}`).join(" → ")}`), width));
-        const diagnostics = stats ? [
-          stats.invalid ? `${stats.invalid} invalid` : "", stats.duplicate ? `${stats.duplicate} duplicate` : "",
-          stats.outsideDomains ? `${stats.outsideDomains} outside requested domains` : "",
-          stats.excludedDomains ? `${stats.excludedDomains} excluded domains` : "",
-          stats.outsideDates ? `${stats.outsideDates} outside requested dates` : "",
-          stats.omitted ? `${stats.omitted} beyond result limit` : "",
-        ].filter(Boolean) : [];
-        if (diagnostics.length) lines.push(...wrapped(theme.fg("dim", `Filtered: ${diagnostics.join(" · ")}`), width));
-        if (stats?.uncertainDates) lines.push(...wrapped(theme.fg("dim", `${stats.uncertainDates} source(s) with unverified publication dates`), width));
-        if (details.maxAgeHours !== undefined) lines.push(...wrapped(theme.fg("dim", "Content freshness requested, not independently verified"), width));
-      } else {
-        const footer = [count > PREVIEW_SOURCES ? `+${count - PREVIEW_SOURCES} more` : "", excluded > 0 ? `${excluded} rows excluded` : "", expansionHint()].filter(Boolean).join(" · ");
-        lines.push(...wrapped(theme.fg("dim", footer), width));
-      }
-      return lines.map((line) => fitToolRow(line, width));
-    },
-  };
+  return new Lines((width) => {
+    const count = details.results.length;
+    const lines = wrapped(theme.fg("muted", summary(details)), width);
+    lines[0] = theme.fg("dim", "  └ ") + lines[0]!.slice(4);
+    const filters = compactFilters(details);
+    if (filters) lines.push(...wrapped(theme.fg("dim", cleanText(filters, 1200)), width));
+    if (details.warning) lines.push(...wrapped(theme.fg("warning", expanded ? `Provider warning: ${cleanText(details.warning, 500)}` : "Provider warning · expand for details"), width));
+    const visible = expanded ? details.results : details.results.slice(0, PREVIEW_SOURCES);
+    visible.forEach((hit, index) => {
+      if (expanded) lines.push("");
+      lines.push(...sourceRows(hit, index, width, theme, expanded));
+    });
+    if (!count) {
+      const empty = details.diagnostics?.received ? "No usable sources remain · check filters"
+        : details.warning ? "No sources returned · see warning"
+        : "No matches returned · try a broader query";
+      lines.push(...wrapped(theme.fg("muted", empty), width));
+    }
+    const stats = details.diagnostics;
+    const excluded = stats ? stats.received - count : 0;
+    if (expanded) {
+      if (details.attempts?.length) lines.push(...wrapped(theme.fg("dim", `Route: ${details.attempts.map((attempt) => `${attempt.provider} ${attempt.outcome}${attempt.reason ? ` (${cleanText(attempt.reason, 80)})` : ""}`).join(" → ")}`), width));
+      const diagnostics = stats ? [
+        stats.invalid ? `${stats.invalid} invalid` : "", stats.duplicate ? `${stats.duplicate} duplicate` : "",
+        stats.outsideDomains ? `${stats.outsideDomains} outside requested domains` : "",
+        stats.excludedDomains ? `${stats.excludedDomains} excluded domains` : "",
+        stats.outsideDates ? `${stats.outsideDates} outside requested dates` : "",
+        stats.omitted ? `${stats.omitted} beyond result limit` : "",
+      ].filter(Boolean) : [];
+      if (diagnostics.length) lines.push(...wrapped(theme.fg("dim", `Filtered: ${diagnostics.join(" · ")}`), width));
+      if (stats?.uncertainDates) lines.push(...wrapped(theme.fg("dim", `${stats.uncertainDates} source(s) with unverified publication dates`), width));
+      if (details.maxAgeHours !== undefined) lines.push(...wrapped(theme.fg("dim", "Content freshness requested, not independently verified"), width));
+    } else {
+      const footer = [count > PREVIEW_SOURCES ? `+${count - PREVIEW_SOURCES} more` : "", excluded > 0 ? `${excluded} rows excluded` : "", expansionHint()].filter(Boolean).join(" · ");
+      lines.push(...wrapped(theme.fg("dim", footer), width));
+    }
+    return lines.map((line) => fitToolRow(line, width));
+  }, summary(details));
 }
 
 /** Surface a bounded cause while leaving the complete tool error expandable. */
 export function failurePreview(label: string, content: readonly { type: string; text?: string }[], theme: Theme) {
   const text = content.find((part) => part.type === "text" && part.text?.trim())?.text;
   const cause = cleanText(text, 1200);
-  return {
-    invalidate() {},
-    render(width: number): string[] {
-      if (width <= 0) return [];
-      const lines = wrapped(theme.fg("error", cause || `${label} failed`), width);
-      lines[0] = theme.fg("dim", "  └ ") + lines[0]!.slice(4);
-      lines.push(...wrapped(theme.fg("dim", expansionHint()), width));
-      return lines.map((line) => fitToolRow(line, width));
-    },
-  };
+  return new Lines((width) => {
+    const lines = wrapped(theme.fg("error", cause || `${label} failed`), width);
+    lines[0] = theme.fg("dim", "  └ ") + lines[0]!.slice(4);
+    lines.push(...wrapped(theme.fg("dim", expansionHint()), width));
+    return lines.map((line) => fitToolRow(line, width));
+  }, cause || `${label} failed`);
 }
