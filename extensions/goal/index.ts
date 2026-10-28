@@ -705,9 +705,10 @@ export default function goalExtension(pi: ExtensionAPI) {
     renderResult: (result, _options, theme) => renderGoalToolResult(result.details as GoalToolDetails | undefined, theme),
   });
 
-  // Reconciliation reaches the model as one append-only message per request.
-  pi.on("before_agent_start", () => {
-    if (goal?.status !== "active" || !goal.reconciliation || goal.reconciliation.requestId !== currentRequestId) return;
+  // Reconciliation reaches the model as one append-only message per user request;
+  // extension-triggered runs do not repeat it.
+  pi.on("before_agent_start", (event) => {
+    if (event.messageType !== "user" || goal?.status !== "active" || !goal.reconciliation || goal.reconciliation.requestId !== currentRequestId) return;
     return {
       message: {
         customType: GOAL_RECONCILIATION_TYPE,

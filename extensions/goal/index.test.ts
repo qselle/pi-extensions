@@ -337,7 +337,7 @@ test("a stalled goal resumes only through explicit resume and request reconcilia
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.goal.status).toBe("stalled");
 
-  expect(await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx)).toEqual([undefined]);
+  expect(await pi.emit("before_agent_start", { messageType: "user", prompt: "", systemPrompt: "base" }, ctx)).toEqual([undefined]);
 
   await pi.emit("agent_start", {}, ctx);
   await expect(pi.tools.get("report_goal_progress").execute("invalid-progress", {
@@ -396,7 +396,7 @@ test("does not auto-revive provider-capacity stops", async () => {
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries.at(-1).data.goal.status).toBe("usage_limited");
 
-  expect(await pi.emit("before_agent_start", { systemPrompt: "base" }, ctx)).toEqual([undefined]);
+  expect(await pi.emit("before_agent_start", { messageType: "user", prompt: "", systemPrompt: "base" }, ctx)).toEqual([undefined]);
   await expect(pi.tools.get("report_goal_progress").execute("progress", {
     checks: [{ content: "Wait for provider capacity", status: "in_progress" }],
   }, undefined, undefined, ctx)).rejects.toThrow("only while the goal is active");
@@ -666,7 +666,7 @@ test("inactive status questions keep the goal inactive while resume and full rev
   await pi.emit("session_start", {}, ctx);
   const entries = pi.entries.length;
   await pi.emit("input", { source: "interactive", text: "What is the status?" }, ctx);
-  expect(await pi.emit("before_agent_start", {}, ctx)).toEqual([undefined]);
+  expect(await pi.emit("before_agent_start", { messageType: "user", prompt: "" }, ctx)).toEqual([undefined]);
   await pi.emit("agent_start", {}, ctx);
   await pi.emit("agent_settled", {}, ctx);
   expect(pi.entries).toHaveLength(entries);
@@ -804,7 +804,8 @@ test("a user request adds one reconciliation message and its tool result keeps a
   await pi.emit("session_start", { reason: "startup" }, ctx);
   await pi.commands.get("goal").handler("Keep scope stable", ctx);
   await pi.emit("input", { source: "rpc", text: "How is it going?" }, ctx);
-  const [start] = await pi.emit("before_agent_start", {}, ctx);
+  expect(await pi.emit("before_agent_start", { messageType: "custom", message: { customType: "wake", content: "x" } }, ctx)).toEqual([undefined]);
+  const [start] = await pi.emit("before_agent_start", { messageType: "user", prompt: "How is it going?" }, ctx);
   const requestId = pi.entries.at(-1).data.goal.reconciliation.requestId;
   expect(start.message.customType).toBe("goal-reconciliation");
   expect(start.message.content).toContain(`request_id: ${requestId}`);
