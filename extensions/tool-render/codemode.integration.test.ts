@@ -7,3 +7,10 @@ test("codemode cards restyle Pi's tool with one shared call and result block", a
   expect(code, stderr || stdout).toBe(0);
   expect(stdout.trim()).toBe("tool-render codemode verified");
 }, 30_000);
+
+test("the restyled codemode keeps every field of Pi's definition, including reachesTools", async () => {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "codemode-definition.integration-fixture.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, stderr || stdout).toBe(0);
+  expect(stdout.trim()).toBe("restyled codemode keeps Pi's definition");
+}, 30_000);

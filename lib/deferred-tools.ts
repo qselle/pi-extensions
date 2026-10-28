@@ -1,25 +1,33 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** Hide idle controls, then restore only the tools this instance deferred. */
-export function deferredTools(pi: ExtensionAPI, names: readonly string[]) {
-  let withheld = new Set<string>();
+/**
+ * Additive activation for idle controls. With `registeredInactive`, each control is registered
+ * with `defaultActive: false`: Pi keeps it inactive until first use, and resumed branches keep the
+ * controls they activated. Otherwise controls registered active are withheld at session start,
+ * which removes restored controls on resume; that legacy path remains for unmigrated callers.
+ */
+export function deferredTools(pi: ExtensionAPI, names: readonly string[], { registeredInactive = false } = {}) {
+  let pending = new Set<string>();
   return {
+    /** Call on session start and tree navigation. */
     initialize() {
       if (!pi.getActiveTools || !pi.setActiveTools) return;
       const active = pi.getActiveTools();
-      // Tree navigation does not reset Pi's active tools. Keep ownership of
-      // controls we already hid until they have actually been activated.
-      withheld = new Set([...withheld, ...active.filter(name => names.includes(name))]);
-      if (withheld.size) pi.setActiveTools(active.filter(name => !withheld.has(name)));
+      if (registeredInactive) {
+        // Controls already active belong to the user.
+        pending = new Set(names.filter(name => !active.includes(name)));
+        return;
+      }
+      // Tree navigation may keep controls already withheld; own them until activated.
+      pending = new Set([...pending, ...active.filter(name => names.includes(name))]);
+      if (pending.size) pi.setActiveTools(active.filter(name => !pending.has(name)));
     },
     activate(selected: readonly string[] = names) {
-      if (!withheld.size) return;
-      const add = selected.filter(name => withheld.has(name));
+      const add = selected.filter(name => pending.has(name));
       if (!add.length) return;
-      const active = pi.getActiveTools();
-      pi.setActiveTools([...new Set([...active, ...add])]);
+      pi.setActiveTools([...new Set([...pi.getActiveTools(), ...add])]);
       // Subsequent updates must not re-enable a tool the user manually disabled.
-      for (const name of add) withheld.delete(name);
+      for (const name of add) pending.delete(name);
     },
   };
 }

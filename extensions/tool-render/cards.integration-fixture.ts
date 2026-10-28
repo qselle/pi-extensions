@@ -162,14 +162,16 @@ try {
     const bash = tools.get("bash")!;
     const failed = await bash.execute("exit-2", { command: "echo nope; exit 2", purpose: "Fail on purpose" }, undefined, undefined, context as never);
     assert.equal((failed.details as any).exitCode, 2);
-    assert(Number.isInteger((failed.details as any).durationMs));
+    assert.equal((failed.details as any).durationMs, undefined, "Pi records the duration on the result message");
     const failedRow = headline("exit-2", { command: "exit 2", purpose: "Fail on purpose" }, { ...failed, isError: true });
     assert(failedRow.startsWith("• Command failed · Fail on purpose · ✗ exit 2"), failedRow);
     const ok = await bash.execute("exit-0", { command: "true" }, undefined, undefined, context as never);
     assert.equal(headline("exit-0", { command: "true" }, { ...ok, isError: false }), "• Ran command · ✓");
 
-    const timed = headline("timed", { command: "sleep 3" }, { content: [], details: { exitCode: 0, durationMs: 3000 }, isError: false });
-    assert.equal(timed, "• Ran command · ✓ in 3s");
+    const timed = headline("timed", { command: "sleep 3" }, { content: [], details: { exitCode: 0 }, durationMs: 3000, isError: false });
+    assert.equal(timed, "• Ran command · ✓ in 3s", "Pi's recorded duration");
+    const legacy = headline("legacy", { command: "sleep 3" }, { content: [], details: { exitCode: 0, durationMs: 3000 }, isError: false });
+    assert.equal(legacy, "• Ran command · ✓ in 3s", "durations saved in details by earlier versions");
     const nativeSaved = headline("saved", { command: "x" }, { content: [{ type: "text", text: "out\n\nCommand exited with code 2" }], details: { durationMs: 3000 }, isError: true });
     assert.equal(nativeSaved, "• Command failed · ✗ exit 2 in 3s", "older results parse the exit status");
     const timeout = headline("timeout", { command: "x" }, { content: [{ type: "text", text: "Command timed out after 5 seconds" }], details: {}, isError: true });

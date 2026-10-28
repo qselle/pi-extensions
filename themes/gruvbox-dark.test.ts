@@ -1,21 +1,19 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Compile } from "typebox/compile";
 import theme from "./gruvbox-dark.json";
 
-const REQUIRED_COLORS = [
-  "accent", "border", "borderAccent", "borderMuted", "success", "error", "warning", "muted", "dim", "text",
-  "thinkingText", "scrollbarTrack", "scrollbarThumb", "selectedBg", "searchMatchBg", "searchMatchText",
-  "userMessageBg", "userMessageText", "customMessageBg", "customMessageText",
-  "customMessageLabel", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "toolTitle", "toolOutput", "mdHeading",
-  "mdLink", "mdLinkUrl", "mdCode", "mdCodeBlock", "mdCodeBlockBorder", "mdQuote", "mdQuoteBorder", "mdHr",
-  "mdListBullet", "toolDiffAdded", "toolDiffRemoved", "toolDiffContext", "syntaxComment", "syntaxKeyword",
-  "syntaxFunction", "syntaxVariable", "syntaxString", "syntaxNumber", "syntaxType", "syntaxOperator",
-  "syntaxPunctuation", "thinkingOff", "thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh",
-  "thinkingXhigh", "thinkingMax", "bashMode",
-] as const;
+// Pi publishes the schema it validates themes with at startup next to its dist directory.
+const piRoot = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
+const schema = JSON.parse(readFileSync(join(piRoot, "schemas", "theme.schema.json"), "utf8"));
 
-test("defines every current Pi color token", () => {
+test("passes Pi's theme schema and defines every color token, including optional ones", () => {
   expect(theme.name).toBe("gruvbox-dark");
-  for (const token of REQUIRED_COLORS) expect(theme.colors).toHaveProperty(token);
+  expect(theme.$schema).toBe(schema.$id);
+  expect([...Compile(schema).Errors(theme)]).toEqual([]);
+  for (const token of Object.keys(schema.properties.colors.properties)) expect(theme.colors).toHaveProperty(token);
 });
 
 test("uses valid hex colors or declared palette variables", () => {

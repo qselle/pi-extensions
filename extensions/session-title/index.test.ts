@@ -82,7 +82,7 @@ async function flushDetachedRequest(): Promise<void> {
 
 /** Start a turn the way Pi does: before_agent_start, then the request joins the branch. */
 async function prompt(h: ReturnType<typeof setup>, text: string) {
-  await h.pi.emit("before_agent_start", { prompt: text }, h.ctx);
+  await h.pi.emit("before_agent_start", { messageType: "user", prompt: text }, h.ctx);
   h.branch.push(userEntry(text));
   await flushDetachedRequest();
 }
@@ -102,7 +102,7 @@ test("rename preserves manual wording and defeats a late generated title", async
   let finish!: (result: TitleResult) => void;
   const h = setup({ request: async () => new Promise((resolve) => { finish = resolve; }) });
   await h.pi.emit("session_start", {}, h.ctx);
-  await h.pi.emit("before_agent_start", { prompt: "investigate long running network requests" }, h.ctx);
+  await h.pi.emit("before_agent_start", { messageType: "user", prompt: "investigate long running network requests" }, h.ctx);
   await h.pi.commands.get("rename").handler("My exact title: with more than four words!", h.ctx);
   finish({ title: "Late Generated Title" });
   await flushDetachedRequest();
@@ -228,7 +228,7 @@ describe("first request draft", () => {
     const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
     const h = setup({ request: async () => pending });
     await h.pi.emit("session_start", {}, h.ctx);
-    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    await h.pi.emit("before_agent_start", { messageType: "user", prompt: "redesign the footer" }, h.ctx);
     expect(h.calls).toHaveLength(1);
     expect(h.pi.name).toBeUndefined();
     expect(h.pi.emitted.at(-1)).toEqual({
@@ -273,7 +273,7 @@ describe("first request draft", () => {
     const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
     const h = setup({ request: async () => pending });
     await h.pi.emit("session_start", {}, h.ctx);
-    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    await h.pi.emit("before_agent_start", { messageType: "user", prompt: "redesign the footer" }, h.ctx);
     h.pi.setSessionName("My Name");
     await flushDetachedRequest();
     expect(h.calls[0].signal.aborted).toBe(true);
@@ -287,7 +287,7 @@ describe("first request draft", () => {
     const pending = new Promise<TitleResult>((resolve) => { finish = resolve; });
     const h = setup({ request: async () => pending });
     await h.pi.emit("session_start", {}, h.ctx);
-    await h.pi.emit("before_agent_start", { prompt: "redesign the footer" }, h.ctx);
+    await h.pi.emit("before_agent_start", { messageType: "user", prompt: "redesign the footer" }, h.ctx);
     await h.pi.emit("session_shutdown", {}, h.ctx);
     expect(h.calls[0].signal.aborted).toBe(true);
     finish({ title: "Stale Title" });
@@ -376,9 +376,19 @@ describe("first request draft", () => {
   test("ignores empty prompts", async () => {
     const h = setup();
     await h.pi.emit("session_start", {}, h.ctx);
-    await h.pi.emit("before_agent_start", { prompt: "   " }, h.ctx);
+    await h.pi.emit("before_agent_start", { messageType: "user", prompt: "   " }, h.ctx);
     expect(h.pi.name).toBeUndefined();
     expect(h.calls).toHaveLength(0);
+  });
+
+  test("ignores extension-triggered runs", async () => {
+    const h = setup();
+    await h.pi.emit("session_start", {}, h.ctx);
+    await h.pi.emit("before_agent_start", { messageType: "custom", message: { customType: "wake", content: "please fix the retry loop in fetch" } }, h.ctx);
+    await flushDetachedRequest();
+    expect(h.calls).toHaveLength(0);
+    await prompt(h, "please fix the retry loop in fetch");
+    expect(h.calls).toHaveLength(1);
   });
 });
 

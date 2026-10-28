@@ -30,11 +30,14 @@ try {
       await session.bindExtensions({});
       await session.prompt("/goal Verify the feature");
       await runner.emit({ type: "agent_start" });
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 0, "active goals suppress routine pings");
       await session.prompt("/goal pause");
       await runner.emit({ type: "agent_start" });
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: true });
+      assert.equal(notifications.length, 0, "cancelled runs stay quiet");
+      await runner.emit({ type: "agent_start" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 1, "paused goals allow notifications");
       manager.appendCustomEntry("goal-state", { version: 2, goal: setGoalStatus(createGoal("Previously blocked goal"), "blocked") });
       await runner.emit({ type: "session_start", reason: "resume" });
@@ -43,7 +46,7 @@ try {
       await runner.emit({ type: "session_start", reason: "resume" });
       await runner.emit({ type: "agent_start" });
       await runner.emit({ type: "tool_execution_end", toolCallId: "failure", toolName: "bash", result: { content: [{ type: "text", text: "different failure" }] }, isError: true } as any);
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 1, "restored goals suppress notifications in either load order");
       eventBus.emit(GOAL_CHANGED_EVENT, { version: 1, status: "blocked" });
       const attention = { version: 1, attentionId: "blocked", sessionId: manager.getSessionId(), goalId: "goal", status: "blocked", turns: 3, tokensUsed: 10, tokenBudget: null };
@@ -51,7 +54,7 @@ try {
       assert.equal(notifications.length, 1, "stale session attention cannot reach the current desktop");
       eventBus.emit(GOAL_ATTENTION_EVENT, attention);
       eventBus.emit(GOAL_ATTENTION_EVENT, attention);
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 2, "a blocked goal alerts once even before the turn settles");
       assert.match(notifications.at(-1)!, /input needed/);
       manager.appendCustomEntry("goal-state", { version: 2, goal: setGoalStatus(createGoal("Blocked at reload"), "blocked") });
@@ -60,7 +63,7 @@ try {
       assert.equal(installed, 2, "native reload replaces the notification extension");
       assert.equal(notifications.length, 2, "native reload does not replay blocked attention");
       eventBus.emit(GOAL_ATTENTION_EVENT, { ...attention, attentionId: "usage", status: "usage_limited" });
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 3, "reloaded attention sends once and suppresses the settled ping");
       assert.equal(deliveryOwners.at(-1), installed, "only the current runtime can deliver attention");
     } finally { await runner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); }
@@ -86,7 +89,7 @@ try {
     const settle = async (text: string) => {
       await runner.emit({ type: "agent_start" });
       await runner.emit({ type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text }] }] } as any);
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
     };
     try {
       await runner.emit({ type: "session_start", reason: "startup" });
@@ -103,7 +106,7 @@ try {
       await runner.emit({ type: "tool_execution_end", toolCallId: "failed", toolName: "bash", result: { content: [{ type: "text", text: "Tests failed" }] }, isError: true });
       await runner.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "test.ts" } });
       await runner.emit({ type: "tool_execution_end", toolCallId: "read", toolName: "read", result: {}, isError: false });
-      await runner.emit({ type: "agent_settled" });
+      await runner.emit({ type: "agent_settled", aborted: false });
       assert.match(notifications.at(-1)!, /tool failed/, "unrelated read cannot hide a failed operation");
     } finally { await runner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); }
   } finally {

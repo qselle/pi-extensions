@@ -264,8 +264,9 @@ export default function notifyExtension(pi: ExtensionAPI, options: { deliver?: (
 		if (assistant) finalResponse = preview(textOf(assistant));
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
-		if (notifiedThisRun || goalActive) return;
+	pi.on("agent_settled", (event, ctx) => {
+		// A run the user cancelled (Pi 1.1+) needs no completion ping.
+		if (event?.aborted || notifiedThisRun || goalActive) return;
 		notifiedThisRun = true;
 		project = projectOf(ctx.cwd, project);
 		const lastFailure = failures.latest();

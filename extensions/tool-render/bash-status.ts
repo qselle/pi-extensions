@@ -47,8 +47,10 @@ function contentText(result: any): string {
 /**
  * Reads `exitCode`, `status`, `signal`, `durationMs` and `startedAt`/`endedAt`
  * from details when present, so native and managed executors share one headline.
+ * Details win over `recordedMs`, Pi's execution time (1.1+): a managed job's own
+ * timing outlasts the call that started it, and older results saved theirs there.
  */
-export function bashOutcome(result: any, isError: boolean): BashOutcome {
+export function bashOutcome(result: any, isError: boolean, recordedMs?: number): BashOutcome {
 	const details = result?.details !== null && typeof result?.details === "object" ? result.details : {};
 	const text = contentText(result).replace(/\s+$/, "");
 	const header = text.split("\n", 1)[0]!.match(MANAGED_HEADER) ?? undefined;
@@ -59,7 +61,7 @@ export function bashOutcome(result: any, isError: boolean): BashOutcome {
 	const signal = typeof details.signal === "string" && details.signal ? details.signal : header?.[4];
 	const startedAt = time(details.startedAt);
 	const endedAt = time(details.endedAt);
-	const duration = time(details.durationMs) ?? (startedAt !== undefined && endedAt !== undefined ? endedAt - startedAt : undefined);
+	const duration = time(details.durationMs) ?? (startedAt !== undefined && endedAt !== undefined ? endedAt - startedAt : undefined) ?? time(recordedMs);
 	const saved = header?.[2]?.trim();
 	const elapsed = duration !== undefined ? formatElapsed(duration) : saved && /^\d+[smh]( \d+[smh])?$/.test(saved) && saved !== "0s" ? saved : undefined;
 	if (status && ACTIVE.has(status)) return { state: "running", elapsed, startedAt };

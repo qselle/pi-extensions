@@ -45,7 +45,7 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExtensionOptions = {}): void {
-  const controls = deferredTools(pi, ["schedule_stop", "get_schedules"]);
+  const controls = deferredTools(pi, ["schedule_stop", "get_schedules"], { registeredInactive: true });
   const panel = new SchedulePanel(pi);
   const tasks = new Map<string, ScheduledTask>();
   const wakePrompts = new Map<string, string>();
@@ -286,7 +286,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   });
 
   pi.registerTool({
-    name: "schedule_stop", label: "Stop Schedule", description: "Stop the persistent scheduled task that owns the current turn, or a specified task.", parameters: StopParameters,
+    name: "schedule_stop", defaultActive: false, label: "Stop Schedule", description: "Stop the persistent scheduled task that owns the current turn, or a specified task.", parameters: StopParameters,
     async execute(_id, params) {
       const result = await mutate(async () => {
         if (closed || !lease) throw new Error("This session does not own the schedule queue.");
@@ -306,7 +306,7 @@ export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExt
   });
 
   pi.registerTool({
-    name: "get_schedules", label: "Get Schedules", description: "List persistent project reminders and cron prompts.", parameters: ListParameters,
+    name: "get_schedules", defaultActive: false, label: "Get Schedules", description: "List persistent project reminders and cron prompts.", parameters: ListParameters,
     async execute() { return { content: [{ type: "text" as const, text: formatScheduleList([...tasks.values()], path, Boolean(lease), loadError) }], details: { tasks: [...tasks.values()], storePath: path, writable: Boolean(lease) } }; },
   });
 

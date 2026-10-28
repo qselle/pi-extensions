@@ -33,7 +33,9 @@ strings, purple numbers, aqua types and orange operators. Comments remain
 readable in warm gray. Unrecognized code languages use the normal cream code
 color. Markdown fences, quote borders and rules stay subdued.
 
-Pi applies these colors through its public theme tokens. Native thinking keeps
+The file follows Pi's published [theme schema](https://pi.dev/schemas/theme.schema.json),
+which Pi 1.2 and newer enforce at startup; tests validate it against the installed
+Pi's schema. Pi applies these colors through its public theme tokens. Native thinking keeps
 Pi's italic styling; its visibility is controlled with `hideThinkingBlock` or the
 native thinking toggle. `markdown.codeBlockIndent` controls code indentation, and
 `outputPad` controls horizontal message padding. This theme adds no commands,

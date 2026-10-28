@@ -200,6 +200,7 @@ export default function imageHistory(pi: ExtensionAPI, options: ImageHistoryOpti
   });
   pi.registerTool({
     name: "history_image",
+    defaultActive: false,
     label: "Retrieve history image",
     ...historyImageRenderers,
     description: "Retrieve one earlier image by the exact reference shown in a model-context placeholder. Requires image-history mode.",

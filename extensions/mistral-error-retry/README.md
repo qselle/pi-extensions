@@ -2,10 +2,12 @@
 
 Auto-retries Mistral turns that fail with `Provider stopped with: error`.
 
-Pi's Mistral adapter reports this when a stream ends with
+Pi 1.0's Mistral adapter reports this when a stream ends with
 `finish_reason: "error"`: the model server aborted generation without a reason.
 Retrying usually works, but Pi's auto-retry does not recognize the wording, so
-the turn stops.
+the turn stops. Since Pi 1.1, the adapter reports
+`Provider stopped with: error (server error)` itself and Pi retries it, so this
+extension has nothing to rewrite there.
 
 ## Usage
 
@@ -21,7 +23,8 @@ new prompt resets the count.
 
 ## Dependencies and limitations
 
-- Requires Pi 1.x with auto-retry enabled (`retry.enabled`, on by default);
-  `retry.maxRetries` and backoff settings still apply.
+- Only takes effect on Pi 1.0.4–1.0.x with auto-retry enabled (`retry.enabled`,
+  on by default); `retry.maxRetries` and backoff settings still apply. On Pi 1.1
+  and newer, Pi's own retry handles these errors without the three-failure cap.
 - Matches the exact error text of Pi's Mistral adapter; other wording is untouched.
 - No configuration, network access, or third-party packages.

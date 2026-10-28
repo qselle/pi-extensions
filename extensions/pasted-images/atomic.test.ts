@@ -49,8 +49,10 @@ test("live tokens render as one highlighted block; the cursor keeps its own styl
   expect(editor.render(40).join("\n")).toContain("see <[Image 1]> [Image 2]");
   press(...Array(12).fill(LEFT));
   expect(editor.getCursor().col).toBe(4);
-  expect(editor.render(40).join("\n")).toContain("\x1b[7m[Image 1]\x1b[0m");
-  expect(highlightTokens(["[Image 1]"], { isLive: () => false, highlight: (token) => `<${token}>` })).toEqual(["[Image 1]"]);
+  expect(editor.render(40).join("\n")).toContain("\x1b_pi:fc\x07[Image 1]\x1b_pi:/fc\x07");
+  const behavior = { isLive: () => true, highlight: (token: string) => `<${token}>` };
+  expect(highlightTokens(["\x1b[7m[Image 1]\x1b[0m"], behavior)).toEqual(["\x1b[7m[Image 1]\x1b[0m"]);
+  expect(highlightTokens(["[Image 1]"], { ...behavior, isLive: () => false })).toEqual(["[Image 1]"]);
 });
 
 test("tokens whose image is gone are plain text", () => {

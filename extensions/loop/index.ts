@@ -57,7 +57,7 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function loopExtension(pi: ExtensionAPI): void {
-  const controls = deferredTools(pi, ["loop_schedule", "loop_stop", "get_loops"]);
+  const controls = deferredTools(pi, ["loop_schedule", "loop_stop", "get_loops"], { registeredInactive: true });
   const panel = new SnapshotPanel(pi, "loop", "loops · snapshot");
   const jobs = new Map<string, LoopJob>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -319,6 +319,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "loop_schedule",
+    defaultActive: false,
     label: "Schedule Loop",
     description: "Schedule the next iteration of the dynamic /loop that owns the current turn. Call this once near the end of every dynamic-loop iteration unless the loop is complete; use loop_stop when it is complete. The delay is clamped to 60 seconds through 1 hour.",
     parameters: ScheduleParameters,
@@ -337,6 +338,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "loop_stop",
+    defaultActive: false,
     label: "Stop Loop",
     description: "Stop the /loop that owns the current turn because its task is complete or recurring work is no longer useful. This only affects a loop-created turn.",
     parameters: StopParameters,
@@ -352,6 +354,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: "get_loops",
+    defaultActive: false,
     label: "Get Loops",
     description: "List the session's scheduled loops, including cadence, status, iteration count, and next wakeup.",
     parameters: ListParameters,
