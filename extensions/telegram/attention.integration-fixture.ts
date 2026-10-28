@@ -90,13 +90,13 @@ try {
           for (let i = 0; i < 3; i++) {
             await r.runner.emit({ type: "agent_start" });
             await r.tools.get("update_goal").execute(`block-${i}`, { status: "blocked", blocker: "private blocker", evidence: "private evidence", next_input: "private next input" }, undefined, undefined, r.context());
-            await r.runner.emit({ type: "agent_settled" });
+            await r.runner.emit({ type: "agent_settled", aborted: false });
           }
         } else {
           await r.runner.emit({ type: "agent_start" });
           if (status === "complete") await r.tools.get("update_goal").execute("complete", { status: "complete" }, undefined, undefined, r.context());
           else await r.runner.emitMessageEnd({ type: "message_end", message: assistant(status === "paused" ? "aborted" : status === "budget_limited" ? "stop" : "error", 10, status === "usage_limited" ? "private usage limit reached" : "private provider error") });
-          await r.runner.emit({ type: "agent_settled" });
+          await r.runner.emit({ type: "agent_settled", aborted: false });
         }
         await r.drain();
         const attention = !["paused", "complete"].includes(status);
@@ -124,7 +124,7 @@ try {
           await r.runner.emit({ type: "agent_start" });
           if (failure === "agent" || failure === "aborted") await r.runner.emitMessageEnd({ type: "message_end", message: assistant(failure === "agent" ? "error" : "aborted", 0, "private scheduled error") });
           if (failure === "agent") await r.runner.emitMessageEnd({ type: "message_end", message: assistant("error", 0, "private repeated error") });
-          await r.runner.emit({ type: "agent_settled" });
+          await r.runner.emit({ type: "agent_settled", aborted: false });
         }
         await r.drain();
         const count = ["aborted", "none"].includes(failure) ? 0 : 1;

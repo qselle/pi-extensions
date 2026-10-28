@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import register from "./index.ts";
-const model = OPENAI_CODEX_MODELS["gpt-5.5"];
+const model = OPENAI_CODEX_MODELS["gpt-6.1-sol"];
 const handlers = new Map<string, any>(); let command: any;
 const notices: string[] = [];
 register({ on: (name: string, fn: any) => handlers.set(name, fn), registerCommand: (_: string, value: any) => { command = value; }, events: { emit() {} } } as any,
