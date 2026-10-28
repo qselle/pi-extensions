@@ -237,7 +237,7 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
   });
 
   pi.registerTool({
-    name: "monitor_stop", label: "Stop Monitor",
+    name: "monitor_stop", defaultActive: false, label: "Stop Monitor",
     description: "Stop a deterministic monitor after its alert has been handled. Omit monitor_id for the monitor that woke the current turn.",
     parameters: StopParameters,
     async execute(_id, params, _signal, _update, ctx) {
@@ -252,7 +252,7 @@ export default function monitorExtension(pi: ExtensionAPI, options: MonitorExten
   });
 
   pi.registerTool({
-    name: "get_monitors", label: "Get Monitors", description: "List deterministic session monitors and their latest result.",
+    name: "get_monitors", defaultActive: false, label: "Get Monitors", description: "List deterministic session monitors and their latest result.",
     parameters: ListParameters,
     async execute() { return { content: [{ type: "text" as const, text: formatMonitorList([...jobs.values()]) }], details: { jobs: [...jobs.values()] } }; },
   });

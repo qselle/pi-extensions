@@ -512,6 +512,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "get_goal",
+    defaultActive: false,
     label: "Get Goal",
     description: "Get the current persistent goal, status, elapsed time, token usage, and remaining budget.",
     parameters: GetGoalParameters,
@@ -555,6 +556,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "reconcile_goal",
+    defaultActive: false,
     label: "Reconcile Goal",
     description: "Reconcile the latest user request with the existing goal. Keep unchanged scope, including status questions; revise with the complete requested objective and checks; pause only at the user's explicit request to pause or cancel this objective. Use current goal_id and request_id. Preserve identity, history, usage and budget; inactive goals remain inactive until explicitly resumed.",
     parameters: ReconcileGoalParameters,
@@ -574,6 +576,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "resume_goal",
+    defaultActive: false,
     label: "Resume Goal",
     description: "Resume an inactive goal only when the user explicitly asks to continue it. Preserve its objective, identity, history, usage and budget. Call reconcile_goal with the returned request_id before autonomous continuation. An exhausted budget cannot resume.",
     parameters: GoalIdentityParameters,
@@ -597,6 +600,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "clear_goal",
+    defaultActive: false,
     label: "Clear Goal",
     description: "Clear an inactive goal only when the user explicitly cancels or replaces that objective. History remains saved. For an active goal, reconcile the request with action pause first. Never clear to claim success; use update_goal complete after verification.",
     parameters: GoalIdentityParameters,
@@ -617,6 +621,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "report_goal_progress",
+    defaultActive: false,
     label: "Report Goal Progress",
     description: "Replace an active, reconciled goal's concise progress checks and summary. Keep checks concrete and evidence-based, with at most one in progress. This never resumes an inactive goal; use resume_goal only at the user's explicit request.",
     parameters: ReportGoalProgressParameters,
@@ -638,6 +643,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "update_goal",
+    defaultActive: false,
     label: "Update Goal",
     description: `Mark the existing goal complete or report a genuine repeated blocker. Complete requires every non-cancelled progress check to be finished and a requirement-by-requirement verification showing no work remains. For blocked, provide blocker, evidence, and next_input; the same blocker must be reported in ${BLOCKED_AUDIT_TURNS} separate consecutive goal runs before the loop stops. Difficulty, uncertainty, or a preference for clarification is not a blocker.`,
     promptGuidelines: GOAL_GUIDELINES,
