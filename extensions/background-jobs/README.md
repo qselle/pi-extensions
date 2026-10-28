@@ -171,6 +171,15 @@ signal), and `wall_time_seconds`, plus `status` and, while running, `job_id`.
 `job_list` details hold `jobs` with `id`, `name`, `status`, `icon`, `exitCode`,
 `signal`, `startedAt`, and `endedAt`.
 
+Codemode scripts also get structured results from `job_start`, `job_output`,
+`job_wait`, and `job_write` (`id`, `status`, `exit_code`, `signal`, the same
+`output` window the model reads, `cursor`, `more`, and `omitted_cursor` when
+`max_chars` skipped unread output) and from `job_list` (`jobs` with `id`, `name`,
+`status`, `exit_code`, `signal`, and `command`). A finished failed job is not an
+error result; check `status` or `exit_code`. Job controls activate when a
+command first yields, and a script can call only tools active when it started,
+so the script whose command yields first must leave them to the next script.
+
 ### Cards
 
 Job control tools render their own compact cards: one `•` headline with the

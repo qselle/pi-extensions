@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
-import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, NOTICE_TYPE, PI_ENV_GUIDELINE } from "./index.ts";
+import extension, { BASH_OUTPUT_SCHEMA, FOREGROUND_GUIDELINE, JOB_LIST_SCHEMA, JOB_OUTPUT_SCHEMA, NOTICE_TYPE, PI_ENV_GUIDELINE } from "./index.ts";
 import { JobService, MAX_WAIT_MS } from "./service.ts";
 import { DEFAULT_OUTPUT_CHARS, DEFAULT_YIELD_MS } from "./arguments.ts";
 import { COLLAPSED_TAIL_ROWS } from "./render.ts";
@@ -210,6 +210,43 @@ test("bash returns a structured result shaped like Pi's built-in bash", async ()
   const long = await run("bash", { command: "seq 1 20000", yield_ms: 5000, max_chars: 300 });
   expect(long.structuredContent.output.startsWith("1\n2\n")).toBe(true);
   expect(long.structuredContent.exit_code).toBe(0);
+});
+
+test("job tools return the model's output window as structured results", async () => {
+  const { run, tools } = await session();
+  for (const name of ["job_start", "job_output", "job_wait", "job_write"]) expect(tools.get(name).outputSchema).toBe(JOB_OUTPUT_SCHEMA);
+  for (const name of ["job_stop", "job_resize"]) expect(tools.get(name).outputSchema).toBeUndefined();
+  const started = await run("job_start", { name: "echo", command: "cat", stdin: true, yield_ms: 0 });
+  const id = started.details.id;
+  expect(started.structuredContent).toMatchObject({ id, output: "", cursor: 0, more: false });
+  expect(Value.Check(JOB_OUTPUT_SCHEMA, started.structuredContent)).toBe(true);
+  const reply = await run("job_write", { id, text: "one\n" });
+  expect(reply.structuredContent).toMatchObject({ id, status: "running", output: "one\n", cursor: 4 });
+  expect(outputOf(reply)).toBe(reply.structuredContent.output);
+  await run("job_write", { id, text: "two\n", eof: true, wait_ms: 0 });
+  const done = await run("job_wait", { id, wait_ms: 5000 });
+  expect(done.structuredContent).toMatchObject({ id, status: "completed", exit_code: 0, more: false });
+  expect(Value.Check(JOB_OUTPUT_SCHEMA, done.structuredContent)).toBe(true);
+  const stopped = await run("job_stop", { id });
+  expect(stopped.structuredContent).toBeUndefined();
+
+  // A read cut to max_chars points back at the skipped output, like the model's marker.
+  const command = "sleep 0.2; seq 1 2000; exit 3";
+  const long = await run("bash", { command, yield_ms: 0 });
+  const tail = await run("job_wait", { id: long.details.id, max_chars: 200, wait_ms: 5000 });
+  const marker = outputOf(tail).match(/use cursor (\d+) to read from the start\]\n/);
+  expect(tail.structuredContent).toMatchObject({ status: "failed", exit_code: 3, more: false, omitted_cursor: Number(marker![1]) });
+  expect(outputOf(tail).slice(marker!.index! + marker![0].length)).toBe(tail.structuredContent.output);
+  expect(tail.isError).toBeUndefined();
+  const skipped = await run("job_output", { id: long.details.id, cursor: tail.structuredContent.omitted_cursor, max_chars: 200 });
+  expect(skipped.structuredContent).toMatchObject({ more: true, cursor: tail.structuredContent.omitted_cursor + 200 });
+  expect(outputOf(skipped)).toBe(skipped.structuredContent.output);
+  await expect(run("job_wait", { id: "missing" })).rejects.toThrow("Unknown job ID.");
+
+  const list = await run("job_list", {});
+  expect(tools.get("job_list").outputSchema).toBe(JOB_LIST_SCHEMA);
+  expect(Value.Check(JOB_LIST_SCHEMA, list.structuredContent)).toBe(true);
+  expect(list.structuredContent.jobs).toContainEqual({ id: long.details.id, status: "failed", exit_code: 3, name: long.details.name, command });
 });
 
 test("managed results carry exit, signal, status and timing details", async () => {
