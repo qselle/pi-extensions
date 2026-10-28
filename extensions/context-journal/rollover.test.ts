@@ -46,6 +46,19 @@ test("persists each budget notice once per cycle and permits only checkpoint wri
   expect(f.handlers.get("tool_call")({ toolName: "context_notes", input: { action: "write" } }, f.ctx)).toBeUndefined();
   expect(f.handlers.get("tool_call")({ toolName: "context_rollover", input: {} }, f.ctx)).toBeUndefined();
 });
+test("spent budgets let codemode scripts save notes while their other nested calls stay blocked", async () => {
+  for (const tokens of [91000, 98000]) {
+    const f = fixture(); f.tokens(tokens);
+    const gate = (event: Record<string, unknown>) => f.handlers.get("tool_call")({ input: {}, ...event }, f.ctx);
+    expect(gate({ toolName: "codemode", input: { code: "" } })).toBeUndefined();
+    expect(gate({ toolName: "context_notes", input: { action: "write" }, parentToolCallId: "c1" })).toBeUndefined();
+    expect(gate({ toolName: "bash", parentToolCallId: "c1" }).block).toBe(true);
+  }
+  // A pending rollover still ends the batch, scripts included.
+  const f = fixture();
+  await f.tools.get("context_rollover").execute("r", { checkpoint_ready: true }, undefined, undefined, f.ctx);
+  expect(f.handlers.get("tool_call")({ toolName: "codemode", input: {} }, f.ctx)).toMatchObject({ block: true, terminate: true });
+});
 const toolTurn = { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: {} }] };
 test("a spent emergency reserve rolls over to stale notes during a tool chain without aborting", () => {
   const f = fixture(); f.tokens(98000);

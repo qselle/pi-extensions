@@ -101,7 +101,10 @@ export function installRollover(pi: ExtensionAPI, journal: () => Journal) {
     if (!journal().enabled) return;
     const budget = contextBudget(ctx.getContextUsage());
     if (requested) return { block: true, terminate: true, reason: "Context rollover is pending. End the current tool batch so Pi can commit its safe boundary." };
-    const checkpointTool = event.toolName === "context_rollover" || event.toolName === "context_notes" && ["write", "delete"].includes(String(event.input.action));
+    // A script runner passes: each nested call meets this gate itself. With
+    // codemode.mode "only", scripts are the model's only way to save notes.
+    const checkpointTool = event.toolName === "context_rollover" || event.toolName === "context_notes" && ["write", "delete"].includes(String(event.input.action))
+      || event.toolName === "codemode";
     // Not terminating lets turn_end commit a rollover and continue the run.
     if (budget.phase === "exhausted" && !checkpointTool) {
       return { block: true, reason: hasNotes() ? "Emergency context budget exhausted. Pi rolls over to the saved notes after this turn." : "Emergency context budget exhausted. Write a context_notes checkpoint with the full objective, evidence, constraints and remaining work now." };
