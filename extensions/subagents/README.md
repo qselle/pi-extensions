@@ -19,6 +19,8 @@ The `subagents` tool supports:
 
 Concurrent `spawn` calls start in parallel. Names are case-insensitively unique for the parent session.
 
+Codemode scripts get structured results: `agents` with `name`, `status`, `unread` and `error`, plus `timed_out` for waits; `read` and `wait` add each child's `output` and report messages, including finals already delivered to the model.
+
 ### Argument aliases
 
 Before validation, the tool maps argument shapes common in other agent tool sets

@@ -39,7 +39,8 @@ recent text; pass `nextBefore` as `before` for older results. It returns up to
 20 matches, with 2,000 characters per excerpt and 12,000 combined, plus headers.
 It covers message text and tool calls (`[tool call: name] {arguments}`), labels
 tool results `tool:<name>`, and searches thinking only with `includeReasoning`.
-It excludes images, custom extension messages, and other branches.
+It excludes images, custom extension messages, and other branches. Codemode
+scripts get `matches` (`id`, `role`, `excerpt`) and `nextBefore` as structured data.
 
 ### Rollover
 
@@ -58,7 +59,9 @@ notes must be updated before rollover can proceed.
 The working budget is 90% of the context window. A hidden reminder is saved
 once, after the turn that leaves at most 6,144 tokens (10% on smaller models).
 Beyond that budget, a one-time notice follows and only note writes, deletes, and
-rollover are allowed. A checkpoint reserve adds at most 16,384 tokens
+rollover are allowed. `codemode` calls still start, since each call a script
+makes meets the same rule; with `codemode.mode: "only"` scripts are the only
+way to save notes. A checkpoint reserve adds at most 16,384 tokens
 without exceeding 98% of the window. If a tool chain spends it, Pi rolls over
 to the saved notes after that turn and continues; without notes it stops the
 run once, and the next prompt can still save notes.

@@ -31,13 +31,29 @@ type ToolRenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>
  * names follow Pi's built-in bash; a command that outlives its yield window has
  * no `exit_code` yet and names its `job_id`.
  */
+const LIVE_STATUSES = ["starting", "running", "stopping", "completed", "failed", "stopped", "timed-out"];
 export const BASH_OUTPUT_SCHEMA = Type.Object({
   output: Type.String({ description: `Combined stdout and stderr; keeps the newest ${LOG_CAPACITY} characters` }),
   truncated: Type.Boolean(),
   exit_code: Type.Optional(Type.Number({ description: "Absent while running or after a signal" })),
   wall_time_seconds: Type.Number(),
-  status: Type.Union(["starting", "running", "stopping", "completed", "failed", "stopped", "timed-out"].map((status) => Type.Literal(status))),
+  status: Type.Union(LIVE_STATUSES.map((status) => Type.Literal(status))),
   job_id: Type.Optional(Type.String({ description: "Job ID while the command is still running" })),
+});
+/** Saved jobs whose completion was never recorded are `interrupted`. */
+const jobStatus = Type.Union([...LIVE_STATUSES, "interrupted"].map((status) => Type.Literal(status)));
+const jobFields = { id: Type.String(), status: jobStatus, exit_code: Type.Optional(Type.Number()), signal: Type.Optional(Type.String()) };
+/** Structured job_start/job_output/job_wait/job_write result: the same output window the model reads. */
+export const JOB_OUTPUT_SCHEMA = Type.Object({
+  ...jobFields,
+  output: Type.String(),
+  cursor: Type.Number({ description: "Pass as cursor to continue" }),
+  more: Type.Boolean(),
+  omitted_cursor: Type.Optional(Type.Number({ description: "Set when max_chars skipped unread output; pass as cursor to read it" })),
+});
+export const JOB_LIST_SCHEMA = Type.Object({ jobs: Type.Array(Type.Object({ ...jobFields, name: Type.String(), command: Type.String() })) });
+const jobSummary = (job: Pick<JobSnapshot, "id" | "status" | "code" | "signal">) => ({
+  id: job.id, status: job.status, ...(typeof job.code === "number" ? { exit_code: job.code } : {}), ...(job.signal ? { signal: job.signal } : {}),
 });
 function structuredResult(id: string, jobs: JobService) {
   const job = jobs.get(id);
@@ -233,8 +249,13 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       startedAt: job.startedAt, endedAt: job.endedAt, durationMs,
       cursor: output.cursor, more: output.more, lost: output.lost, omitted: output.omitted,
       ...(request.wait ? { wait: request.wait } : {}),
+    }, structuredContent: {
+      ...jobSummary({ ...job, id }), output: output.text, cursor: output.cursor, more: output.more,
+      ...(output.omitted ? { omitted_cursor: output.from } : {}),
     } };
   };
+  /** Tools without an output schema keep text-only results. */
+  const textOnly = ({ structuredContent: _structured, ...value }: ReturnType<typeof result>) => value;
   /**
    * Wait for exit (or with `until: "output"`, new output), then read. Returns a
    * normal result when the user interrupts or queues a message: the job keeps running.
@@ -396,6 +417,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     promptSnippet: "Run long-lived commands as managed background jobs with bounded logs and explicit cleanup.",
     parameters: startParameters,
     prepareArguments: argumentAliases(startParameters),
+    outputSchema: JOB_OUTPUT_SCHEMA,
     renderShell: "self",
     async execute(_id, params, signal, update, ctx) {
       const { purpose: _purpose, ...execution } = params;
@@ -421,6 +443,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       : "Read managed job output. wait_ms waits for the next output; wait=true waits for exit. Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
     parameters: readParameters[name],
     prepareArguments: argumentAliases(readParameters[name]),
+    outputSchema: JOB_OUTPUT_SCHEMA,
     renderShell: "self",
     async execute(_id, params: any, signal, onUpdate, ctx) {
       const jobs = service;
@@ -437,11 +460,13 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_list", label: "List background jobs", description: "List this session's managed jobs and their IDs, including recent finished jobs. Use job_output for logs.",
     parameters: listParameters,
     prepareArguments: argumentAliases(listParameters),
+    outputSchema: JOB_LIST_SCHEMA,
     renderShell: "self",
     async execute() {
       const jobs = allJobs();
       return { content: [{ type: "text", text: jobs.map((job) => `${job.id} · ${brief(job)}\n${job.command.slice(0, 180)}`).join("\n\n") || "No managed jobs in this session." }],
-        details: { jobs: jobs.map(({ id, name, status, code, signal, startedAt, endedAt }) => ({ id, name, status, icon: icons[status], exitCode: code, signal, startedAt, endedAt })) } };
+        details: { jobs: jobs.map(({ id, name, status, code, signal, startedAt, endedAt }) => ({ id, name, status, icon: icons[status], exitCode: code, signal, startedAt, endedAt })) },
+        structuredContent: { jobs: jobs.map((job) => ({ ...jobSummary(job), name: job.name, command: job.command })) } };
     },
     renderCall: (args, theme, context) => jobHeading("List background jobs", args, theme, context), renderResult: renderJobList,
   });
@@ -452,6 +477,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs need stdin=true at start and support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
     parameters: writeParameters,
     prepareArguments: argumentAliases(writeParameters),
+    outputSchema: JOB_OUTPUT_SCHEMA,
     renderShell: "self",
     async execute(_id, params, signal, onUpdate, ctx) {
       const jobs = service;
@@ -467,7 +493,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     parameters: resizeParameters,
     prepareArguments: argumentAliases(resizeParameters),
     renderShell: "self",
-    async execute(_id, params) { const job = service.resize(resolveId(params.id), params.columns, params.rows); return result(job.id, { cursor: job.outputEnd, track: false }); },
+    async execute(_id, params) { const job = service.resize(resolveId(params.id), params.columns, params.rows); return textOnly(result(job.id, { cursor: job.outputEnd, track: false })); },
     renderCall: (args, theme, context) => jobHeading(`Resize terminal · ${safeLabel(args.id)} · ${args.columns}×${args.rows}`, args, theme, context), renderResult,
   });
   const stopParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter });
@@ -479,7 +505,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     async execute(_id, params) {
       const job = findJob(params.id);
       if (service.list().some((live) => live.id === job.id)) service.stop(job.id);
-      return result(job.id, { cursor: job.outputEnd, track: false, hint: false });
+      return textOnly(result(job.id, { cursor: job.outputEnd, track: false, hint: false }));
     },
     renderCall: (args, theme, context) => jobHeading(`Stop job · ${safeLabel(args.id)}`, args, theme, context), renderResult,
   });

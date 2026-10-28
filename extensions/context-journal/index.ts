@@ -23,6 +23,11 @@ const notesAnchor = createContextAnchor<Journal>({
 });
 
 const TOOLS = ["context_notes", "context_history", "context_budget", "context_rollover"];
+/** Structured context_history result for codemode scripts. */
+export const HISTORY_OUTPUT_SCHEMA = Type.Object({
+  matches: Type.Array(Type.Object({ id: Type.String(), role: Type.String(), excerpt: Type.String() })),
+  nextBefore: Type.Optional(Type.String()),
+});
 export default function contextJournalExtension(pi: ExtensionAPI): void {
   let state = emptyJournal();
   const rollover = installRollover(pi, () => state);
@@ -75,12 +80,14 @@ export default function contextJournalExtension(pi: ExtensionAPI): void {
   pi.registerTool({ name: "context_history", label: "Retrieve session history", ...journalRenderers("context_history"),
     description: "Search messages and tool calls across the complete current session branch, including messages before compaction. Returns newest matches with stable entry IDs and excerpts around the match. Use nextBefore as before to page older results. includeReasoning also searches thinking. Hidden extension messages and image data are excluded.",
     parameters: Type.Object({ query: Type.Optional(Type.String({ maxLength: 500 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })), before: Type.Optional(Type.String()), includeReasoning: Type.Optional(Type.Boolean()) }),
+    outputSchema: HISTORY_OUTPUT_SCHEMA,
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted(); requireEnabled();
       const result = historyMatches(ctx.sessionManager.getBranch(), params.query, params.limit, params.before, knownSecretValues(), params.includeReasoning);
       const matches = result.matches.map((item) => `${item.id} · ${item.role}\n${item.excerpt}`).join("\n\n") || "No matching messages on this branch.";
       const continuation = result.nextBefore ? `More matches available. Continue with before=${JSON.stringify(result.nextBefore)} and the same query.` : "End of matching history on this branch.";
-      return { content: [{ type: "text", text: `${matches}\n\n${continuation}` }], details: { nextBefore: result.nextBefore, count: result.matches.length } };
+      return { content: [{ type: "text", text: `${matches}\n\n${continuation}` }], details: { nextBefore: result.nextBefore, count: result.matches.length },
+        structuredContent: { matches: result.matches.map(({ id, role, excerpt }) => ({ id, role, excerpt })), ...(result.nextBefore ? { nextBefore: result.nextBefore } : {}) } };
     },
   });
   pi.registerTool({ name: "context_budget", label: "Inspect context budget", ...journalRenderers("context_budget"), description: "Report Pi's current context estimate; unknown usage is not treated as zero.", parameters: Type.Object({}),

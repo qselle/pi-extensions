@@ -26,6 +26,7 @@ import {
   isActive,
   type AgentRuntimeFactory,
   type AgentSnapshot,
+  type AgentStatus,
   type SpawnRequest,
   type WaitMode,
 } from "./coordinator.ts";
@@ -76,6 +77,27 @@ const ActionSchema = StringEnum(["spawn", "send", "queue", "read", "interrupt", 
 const ContextSchema = StringEnum(["fresh", "summary", "fork"] as const);
 const ThinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const);
 const WaitModeSchema = StringEnum(["any", "all"] as const);
+
+const AGENT_STATUSES: readonly AgentStatus[] = ["starting", "running", "completed", "paused", "failed", "interrupted", "stopped", "closed"];
+/** Structured result for codemode scripts; read and wait add each child's output and reports. */
+export const SUBAGENTS_OUTPUT_SCHEMA = Type.Object({
+  agents: Type.Array(Type.Object({
+    name: Type.String(),
+    status: Type.Union(AGENT_STATUSES.map((status) => Type.Literal(status))),
+    unread: Type.Optional(Type.Boolean()),
+    output: Type.Optional(Type.String({ description: "Latest response; read and wait only" })),
+    reports: Type.Optional(Type.Array(Type.String())),
+    error: Type.Optional(Type.String()),
+  })),
+  timed_out: Type.Optional(Type.Boolean()),
+});
+const structuredAgent = (agent: AgentSnapshot, detailed: boolean) => ({
+  // read and wait deliver the result, so their snapshots' unread flag is stale.
+  name: agent.name, status: agent.status, ...(!detailed && agent.unread ? { unread: true } : {}),
+  ...(detailed && agent.output ? { output: agent.output } : {}),
+  ...(detailed && agent.reports?.length ? { reports: agent.reports.map((report) => report.message) } : {}),
+  ...(agent.error ? { error: agent.error } : {}),
+});
 
 const parametersFor = (wait: WaitBounds) => Type.Object({
   action: ActionSchema,
@@ -256,6 +278,7 @@ export default function registerSubagents(
       "A paused subagent hit a provider quota or rate limit and keeps its conversation. After the limit resets, resume it with subagents send instead of spawning a replacement or closing it; do the same for children stopped by reload.",
     ],
     parameters: parametersFor(config.wait),
+    outputSchema: SUBAGENTS_OUTPUT_SCHEMA,
     prepareArguments: (raw) => prepareSubagentArguments(raw, {
       wait: config.wait,
       isRunning: (name) => {
@@ -294,7 +317,7 @@ export default function registerSubagents(
       }
       if (params.action === "read") {
         const agent = coordinator.read(params.agent_name ?? "");
-        return toolResult("read", [agent], formatAgent(agent, true));
+        return toolResult("read", [agent], formatAgent(agent, true), true);
       }
       if (params.action === "interrupt") {
         const agent = await coordinator.interrupt(params.agent_name ?? "");
@@ -324,6 +347,8 @@ export default function registerSubagents(
             interrupted: waited.interrupted,
             alreadyReportedIds: waited.alreadyReportedIds,
           } satisfies SubagentToolDetails,
+          // Scripts get every selected child's output, including finals already delivered to the model.
+          structuredContent: { agents: waited.agents.map((agent) => structuredAgent(agent, true)), ...(waited.timedOut ? { timed_out: true } : {}) },
         };
       }
       if (params.action === "list") {
@@ -543,10 +568,11 @@ function completionContext(agent: AgentSnapshot): string {
   ].join("\n\n"), 24 * 1024);
 }
 
-function toolResult(action: string, agents: AgentSnapshot[], text: string) {
+function toolResult(action: string, agents: AgentSnapshot[], text: string, detailed = false) {
   return {
     content: [{ type: "text" as const, text: boundedText(text, TOOL_OUTPUT_BYTES) }],
     details: { action, agents } satisfies SubagentToolDetails,
+    structuredContent: { agents: agents.map((agent) => structuredAgent(agent, detailed)) },
   };
 }
 
