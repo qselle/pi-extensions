@@ -4,7 +4,9 @@ Optional extensions for the [Pi coding agent](https://github.com/earendil-works/
 
 ## Install
 
-Requires Pi 1.0.4 or newer 1.x. macOS and Linux ARM64 are tested; Windows is unverified.
+Requires Pi 1.0.4 or newer 1.x; developed and tested against 1.4.0. Behaviors that
+need a newer host say so in their extension README. macOS and Linux ARM64 are tested;
+Windows is unverified.
 Interactive PTY jobs require Node.js; pipe jobs also work with Bun.
 
 ```bash
@@ -44,7 +46,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
 | [`mistral-connectors`](extensions/mistral-connectors/) | Mistral account connectors as Pi MCP servers, with write tools hidden by default |
-| [`mistral-error-retry`](extensions/mistral-error-retry/) | Auto-retry Mistral turns that end with "Provider stopped with: error" |
+| [`mistral-error-retry`](extensions/mistral-error-retry/) | Auto-retry Mistral turns that end with "Provider stopped with: error" on Pi 1.0; Pi 1.1+ retries them itself |
 | [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
 | [`notify`](extensions/notify/) | Desktop and terminal notifications |
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
