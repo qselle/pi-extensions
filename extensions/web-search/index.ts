@@ -8,6 +8,7 @@ import { remoteOrder } from "./remote-reader.ts";
 import { failurePreview, searchPreview, textBlock } from "./render.ts";
 import { toolHeadline } from "../../lib/tool-ui.ts";
 import { SEARCH_CATEGORIES } from "./filters.ts";
+import { pageStructured, READ_OUTPUT_SCHEMA, SEARCH_OUTPUT_SCHEMA, searchStructured } from "./structured.ts";
 
 const freshnessParameter = () => Type.Optional(Type.Integer({ minimum: -1, maximum: 720, description: "Maximum cached content age in hours: 0 requests a fresh fetch, -1 cache only; omitted uses provider defaults. This controls retrieval freshness, not publication dates. Exa only; web_read requires reader=exa and API-key access." }));
 
@@ -47,10 +48,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       exclude_domains: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 10, description: "Exclude hostnames and optional path prefixes (example.com/docs/old), including subdomains; enforced locally for every provider." })),
       domains: Type.Optional(Type.Array(Type.String({ maxLength: 500 }), { maxItems: 10, description: "Restrict to hostnames and optional path prefixes (docs.example.com/API), including subdomains; checked locally. Paths are case-sensitive with segment boundaries. No protocols, query strings or fragments." })),
     }),
+    outputSchema: SEARCH_OUTPUT_SCHEMA,
     async execute(_id, params, signal, _onUpdate: unknown, ctx: ExtensionContext) {
       const { env, mistralBaseUrl } = await mistralAccess(ctx);
       const result = await searchWeb(params, signal, env, fetch, { mistralBaseUrl });
-      return { content: [{ type: "text", text: formatSearch(result) }], details: result };
+      return { content: [{ type: "text", text: formatSearch(result) }], details: result, structuredContent: searchStructured(result) };
     },
     renderShell: "self",
     renderCall: (args, theme, context) => toolHeadline(context?.isError ? "Search failed" : context?.isPartial ? "Searching" : "Searched", cleanText(args.query, 500), theme, context?.isError),
@@ -76,10 +78,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       budget: Type.Optional(Type.Integer({ minimum: 100, maximum: 8000 })),
       max_age_hours: freshnessParameter(),
     }),
+    outputSchema: READ_OUTPUT_SCHEMA,
     async execute(_id, params, signal, _onUpdate: unknown, ctx: ExtensionContext) {
       const { env, mistralBaseUrl } = await mistralAccess(ctx);
       const result = await readPage(params, signal, { env, mistralBaseUrl });
-      return { content: [{ type: "text", text: formatPage(result) }], details: { reader: result.reader, access: result.access, url: result.url, truncated: result.truncated, route: result.route, pagination: result.pagination, maxAgeHours: result.maxAgeHours } };
+      return { content: [{ type: "text", text: formatPage(result) }], details: { reader: result.reader, access: result.access, url: result.url, truncated: result.truncated, route: result.route, pagination: result.pagination, maxAgeHours: result.maxAgeHours }, structuredContent: pageStructured(result) };
     },
     renderShell: "self",
     renderCall: (args, theme, context) => toolHeadline(context?.isError ? "Read failed" : context?.isPartial ? "Reading" : "Read", cleanText(args.url, 500), theme, context?.isError),

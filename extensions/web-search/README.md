@@ -28,6 +28,8 @@ Expand to see every source, full URLs, publication dates, and excerpts.
 - `web_read`: read an HTTP(S) URL as Markdown, an outline, or a CSS selection.
 - `/web`: show provider configuration without making a request or exposing keys.
 
+Codemode scripts get structured results: `web_search` ranked `results` (`rank`, `title`, `url` or `article_id`, `snippet`, `published`) with `route` and `warning`; `web_read` `content`, `truncated` and `next_offset`. Failures reject.
+
 ### Search
 
 Exa is the default. Requests use Exa's public hosted service first, as one
