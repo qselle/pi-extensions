@@ -24,7 +24,7 @@ Replaces Pi's built-in tool cards with compact headlines, bounded output, groupe
 /tool-render on|off   Save the setting; run /reload to apply it
 ```
 
-This extension changes rendering. Execution and result details come from Pi's built-in definitions; tools also accept optional `purpose` display metadata. Two results gain display details: `write` saves a diff when it replaces a file, and native `bash` records `exitCode` and `durationMs`. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. Cleanly completed foreground commands show only their output below the headline; active or failed jobs and incomplete logs retain their IDs and status. Expand to see job cursors and all metadata. The tools use the active session directory after session changes.
+This extension changes rendering. Execution and result details come from Pi's built-in definitions; tools also accept optional `purpose` display metadata. Two results gain display details: `write` saves a diff when it replaces a file, and native `bash` records `exitCode`. If `background-jobs` is enabled, bash uses its managed executor and keeps these compact cards. Cleanly completed foreground commands show only their output below the headline; active or failed jobs and incomplete logs retain their IDs and status. Expand to see job cursors and all metadata. The tools use the active session directory after session changes.
 
 ### Command status
 
@@ -35,11 +35,13 @@ before the status. Running commands show a live elapsed time that updates when
 Pi repaints; no timer of this extension's own drives it. A yielded managed job
 reads `running` until its completion refreshes the card.
 
-Managed results are read from `details`: `exitCode`, `status`, `signal`,
-`durationMs` or `startedAt`/`endedAt`. When these are missing, the saved
-summary line (`× Shell command · failed · 3s · exit 1`) or Pi's
-`Command exited with code N` notice supplies the status. Older native results
-without a recorded duration show the status alone.
+Native durations come from Pi's recorded execution time (Pi 1.1+). Managed
+results are read from `details`: `exitCode`, `status`, `signal`, `durationMs` or
+`startedAt`/`endedAt`, which also cover native results saved by earlier versions.
+When these are missing, the saved summary line
+(`× Shell command · failed · 3s · exit 1`) or Pi's `Command exited with code N`
+notice supplies the status. Results without any recorded duration show the
+status alone.
 
 ### Write and edit cards
 
@@ -77,7 +79,8 @@ argument and `(+N)` when they differ. Up to six rows show; earlier calls are
 counted, including failures. Pi keeps 200 characters of each call's arguments,
 so a long argument written before the purpose hides the purpose. Output follows
 the calls without Pi's `Script completed` header, with the bash output limits.
-Expand to see the full script, every call and nested call errors.
+Expand to see the full script, every call and nested call errors. The headline
+time is the script's wall time, or Pi's recorded duration when a script never ran.
 
 Only the renderers change: the definition, including `reachesTools`, settings and
 default activation stay Pi's, so the MCP extension can still activate it for MCP

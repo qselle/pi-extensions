@@ -342,7 +342,7 @@ function makeRenderResult(name: ToolName) {
 		}
 		// Pi creates the call component first and renders both later, so the
 		// call headline can show the outcome recorded here.
-		if (name === "bash" && ctx?.state) ctx.state.bashOutcome = bashOutcome(result, !!ctx.isError);
+		if (name === "bash" && ctx?.state) ctx.state.bashOutcome = bashOutcome(result, !!ctx.isError, ctx.durationMs);
 		const diff = memo(() => {
 			const details = result?.details;
 			const patch = typeof details?.patch === "string" ? details.patch : undefined;
@@ -377,14 +377,16 @@ function makeRenderResult(name: ToolName) {
 	};
 }
 
-/** Record exit code and duration with the result, so saved history keeps the headline status. */
-async function executeTimedBash(definition: ToolDefinition<any>, ...[id, args, signal, update, context]: Parameters<ToolDefinition<any>["execute"]>) {
-	const started = performance.now();
+/**
+ * Record the exit code with the result, so saved history keeps the headline
+ * status. Pi 1.1+ records the duration on the result message itself.
+ */
+async function executeBashWithExitCode(definition: ToolDefinition<any>, ...[id, args, signal, update, context]: Parameters<ToolDefinition<any>["execute"]>) {
 	const result = await definition.execute(id, args, signal, update, context);
 	const exitCode = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
+	if (!Number.isSafeInteger(exitCode)) return result;
 	const details = result.details !== null && typeof result.details === "object" ? result.details : {};
-	return { ...result, details: { ...details, durationMs: Math.round(performance.now() - started),
-		...(Number.isSafeInteger(exitCode) ? { exitCode } : {}) } };
+	return { ...result, details: { ...details, exitCode } };
 }
 
 const STRICT_SAMPLING = { type: "json_schema", strict: "prefer" } as const;
@@ -452,7 +454,7 @@ export default function toolRenderExtension(pi: ExtensionAPI): void {
 						execute: async (id, args, signal, update, context) => {
 							const toolArgs = withoutPurpose(args as Record<string, unknown>);
 							if (name === "write") return executeWriteWithDiff(cwd, id, toolArgs, signal, update, context);
-							if (name === "bash") return executeTimedBash(definition, id, toolArgs, signal, update, context);
+							if (name === "bash") return executeBashWithExitCode(definition, id, toolArgs, signal, update, context);
 							if (search) await assertSearchRoot(name, toolArgs.path, context?.cwd || cwd);
 							return definition.execute(id, toolArgs, signal, update, context);
 						},

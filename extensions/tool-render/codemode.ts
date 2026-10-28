@@ -203,6 +203,8 @@ export interface CodemodeView {
 	expanded: boolean;
 	/** Tool call ID, for the live elapsed time of a running script. */
 	id?: string;
+	/** Pi's recorded execution time (1.1+), for results without a wall-time header. */
+	durationMs?: number;
 }
 
 const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? "" : "s"}`;
@@ -225,7 +227,8 @@ export function renderCodemodeCard(
 	const left = theme.fg(failed ? "error" : "muted", `${BULLET} ${title}`)
 		+ (intent ? theme.fg("dim", " to ") + theme.fg("text", intent) : "");
 	const count = calls.length ? theme.fg("dim", ` · ${plural(calls.length, "call")}`) : "";
-	const wall = output.wallSeconds !== undefined && Number.isFinite(output.wallSeconds) ? formatElapsed(output.wallSeconds * 1000) : undefined;
+	const wallMs = output.wallSeconds !== undefined && Number.isFinite(output.wallSeconds) ? output.wallSeconds * 1000 : view.durationMs;
+	const wall = wallMs !== undefined ? formatElapsed(wallMs) : undefined;
 	const status = bashStatus(theme, settled ? { state: failed ? "failed" : "ok", elapsed: wall } : undefined, running, view.id);
 	const tail = count + status;
 	const lines = [fit(left, Math.max(1, width - visibleWidth(tail))) + tail];
@@ -257,7 +260,7 @@ function withRenderers(definition: ToolDefinition<any, any>): ToolDefinition<any
 			const code = typeof ctx?.args?.code === "string" ? ctx.args.code : "";
 			const highlight = sourceHighlighter("javascript", theme);
 			const view = (): CodemodeView => ({ code, result: state.codemodeResult, partial: ctx?.isPartial !== false,
-				started: !!ctx?.executionStarted, error: !!ctx?.isError, expanded: !!ctx?.expanded, id: ctx?.toolCallId });
+				started: !!ctx?.executionStarted, error: !!ctx?.isError, expanded: !!ctx?.expanded, id: ctx?.toolCallId, durationMs: ctx?.durationMs });
 			return new Lines((width) => renderCodemodeCard(view(), theme, width, highlight), "Ran script", { volatile: ctx?.isPartial !== false });
 		},
 		renderResult: (result: any, _options: any, _theme: Theme, ctx: any): Component => {

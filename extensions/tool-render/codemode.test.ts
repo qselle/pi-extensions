@@ -58,6 +58,12 @@ describe("codemode card", () => {
 		expect(expanded.at(-1)).toBe("    boom");
 	});
 
+	test("prefers the script's wall time and falls back to Pi's recorded duration", () => {
+		expect(render({ result: settled("ok", []), durationMs: 9_000 })[0]).toBe("• Ran script · ✓ in 2s");
+		const unstarted = { content: [{ type: "text", text: "No codemode worker became free within 60 seconds" }], details: { calls: [] }, isError: true };
+		expect(render({ result: unstarted, error: true, durationMs: 61_000 })[0]).toBe("• Script failed · ✗ in 1m 1s");
+	});
+
 	test("shows running calls without output while partial", () => {
 		const result = { content: [], details: { calls: [call({ purpose: "Scan shard", command: "ls" }, { status: "running" })] } };
 		const lines = render({ partial: true, result });
