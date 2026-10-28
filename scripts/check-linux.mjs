@@ -30,7 +30,7 @@ process.on('SIGTERM', interrupt);
 const command = [
   'mkdir /work', 'cp -R /source/. /work/', 'cd /work',
   'npm install --global bun@1.3.14 --no-audit --no-fund',
-  'bun install --frozen-lockfile',
+  'bun install --frozen-lockfile --ignore-scripts',
   'npm rebuild node-pty --foreground-scripts',
   'node scripts/prepare-pty.mjs',
   'bun run check', cleanInstall ? 'bun run check:install' : 'bun run check:package',
