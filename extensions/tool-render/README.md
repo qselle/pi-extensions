@@ -80,7 +80,7 @@ counted, including failures. Pi keeps 200 characters of each call's arguments,
 so a long argument written before the purpose hides the purpose. Output follows
 the calls without Pi's `Script completed` header, with the bash output limits.
 Expand to see the full script, every call and nested call errors. The headline
-time is the script's wall time, or Pi's recorded duration when a script never ran.
+time is the script's wall time, or Pi's recorded duration for results without one.
 
 Only the renderers change: the definition, including `reachesTools`, settings and
 default activation stay Pi's, so the MCP extension can still activate it for MCP
