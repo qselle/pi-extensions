@@ -712,9 +712,9 @@ export default function goalExtension(pi: ExtensionAPI) {
   });
 
   // Reconciliation reaches the model as one append-only message per user request;
-  // extension-triggered runs do not repeat it.
+  // extension-triggered runs (Pi 1.2+) do not repeat it.
   pi.on("before_agent_start", (event) => {
-    if (event.messageType !== "user" || goal?.status !== "active" || !goal.reconciliation || goal.reconciliation.requestId !== currentRequestId) return;
+    if (event.messageType === "custom" || goal?.status !== "active" || !goal.reconciliation || goal.reconciliation.requestId !== currentRequestId) return;
     return {
       message: {
         customType: GOAL_RECONCILIATION_TYPE,

@@ -266,8 +266,8 @@ export default function sessionTitleExtension(pi: ExtensionAPI, options: Session
   pi.on("session_tree", (_event, ctx) => load(ctx));
 
   pi.on("before_agent_start", (event, ctx) => {
-    // Extension-triggered runs carry a custom message, not a user request.
-    if (event.messageType !== "user") return undefined;
+    // Extension-triggered runs (Pi 1.2+) carry a custom message, not a user request.
+    if (event.messageType === "custom") return undefined;
     const prompt = event.prompt.trim();
     // A draft title from the first meaningful request shows while the turn runs;
     // the extraction helper is only a substantive-request check here.
