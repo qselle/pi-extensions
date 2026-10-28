@@ -4,7 +4,7 @@ Optional extensions for the [Pi coding agent](https://github.com/earendil-works/
 
 ## Install
 
-Requires Pi 1.x. macOS and Linux ARM64 are tested; Windows is unverified.
+Requires Pi 1.0.4 or newer 1.x. macOS and Linux ARM64 are tested; Windows is unverified.
 Interactive PTY jobs require Node.js; pipe jobs also work with Bun.
 
 ```bash
@@ -40,7 +40,6 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`goal`](extensions/goal/) | Persistent goals that continue across turns |
 | [`handoff`](extensions/handoff/) | Hand off work to a new session, pane, tab, or workspace that starts from a summary |
 | [`history-search`](extensions/history-search/) | Fuzzy search of the active prompt history |
-| [`hyperlinks`](extensions/hyperlinks/) | Clickable terminal paths |
 | [`image-history`](extensions/image-history/) | Opt-in image deferral, compact previews, original viewing, portable export and storage cleanup |
 | [`loop`](extensions/loop/) | Repeat a prompt at an interval |
 | [`memory`](extensions/memory/) | Explicit project and global memory |
@@ -49,6 +48,7 @@ pi --no-extensions -e ./extensions/codex-prompt -e ./extensions/footer -e ./exte
 | [`monitor`](extensions/monitor/) | Run shell checks and wake Pi when results match |
 | [`notify`](extensions/notify/) | Desktop and terminal notifications |
 | [`overlay-stack`](extensions/overlay-stack/) | Workflow cards with compact summaries in narrow terminals |
+| [`pasted-images`](extensions/pasted-images/) | OpenCode-style pasted image tokens, thumbnails and viewer |
 | [`plan`](extensions/plan/) | Current multi-step execution plan |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep your Mac awake while Pi works; no-op on Linux |
 | [`reload-all`](extensions/reload-all/) | Reload participating Pi terminals when idle, with confirmed per-session status |
@@ -92,7 +92,9 @@ Telegram configuration continue to apply.
 | Reload participating terminals or inspect progress | `/reload-all` / `/reload-all status` |
 | Check Telegram authentication, chat, webhook and topics without sending | `/telegram doctor` |
 | Send a Markdown message to this session's configured Telegram destination | `/telegram send **Done** — checks passed` |
-| Search the full conversation | `/transcript <search>` |
+| Search the current context (native fullscreen) | `Ctrl+Shift+F` |
+| Search history before compaction or across branches | `/transcript <search>` |
+| View pasted images | `Alt+I` or `/images` |
 | Inspect child conversations | `/subagents [name]` or Right from an empty editor; Left/Right switch children |
 | Hide/show workflow cards | `/overlay hide` / `/overlay show` |
 

@@ -61,7 +61,7 @@ extension restores the native indicator when its working row is released.
 
 ## Dependencies and limitations
 
-- Pi 1.0 public working-message and lifecycle APIs; no runtime packages.
+- Pi 1.0.4 public working-message and lifecycle APIs; no runtime packages.
 - Cross-platform interactive TUI only; RPC and JSON modes are unchanged.
 - Uses Pi's public indicator customization and the editor's embedded working row.
 - Enable only one extension that owns the working message at a time.

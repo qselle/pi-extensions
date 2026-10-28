@@ -110,7 +110,7 @@ test("optional context tools are off rather than broken and provider gates are e
   expect(supported.find((row) => row.id === "fast-mode")?.detail).toContain("eligibility and actual tier are not tested");
 });
 
-test("validates editor accents and hyperlink modes without exposing config contents", async () => {
+test("validates editor accents without exposing config contents", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-doctor-ui-"));
   try {
     const probe = localProbe({ ...input, agentDir: dir });
@@ -122,14 +122,9 @@ test("validates editor accents and hyperlink modes without exposing config conte
       await writeFile(join(dir, "codex-prompt.json"), JSON.stringify({ accent }));
       expect(await probe.config("codex-prompt.json")).toBe("invalid");
     }
-    await writeFile(join(dir, "hyperlinks.json"), JSON.stringify({ mode: "always" }));
-    expect(await probe.config("hyperlinks.json")).toBe("valid");
-    await writeFile(join(dir, "hyperlinks.json"), JSON.stringify({ mode: "secret-invalid-value" }));
-    expect(await probe.config("hyperlinks.json")).toBe("invalid");
-    const report = formatReport(await diagnose({ ...input, agentDir: dir, commands: ["codex-prompt", "hyperlinks"] }, probe));
+    const report = formatReport(await diagnose({ ...input, agentDir: dir, commands: ["codex-prompt"] }, probe));
     expect(report).not.toContain("secret-invalid-value");
     expect(report).toContain("Repair codex-prompt.json");
-    expect(report).toContain("Repair hyperlinks.json");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -145,10 +140,10 @@ test("host and access diagnostics use metadata without printing raw config or re
   const report = await diagnose({ ...input, hostVersion: "0.85.0", modelAuthConfigured: false, modelConfigInvalid: true, bindingConflicts: 2 }, good);
   for (const id of ["host-version", "model-auth", "model-config", "keybindings"]) expect(report.find((row) => row.id === id)?.status).toBe("warn");
   expect(report.find((row) => row.id === "search-keys")?.status).toBe("ok");
-  const valid = await diagnose({ ...input, hostVersion: "1.0.0", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "configured-key" } }, good);
+  for (const hostVersion of ["0.87.0", "1.0.3", "2.0.0", "1.0.0-beta.1"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("warn");
+  for (const hostVersion of ["1.0.4", "1.2.0", "1.10.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("ok");
+  const valid = await diagnose({ ...input, hostVersion: "1.0.4", modelAuthConfigured: true, modelConfigInvalid: false, bindingConflicts: 0, env: { EXA_API_KEY: "configured-key" } }, good);
   expect(valid.find((row) => row.id === "host-version")?.status).toBe("ok");
-  for (const hostVersion of ["1.4.2", "1.10.0"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("ok");
-  for (const hostVersion of ["0.87.0", "2.0.0", "1.0.0-beta.1"]) expect((await diagnose({ ...input, hostVersion }, good)).find((row) => row.id === "host-version")?.status).toBe("warn");
   expect(valid.find((row) => row.id === "search-keys")?.detail).toContain("API key after rate limits or access errors");
   expect(JSON.stringify(valid)).not.toContain("configured-key");
   const publicAccess = await diagnose({ ...input, env: {} }, good);
