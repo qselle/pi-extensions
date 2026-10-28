@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import registerSubagents from "./index.ts";
+import registerSubagents, { SUBAGENTS_OUTPUT_SCHEMA } from "./index.ts";
+import { Value } from "typebox/value";
 import type { ChildContext } from "./context.ts";
 import type { AgentClient, AgentClientOptions, RpcEvent } from "./rpc.ts";
 import { SUBAGENT_STATE } from "./persistence.ts";
@@ -202,6 +203,37 @@ test("configured wait bounds shape the schema, description, clamping and default
   expect(seen).toEqual([60_000]);
   await call({ action: "spawn", name: "One", task: "Work" });
   await expect(call({ action: "spawn", name: "Two", task: "Work" })).rejects.toThrow("At most 1");
+});
+
+test("codemode scripts get names, statuses and results as structured content", async () => {
+  const { call, clients, tool } = await setup();
+  expect(tool.outputSchema).toBe(SUBAGENTS_OUTPUT_SCHEMA);
+  const spawned = await call({ action: "spawn", name: "Scout", task: "Look" });
+  expect(spawned.structuredContent).toEqual({ agents: [{ name: "Scout", status: "running" }] });
+  await call({ action: "spawn", name: "Fixer", task: "Fix" });
+  const timedOut = await call({ action: "wait", agent_name: "Scout", timeout_ms: 1 });
+  expect(timedOut.structuredContent).toEqual({ agents: [{ name: "Scout", status: "running" }], timed_out: true });
+
+  const waiting = call({ action: "wait", agent_names: ["Scout", "Fixer"], wait_mode: "all", wake_on: "final" });
+  clients[0]!.emit({ type: "tool_execution_end", toolName: "report_to_parent", toolCallId: "r1", isError: false,
+    result: { content: [], details: { version: 1, report: { id: "r1", message: "Found it", createdAt: 1 } } } });
+  clients[0]!.finish("Scout result");
+  clients[1]!.emit({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "boom" } });
+  clients[1]!.emit({ type: "agent_settled" });
+  const waited = await waiting;
+  expect(waited.structuredContent).toEqual({ agents: [
+    { name: "Scout", status: "completed", output: "Scout result", reports: ["Found it"] },
+    { name: "Fixer", status: "failed", error: "boom" },
+  ] });
+  expect(Value.Check(SUBAGENTS_OUTPUT_SCHEMA, waited.structuredContent)).toBe(true);
+  expect(waited.content[0].text).toContain("result:\nScout result");
+
+  // list never carries outputs; read does, matching the model text.
+  const listed = await call({ action: "list" });
+  expect(listed.structuredContent.agents.map((agent: any) => Object.keys(agent).sort())).toEqual([["name", "status"], ["error", "name", "status"]]);
+  const read = await call({ action: "read", agent_name: "Scout" });
+  expect(read.structuredContent.agents[0]).toMatchObject({ name: "Scout", output: "Scout result" });
+  await expect(call({ action: "read", agent_name: "Missing" })).rejects.toThrow();
 });
 
 test("a timed-out wait tells the model not to stop healthy children", async () => {
