@@ -34,6 +34,9 @@ try {
       assert.equal(notifications.length, 0, "active goals suppress routine pings");
       await session.prompt("/goal pause");
       await runner.emit({ type: "agent_start" });
+      await runner.emit({ type: "agent_settled", aborted: true });
+      assert.equal(notifications.length, 0, "cancelled runs stay quiet");
+      await runner.emit({ type: "agent_start" });
       await runner.emit({ type: "agent_settled", aborted: false });
       assert.equal(notifications.length, 1, "paused goals allow notifications");
       manager.appendCustomEntry("goal-state", { version: 2, goal: setGoalStatus(createGoal("Previously blocked goal"), "blocked") });

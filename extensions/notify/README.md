@@ -1,6 +1,6 @@
 # notify
 
-Sends a desktop notification and terminal bell when a turn finishes or Pi needs questionnaire input.
+Sends a desktop notification and terminal bell when a turn finishes or Pi needs questionnaire input. Runs you cancel stay quiet (Pi 1.1 and newer report cancellation).
 
 Notifications are suppressed while the terminal is confirmed focused. Routine turn-complete notifications are also suppressed while an active [`goal`](../goal/) is continuing; questionnaire attention notifications remain available. A goal becoming blocked, stalled, budget-limited, or usage-limited sends one attention notification and suppresses the redundant turn-complete notification. Restoring an existing state stays quiet, and reload detaches the previous runtime's listeners. Identical notifications within five seconds are deduplicated.
 
