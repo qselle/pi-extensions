@@ -45,7 +45,7 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function scheduleExtension(pi: ExtensionAPI, options: ScheduleExtensionOptions = {}): void {
-  const controls = deferredTools(pi, ["schedule_stop", "get_schedules"]);
+  const controls = deferredTools(pi, ["schedule_stop", "get_schedules"], { registeredInactive: true });
   const panel = new SchedulePanel(pi);
   const tasks = new Map<string, ScheduledTask>();
   const wakePrompts = new Map<string, string>();

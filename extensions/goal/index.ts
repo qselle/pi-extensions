@@ -132,7 +132,7 @@ const goalAnchor = createContextAnchor<GoalState | undefined>({
 });
 
 export default function goalExtension(pi: ExtensionAPI) {
-  const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal", "reconcile_goal", "resume_goal", "clear_goal"]);
+  const controls = deferredTools(pi, ["get_goal", "report_goal_progress", "update_goal", "reconcile_goal", "resume_goal", "clear_goal"], { registeredInactive: true });
   let goal: GoalState | undefined;
   let sessionGeneration = 0;
   let sessionOpen = false;

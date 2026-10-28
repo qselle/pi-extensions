@@ -57,7 +57,7 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function loopExtension(pi: ExtensionAPI): void {
-  const controls = deferredTools(pi, ["loop_schedule", "loop_stop", "get_loops"]);
+  const controls = deferredTools(pi, ["loop_schedule", "loop_stop", "get_loops"], { registeredInactive: true });
   const panel = new SnapshotPanel(pi, "loop", "loops · snapshot");
   const jobs = new Map<string, LoopJob>();
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -17,7 +17,7 @@ let api!: ExtensionAPI;
 let controls!: ReturnType<typeof deferredTools>;
 const extension = (pi: ExtensionAPI) => {
   api = pi;
-  controls = deferredTools(pi, ["fixture_stop", "fixture_list"]);
+  controls = deferredTools(pi, ["fixture_stop", "fixture_list"], { registeredInactive: true });
   for (const name of ["fixture_stop", "fixture_list"]) {
     pi.registerTool({ name, defaultActive: false, label: name, description: name, parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) });
   }

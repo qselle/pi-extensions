@@ -41,7 +41,7 @@ const StopParameters = Type.Object({
 const ListParameters = Type.Object({});
 
 export default function monitorExtension(pi: ExtensionAPI, options: MonitorExtensionOptions = {}): void {
-  const controls = deferredTools(pi, ["monitor_stop", "get_monitors"]);
+  const controls = deferredTools(pi, ["monitor_stop", "get_monitors"], { registeredInactive: true });
   const panel = new SnapshotPanel(pi, "monitor", "monitors · snapshot");
   const jobs = new Map<string, MonitorJob>();
   const wakePrompts = new Map<string, string>();
