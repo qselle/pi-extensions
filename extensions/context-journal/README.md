@@ -39,7 +39,8 @@ recent text; pass `nextBefore` as `before` for older results. It returns up to
 20 matches, with 2,000 characters per excerpt and 12,000 combined, plus headers.
 It covers message text and tool calls (`[tool call: name] {arguments}`), labels
 tool results `tool:<name>`, and searches thinking only with `includeReasoning`.
-It excludes images, custom extension messages, and other branches.
+It excludes images, custom extension messages, and other branches. Codemode
+scripts get `matches` (`id`, `role`, `excerpt`) and `nextBefore` as structured data.
 
 ### Rollover
 
