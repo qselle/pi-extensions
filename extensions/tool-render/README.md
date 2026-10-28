@@ -79,8 +79,9 @@ so a long argument written before the purpose hides the purpose. Output follows
 the calls without Pi's `Script completed` header, with the bash output limits.
 Expand to see the full script, every call and nested call errors.
 
-Only the renderers change: the definition, settings and default activation stay
-Pi's. The card is registered at session start, which shadows the built-in without
+Only the renderers change: the definition, including `reachesTools`, settings and
+default activation stay Pi's, so the MCP extension can still activate it for MCP
+tools. The card is registered at session start, which shadows the built-in without
 a replaced-extension warning. Disabled and third-party `codemode` tools keep
 their own cards.
 
