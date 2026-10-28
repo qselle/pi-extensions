@@ -436,3 +436,11 @@ test("bash runs in an optional cwd and shows it when it differs", async () => {
   expect(call({ command: "pwd", cwd: "extensions" }).at(-1)).toBe("in extensions");
   expect(call({ command: "pwd", cwd: "." })).toEqual(["$ pwd"]);
 });
+
+test("job controls register inactive so resumed branches keep their tool set", async () => {
+  const { tools } = await session();
+  for (const name of ["job_start", "job_output", "job_wait", "job_list", "job_write", "job_resize", "job_stop"]) {
+    expect(tools.get(name).defaultActive).toBe(false);
+  }
+  expect(tools.get("bash").defaultActive).not.toBe(false);
+});

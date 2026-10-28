@@ -146,7 +146,7 @@ function waitNote(wait: WaitInfo): string | undefined {
 }
 
 export default function backgroundJobsExtension(pi: ExtensionAPI): void {
-  const controls = deferredTools(pi, ["job_start", ...JOB_CONTROLS]);
+  const controls = deferredTools(pi, ["job_start", ...JOB_CONTROLS], { registeredInactive: true });
   let service = new JobService(3000, knownSecretValues);
   let card: OverlayCardHandle | undefined;
   let viewer: TranscriptView | undefined;
@@ -412,7 +412,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     yield_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait before returning a job ID (default ${START_YIELD_MS}, capped at ${MAX_YIELD_MS}).` })),
     timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })), max_chars: budgetParameter, stdin: stdinParameter });
   pi.registerTool({
-    name: "job_start", label: "Start background job",
+    name: "job_start", label: "Start background job", defaultActive: false,
     description: "Start a managed shell command. It may finish during yield_ms or keep running with a job ID. Use job_wait/job_output to read output, job_write for input (pipe jobs need stdin=true), and job_stop for cleanup. Run the command in the foreground; do not use &, nohup, disown, or setsid. Set pty=true for interactive terminal programs (Node.js required); otherwise uses pipes. PTY output is a sanitized text log, not a screen emulator.",
     promptSnippet: "Run long-lived commands as managed background jobs with bounded logs and explicit cleanup.",
     parameters: startParameters,
@@ -437,7 +437,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
       max_chars: budgetParameter }),
   };
   for (const name of ["job_output", "job_wait"] as const) pi.registerTool({
-    name, label: name === "job_wait" ? "Wait for job" : "Read job output",
+    name, label: name === "job_wait" ? "Wait for job" : "Read job output", defaultActive: false,
     description: name === "job_wait"
       ? `Wait for a managed job to exit, up to wait_ms (default and cap ${MAX_WAIT_MS}), then return its status and output since your last read. Waits end early, leaving the job running, when the user interrupts or sends a message.`
       : "Read managed job output. wait_ms waits for the next output; wait=true waits for exit. Omit cursor to get the newest output since your last read; pass a cursor to page forward from an absolute offset.",
@@ -457,6 +457,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   });
   const listParameters = Type.Object({ purpose: toolPurposeParameter });
   pi.registerTool({
+    defaultActive: false,
     name: "job_list", label: "List background jobs", description: "List this session's managed jobs and their IDs, including recent finished jobs. Use job_output for logs.",
     parameters: listParameters,
     prepareArguments: argumentAliases(listParameters),
@@ -474,6 +475,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
     wait_ms: Type.Optional(Type.Integer({ minimum: 0, description: `Milliseconds to wait for a reply after writing (default ${WRITE_WAIT_MS}, capped at ${MAX_WAIT_MS}).` })),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })), max_chars: budgetParameter });
   pi.registerTool({
+    defaultActive: false,
     name: "job_write", label: "Write job input", description: "Write literal input to a job. Pipe jobs need stdin=true at start and support eof=true; PTYs support terminal control bytes (Ctrl+C=\\u0003, Ctrl+D=\\u0004) but not eof=true. PTY terminal echo may repeat input. Input is not a shell command unless the child interprets it.",
     parameters: writeParameters,
     prepareArguments: argumentAliases(writeParameters),
@@ -489,6 +491,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   });
   const resizeParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter, columns: Type.Integer({ minimum: 10, maximum: 500 }), rows: Type.Integer({ minimum: 2, maximum: 200 }) });
   pi.registerTool({
+    defaultActive: false,
     name: "job_resize", label: "Resize job terminal", description: "Resize a running PTY job. Terminal applications receive the new dimensions; pipe jobs cannot be resized.",
     parameters: resizeParameters,
     prepareArguments: argumentAliases(resizeParameters),
@@ -498,6 +501,7 @@ export default function backgroundJobsExtension(pi: ExtensionAPI): void {
   });
   const stopParameters = Type.Object({ purpose: toolPurposeParameter, id: idParameter });
   pi.registerTool({
+    defaultActive: false,
     name: "job_stop", label: "Stop background job", description: "Stop a managed job and its process group. Sends TERM, then KILL after three seconds if necessary. Safe to repeat for a finished job.",
     parameters: stopParameters,
     prepareArguments: argumentAliases(stopParameters),

@@ -67,7 +67,7 @@ try {
   assert(JSON.stringify(request).includes("Retain completed milestones, goal checks and tool evidence."));
   const assertWorkflow = async (current: NonNullable<typeof runtime>) => {
     const currentRunner = current.session.extensionRunner;
-    const before = await currentRunner.emitBeforeAgentStart("Continue the current work", undefined, { cwd: root });
+    const before = await currentRunner.emitBeforeAgentStart({ messageType: "user", prompt: "Continue the current work" }, { cwd: root });
     const messages = await currentRunner.emitContext([
       ...current.session.sessionManager.buildSessionContext().messages,
       ...before.messages.map((message) => ({ ...message, role: "custom" as const, timestamp: Date.now() })),
