@@ -18,8 +18,11 @@ interface Patchable {
 }
 
 const TOKEN = /\[Image (\d+)\]/g;
-/** A token in rendered editor output, optionally under the editor's inverse-video cursor. */
-const RENDERED_TOKEN = /(\x1b\[7m)?\[Image (\d+)\]/g;
+/**
+ * A token in rendered editor output, optionally under the editor's cursor: Pi 1.2+ wraps it in
+ * fake-cursor markers that the TUI resolves later; earlier hosts draw inverse video directly.
+ */
+const RENDERED_TOKEN = /(\x1b_pi:fc\x07|\x1b\[7m)?\[Image (\d+)\]/g;
 
 /** Highlight live tokens in rendered lines; one under the cursor keeps the cursor's style. */
 export function highlightTokens(lines: string[], behavior: TokenBehavior): string[] {
